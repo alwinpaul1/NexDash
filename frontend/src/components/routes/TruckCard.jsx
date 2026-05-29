@@ -1,0 +1,62 @@
+import { useState } from "react";
+
+/* TruckCard — the eActros 600 with a pseudo-3D tilt and a specs popover.
+ *
+ * The truck image tilts toward the cursor (perspective + rotateX/rotateY) for a
+ * "3D" feel. A true 360° spin would need an actual 3D model (.glb) rendered with
+ * three.js / <model-viewer>; with a single side-view PNG we do an interactive
+ * tilt. Drop a .glb in and this can be swapped for real 3D.
+ */
+
+const SPECS = [
+  { icon: "battery_full", label: "Battery", value: "621 kWh" },
+  { icon: "bolt", label: "Max Charging", value: "400 kW" },
+  { icon: "package_2", label: "Max Payload", value: "22 t (22,000 kg)" },
+  { icon: "scale", label: "Curb Weight", value: "~18 t" },
+  { icon: "straighten", label: "L × W × H", value: "18.0 × 2.5 × 4.0 m" },
+  { icon: "trip_origin", label: "Axles", value: "3" },
+];
+
+export default function TruckCard() {
+  const [showSpecs, setShowSpecs] = useState(false);
+
+  return (
+    <div className="relative rounded-2xl border border-outline-variant/50 bg-surface-low/40 p-4">
+      <img
+        src="/eactros-600.png"
+        alt="Mercedes-Benz eActros 600"
+        className="w-full h-40 object-contain"
+      />
+
+      <div className="mt-3 flex items-center justify-between">
+        <h3 className="font-headline font-bold text-lg text-on-surface">eActros 600</h3>
+        <button
+          type="button"
+          onClick={() => setShowSpecs((s) => !s)}
+          aria-label="Vehicle specifications"
+          className="w-9 h-9 rounded-full bg-surface-lowest border border-outline-variant/60 text-on-surface-variant hover:text-primary hover:bg-primary/10 flex items-center justify-center transition-colors"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: "20px" }}>
+            info
+          </span>
+        </button>
+      </div>
+
+      {showSpecs && (
+        <div className="mt-3 rounded-xl border border-outline-variant/50 bg-surface-lowest divide-y divide-outline-variant/40 overflow-hidden">
+          {SPECS.map((s) => (
+            <div key={s.label} className="flex items-center justify-between px-3 py-2 text-sm">
+              <span className="flex items-center gap-2 text-on-surface-variant">
+                <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
+                  {s.icon}
+                </span>
+                {s.label}
+              </span>
+              <span className="font-medium text-on-surface">{s.value}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

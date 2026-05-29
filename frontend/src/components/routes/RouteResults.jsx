@@ -1,0 +1,150 @@
+// Route RESULT view (light theme). Renders: SOC gauge, route-info cards,
+// driver-hours bars + EU561 badge, trip timeline, energy overview.
+import SocGauge from "./SocGauge.jsx";
+import TripTimeline from "./TripTimeline.jsx";
+
+function InfoCard({ icon, value, label, tint = "#006d32" }) {
+  return (
+    <div className="rounded-xl bg-surface-low border border-outline-variant/50 px-3 py-2.5">
+      <span className="material-symbols-outlined" style={{ fontSize: "18px", color: tint }}>
+        {icon}
+      </span>
+      <p className="mt-1 text-xl font-headline font-bold text-on-surface leading-none tabular-nums">{value}</p>
+      <p className="text-[11px] text-on-surface-variant mt-1">{label}</p>
+    </div>
+  );
+}
+
+function ProgressBar({ value, max, tint }) {
+  const frac = max > 0 ? Math.max(0, Math.min(1, value / max)) : 0;
+  const over = value > max;
+  const color = over ? "#ba1a1a" : tint;
+  return (
+    <div className="h-2 rounded-full bg-surface overflow-hidden">
+      <div className="h-full rounded-full transition-all" style={{ width: `${frac * 100}%`, background: color }} />
+    </div>
+  );
+}
+
+function fmtH(h) {
+  if (h == null) return "0";
+  return Number.isInteger(h) ? String(h) : h.toFixed(1);
+}
+
+export default function RouteResults({ plan }) {
+  if (!plan || !plan.summary) {
+    return (
+      <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm p-8 text-center">
+        <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: "36px" }}>
+          route
+        </span>
+        <p className="text-sm text-on-surface-variant mt-2">No route result yet.</p>
+        <p className="text-xs text-on-surface-variant/70 mt-1">
+          Set an origin and at least one destination, then Optimize Route.
+        </p>
+      </div>
+    );
+  }
+
+  const s = plan.summary;
+  const d = s.driver || {};
+
+  return (
+    <div className="space-y-5">
+      {/* SOC gauge + badges */}
+      <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm p-5">
+        <div className="flex flex-col items-center">
+          <SocGauge arrivalSoc={s.arrivalSoc} startSoc={s.startSoc} minSoc={s.minSoc} />
+          <div className="flex items-center gap-2 mt-3">
+            <span className="px-2.5 py-1 rounded-full bg-surface-low text-on-surface-variant text-xs font-medium ring-1 ring-outline-variant/60">
+              eActros 600
+            </span>
+            <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium ring-1 ring-primary/25">
+              <span className="material-symbols-outlined" style={{ fontSize: "14px" }}>
+                schedule
+              </span>
+              ETA {s.etaLabel || "--:--"}
+            </span>
+          </div>
+        </div>
+
+        {/* Route info cards */}
+        <h3 className="text-[11px] uppercase tracking-wide font-medium text-on-surface-variant mb-2 mt-5">Route Info</h3>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <InfoCard icon="ev_station" value={s.chargingStops ?? 0} label="Charging Stops" tint="#f59e0b" />
+          <InfoCard icon="straighten" value={`${Math.round(s.distanceKm || 0)} km`} label="Total Distance" tint="#0059bb" />
+          <InfoCard icon="schedule" value={`${fmtH(s.totalTimeH)} h`} label="Total Time" />
+          <InfoCard icon="bolt" value={`${Math.round(s.chargingTimeMin || 0)} min`} label="Charging Time" tint="#f59e0b" />
+        </div>
+      </div>
+
+      {/* Driver hours */}
+      <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm p-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-[11px] uppercase tracking-wide font-medium text-on-surface-variant">Driver Hours</h3>
+          <span
+            className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${
+              d.eu561ok
+                ? "bg-primary/10 text-primary ring-1 ring-primary/25"
+                : "bg-error/10 text-error ring-1 ring-error/25"
+            }`}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: "13px" }}>
+              {d.eu561ok ? "verified" : "warning"}
+            </span>
+            EU 561 {d.eu561ok ? "Compliant" : "Violation"}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <div>
+            <p className="text-xl font-headline font-bold text-on-surface tabular-nums">{fmtH(d.drivingH)}h</p>
+            <p className="text-[10px] text-on-surface-variant">Driving</p>
+          </div>
+          <div>
+            <p className="text-xl font-headline font-bold text-on-surface tabular-nums">{d.breaks ?? 0}</p>
+            <p className="text-[10px] text-on-surface-variant">Breaks</p>
+          </div>
+          <div>
+            <p className="text-xl font-headline font-bold text-on-surface tabular-nums">{fmtH(d.totalH)}h</p>
+            <p className="text-[10px] text-on-surface-variant">Total</p>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <div>
+            <div className="flex justify-between text-[11px] text-on-surface-variant mb-1">
+              <span>Daily</span>
+              <span className="tabular-nums">{fmtH(d.dailyH)} / {d.dailyMaxH ?? 9}h</span>
+            </div>
+            <ProgressBar value={d.dailyH ?? 0} max={d.dailyMaxH ?? 9} tint="#00d166" />
+          </div>
+          <div>
+            <div className="flex justify-between text-[11px] text-on-surface-variant mb-1">
+              <span>Weekly</span>
+              <span className="tabular-nums">{fmtH(d.weeklyH)} / {d.weeklyMaxH ?? 56}h</span>
+            </div>
+            <ProgressBar value={d.weeklyH ?? 0} max={d.weeklyMaxH ?? 56} tint="#006d32" />
+          </div>
+        </div>
+      </div>
+
+      {/* Trip timeline */}
+      <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm p-5">
+        <h3 className="text-[11px] uppercase tracking-wide font-medium text-on-surface-variant mb-3">Trip Timeline</h3>
+        <TripTimeline segments={plan.segments} />
+      </div>
+
+      {/* Energy overview */}
+      <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm p-5">
+        <h3 className="text-[11px] uppercase tracking-wide font-medium text-on-surface-variant mb-3">Energy Overview</h3>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <InfoCard icon="battery_charging_full" value={`${Math.round(s.energyKwh || 0)}`} label="Total kWh" />
+          <InfoCard icon="speed" value={`${Math.round(s.kwhPer100 || 0)}`} label="kWh / 100km" tint="#0059bb" />
+          <InfoCard icon="trending_up" value={`${Math.round(s.elevationGainM || 0)} m`} label="Elevation Gain" tint="#f59e0b" />
+          <InfoCard icon="euro" value={`€${(s.chargingCostEur || 0).toFixed(0)}`} label="Charging Cost" />
+        </div>
+      </div>
+    </div>
+  );
+}

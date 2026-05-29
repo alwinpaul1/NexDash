@@ -1,0 +1,160 @@
+// Ordered vertical timeline of trip segments: drive / rest / charge.
+// Reads the `segments` array from PlanResult (light theme).
+
+function fmtTime(t) {
+  if (!t) return "--:--";
+  // Accept either an ISO string or a pre-formatted HH:MM.
+  if (/^\d{2}:\d{2}$/.test(t)) return t;
+  const d = new Date(t);
+  if (Number.isNaN(d.getTime())) return String(t);
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+function fmtRange(start, end) {
+  return `${fmtTime(start)} – ${fmtTime(end)}`;
+}
+
+function fmtDur(min) {
+  if (min == null) return "";
+  const h = Math.floor(min / 60);
+  const m = Math.round(min % 60);
+  if (h && m) return `${h}h ${m}m`;
+  if (h) return `${h}h`;
+  return `${m}m`;
+}
+
+function socColor(soc) {
+  if (soc >= 50) return "#00d166";
+  if (soc >= 25) return "#f59e0b";
+  return "#ba1a1a";
+}
+
+function Marker({ icon, tint }) {
+  return (
+    <div
+      className="flex items-center justify-center w-8 h-8 rounded-full ring-1"
+      style={{ background: `${tint}1f`, color: tint, borderColor: `${tint}55` }}
+    >
+      <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
+        {icon}
+      </span>
+    </div>
+  );
+}
+
+function DriveRow({ seg }) {
+  const start = seg.socStart ?? 0;
+  const end = seg.socEnd ?? 0;
+  const limit = seg.limitMin || 270;
+  return (
+    <div className="flex-1 rounded-xl bg-surface-low border border-outline-variant/50 px-3 py-2.5">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-medium text-on-surface">
+          Drive
+          <span className="text-on-surface-variant font-normal">
+            {" "}
+            · {Math.round(seg.km || 0)} km · {fmtDur(seg.durationMin)}
+          </span>
+        </p>
+        <p className="text-[11px] text-on-surface-variant tabular-nums">
+          {fmtDur(seg.durationMin)} / {fmtDur(limit)}
+        </p>
+      </div>
+      <div className="mt-2 flex items-center gap-2">
+        <span className="text-[11px] tabular-nums" style={{ color: socColor(start) }}>
+          {Math.round(start)}%
+        </span>
+        <div className="relative flex-1 h-1.5 rounded-full bg-surface overflow-hidden">
+          <div
+            className="absolute inset-y-0 left-0 right-0 rounded-full"
+            style={{ background: `linear-gradient(90deg, ${socColor(start)}, ${socColor(end)})` }}
+          />
+        </div>
+        <span className="text-[11px] tabular-nums" style={{ color: socColor(end) }}>
+          {Math.round(end)}%
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function RestCard({ seg }) {
+  return (
+    <div className="flex-1 rounded-xl bg-amber-500/10 border border-amber-500/30 px-3 py-2.5">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-medium text-amber-700">{seg.label || "Rest Break"}</p>
+        <p className="text-[11px] text-amber-700/70 tabular-nums">{fmtDur(seg.durationMin)}</p>
+      </div>
+      <p className="text-[11px] text-amber-700/60 mt-0.5 tabular-nums">
+        {fmtRange(seg.startTime, seg.endTime)}
+      </p>
+    </div>
+  );
+}
+
+function ChargeCard({ seg }) {
+  const start = seg.socStart ?? 0;
+  const end = seg.socEnd ?? 0;
+  return (
+    <div className="flex-1 rounded-xl bg-primary/8 border border-primary/25 px-3 py-2.5">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-medium text-primary truncate">
+          {seg.station?.name || "Charging Stop"}
+        </p>
+        <p className="text-[11px] text-primary/70 tabular-nums shrink-0 ml-2">
+          {fmtDur(seg.durationMin)}
+        </p>
+      </div>
+      <p className="text-[11px] text-on-surface-variant mt-0.5 tabular-nums">
+        {fmtRange(seg.startTime, seg.endTime)}
+      </p>
+      <div className="mt-2 flex items-center justify-between text-[11px]">
+        <span className="text-on-surface-variant tabular-nums">
+          <span style={{ color: socColor(start) }}>{Math.round(start)}%</span>
+          <span className="material-symbols-outlined align-middle text-on-surface-variant" style={{ fontSize: "14px" }}>
+            arrow_right_alt
+          </span>
+          <span style={{ color: socColor(end) }}>{Math.round(end)}%</span>
+        </span>
+        <span className="text-on-surface tabular-nums">
+          {Math.round(seg.kWh || 0)} kWh · €{(seg.costEur || 0).toFixed(2)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+export default function TripTimeline({ segments = [] }) {
+  if (!segments.length) {
+    return <p className="text-sm text-on-surface-variant">No trip segments.</p>;
+  }
+
+  return (
+    <ol className="space-y-2.5">
+      {segments.map((seg, i) => {
+        const isLast = i === segments.length - 1;
+        let marker;
+        let body;
+        if (seg.type === "rest") {
+          marker = <Marker icon="hotel" tint="#f59e0b" />;
+          body = <RestCard seg={seg} />;
+        } else if (seg.type === "charge") {
+          marker = <Marker icon="ev_station" tint="#006d32" />;
+          body = <ChargeCard seg={seg} />;
+        } else {
+          marker = <Marker icon="local_shipping" tint="#0059bb" />;
+          body = <DriveRow seg={seg} />;
+        }
+        return (
+          <li key={i} className="flex gap-3">
+            <div className="flex flex-col items-center">
+              {marker}
+              {!isLast && <div className="flex-1 w-px bg-outline-variant/60 mt-1" />}
+            </div>
+            {body}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}

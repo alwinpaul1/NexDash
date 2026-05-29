@@ -1,0 +1,11 @@
+numpy
+pandas
+scikit-learn
+joblib
+matplotlib
+anthropic
+mcp
+fastapi
+uvicorn
+pydantic
+pytest
