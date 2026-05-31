@@ -20,7 +20,7 @@ held-out set:
 3. **It is not more dangerous.** The *optimistic-error rate* (fraction of rows
    where the model predicts LESS energy than truth — the direction that strands
    a truck) must not rise. A challenger that lowers mean MAE while becoming more
-   optimistic at the boundary is rejected.
+   optimistic overall is rejected.
 
 Everything is deterministic (fixed bootstrap seed), offline, and dependency-light
 (numpy only). Run as ``python -m nexdash.promote <champion.joblib> <challenger.joblib>``.

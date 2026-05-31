@@ -164,7 +164,7 @@
   <h3>A · Backend model — long-term thinking <span class="pill graded">long_term</span> <span class="pill graded">honest_eval</span></h3>
   <table>
     <tr><th>Item</th><th>What &amp; why</th></tr>
-    <tr><td><b>A1 Provenance</b></td><td>Artifact gains a <code>model_version</code> (dataset sha256 + git SHA + seed + timestamp); surfaced in <code>model_info</code> + report header. You can’t prove a challenger is better or roll back without identifying what produced an artifact (LONG_TERM §5.1).</td></tr>
+    <tr><td><b>A1 Provenance</b></td><td>Artifact gains a content-addressed <code>model_version</code> (dataset SHA + code/git SHA; seed, timestamp &amp; full metrics live alongside it in the provenance record, not in the id); surfaced in <code>model_info</code> + report header. You can’t prove a challenger is better or roll back without identifying what produced an artifact (LONG_TERM §5.1).</td></tr>
     <tr><td><b>A2 Promotion gate</b></td><td><code>nexdash/registry.py</code> + <code>python -m nexdash.promote champion challenger</code>: score both on one frozen held-out set; <b>paired-bootstrap 95% CI on the MAE difference must exclude 0</b>; reject if any failure-mode slice regresses; reject if the <b>optimistic-error rate at the reach boundary</b> rises (safety-asymmetric). Turns LONG_TERM §3 prose into the exact thing the brief asks to “see.”</td></tr>
     <tr><td><b>A3 Drift</b></td><td><code>nexdash/drift.py</code> + CLI: per-feature <b>PSI</b> + <b>KS</b> + realized-residual bias vs the training reference, tiered stable/watch/drift at the standard 0.1/0.25 PSI cutoffs (LONG_TERM §4).</td></tr>
   </table>

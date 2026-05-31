@@ -618,10 +618,43 @@ function localFallback({ planner, geometry, distanceKm, durationS }) {
   ];
   const drivingH = drivingMin / 60;
 
+  // Per-destination arrival estimates so the Delivery Stops panel still renders
+  // when the backend SOC simulator is unreachable. Approximate: leg fractions
+  // from great-circle waypoint spacing, constant consumption, linear SOC drop.
+  const wpts = [];
+  if (planner?.origin?.lat != null) wpts.push(planner.origin);
+  for (const d of planner?.destinations || []) if (d?.lat != null) wpts.push(d);
+  const legKm = [];
+  for (let i = 1; i < wpts.length; i++) {
+    legKm.push(haversineKm([wpts[i - 1].lat, wpts[i - 1].lng], [wpts[i].lat, wpts[i].lng]));
+  }
+  const gcTotal = legKm.reduce((a, b) => a + b, 0) || 1;
+  const dests = wpts.slice(1);
+  let cumGc = 0;
+  const stops = dests.map((d, i) => {
+    cumGc += legKm[i] || 0;
+    const frac = Math.min(1, cumGc / gcTotal);
+    return {
+      index: i,
+      label: d.label || `Stop ${i + 1}`,
+      distKm: round1(distanceKm * frac),
+      arriveSoc: round1(Math.max(0, startSoc - socDrop * frac)),
+      etaLabel: "—",
+      etaIso: null,
+      dropWeightKg: d.dropWeightKg || 0,
+      payloadAfterT: null,
+      unloadMin: d.unloadMin || 0,
+      deliverBy: d.deliverBy || null,
+      onTime: null, // the offline fallback can't reliably verify deadlines
+      isFinal: i === dests.length - 1,
+    };
+  });
+
   return {
     geometry,
     socProfile,
     segments,
+    stops,
     chargingStops: [],
     elevationProfile: [],
     conditions: {},
@@ -650,6 +683,9 @@ function localFallback({ planner, geometry, distanceKm, durationS }) {
         weeklyMaxH: 56,
         eu561ok: drivingH <= 9,
       },
+      assumptions: [
+        "Client-side fallback estimate: the backend SOC simulator was unreachable, so this uses a constant-consumption linear model with no per-segment terrain, no charging insertion, and approximate per-stop arrivals. Start the backend (python dashboard/server.py) for the full physics-model plan.",
+      ],
     },
   };
 }
