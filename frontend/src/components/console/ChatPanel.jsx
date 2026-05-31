@@ -199,7 +199,7 @@ export default function ChatPanel({ onClose }) {
   }
 
   return (
-    <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm overflow-hidden flex flex-col h-[520px]">
+    <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm overflow-hidden flex flex-col h-[620px] max-h-[calc(100vh-7rem)]">
       {/* Header — mirrors the Live Range Check gradient treatment. */}
       <div className="px-5 py-4 bg-gradient-to-r from-primary to-accent text-on-primary">
         <h2 className="font-headline font-bold text-lg">Dispatcher Assistant</h2>
