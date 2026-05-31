@@ -225,21 +225,22 @@
    loop, with a pulsing halo, giving a live sense of motion along the route. */
 .route-runner {
   position: relative;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
 }
 .route-runner .rr-video {
   position: absolute;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  width: 36px;
-  height: 36px;
+  width: 42px;
+  height: 42px;
   border-radius: 9999px;
-  object-fit: cover;
+  /* contain (not cover) so the whole truck shows instead of a cropped sliver. */
+  object-fit: contain;
   background: #fff;
   border: 2px solid #fff;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.4);
 }
 .route-runner .rr-halo {
   position: absolute;

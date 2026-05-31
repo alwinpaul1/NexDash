@@ -273,8 +273,8 @@ function RouteRunner({ geometry }) {
     const icon = L.divIcon({
       className: "",
       html: `<div class="route-runner"><span class="rr-halo"></span><video class="rr-video" src="/truck.mp4" autoplay loop muted playsinline></video></div>`,
-      iconSize: [40, 40],
-      iconAnchor: [20, 20],
+      iconSize: [44, 44],
+      iconAnchor: [22, 22],
     });
     const marker = L.marker(geometry[0], {
       icon,
@@ -283,8 +283,16 @@ function RouteRunner({ geometry }) {
       zIndexOffset: 650,
     }).addTo(map);
 
-    // One lap takes ~6 s, gently scaled by route length and clamped.
-    const duration = Math.min(9000, Math.max(4500, total * 12));
+    // Some browsers don't autoplay a freshly-injected <video>; nudge it and slow
+    // the clip down so the truck reads as a calm cruise rather than a blur.
+    const video = marker.getElement()?.querySelector("video");
+    if (video) {
+      video.playbackRate = 0.5;
+      video.play().catch(() => {});
+    }
+
+    // Slow, smooth lap: scale with route length, clamped to 16-32 s.
+    const duration = Math.min(32000, Math.max(16000, total * 45));
 
     const posAt = (d) => {
       if (d <= 0) return geometry[0];
