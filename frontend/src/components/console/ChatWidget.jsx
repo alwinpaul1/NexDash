@@ -17,7 +17,7 @@ export default function ChatWidget({ open, onOpenChange }) {
             : "opacity-0 translate-y-3 scale-95 pointer-events-none"
         }`}
       >
-        <ChatPanel onClose={() => onOpenChange(false)} />
+        <ChatPanel />
       </div>
 
       <button

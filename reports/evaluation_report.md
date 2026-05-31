@@ -1,6 +1,6 @@
 # NexDash Energy Model -- Evaluation Report
 
-_Generated 2026-05-31 16:45:02 by `run_pipeline.py` (seed = 42, deterministic)._
+_Generated 2026-05-31 17:39:36 by `run_pipeline.py` (seed = 42, deterministic)._
 
 This report evaluates the energy-consumption model for the
 **Mercedes-Benz eActros 600** (~600 kWh usable battery, ~500 km
@@ -43,8 +43,10 @@ segments the model never saw during training.
 - **MAE:** **5.970 kWh** per segment -- the typical absolute
   miss on a single leg.
 - **RMSE:** 9.133 kWh
-- **MAPE:** 14.06 % (per-segment, over rows above the
-  1 kWh floor)
+- **MAPE:** 14.06 % (per-segment, computed on
+  1,188 of 1,200 test rows; the 12
+  near-zero rows below the 1 kWh floor are excluded so tiny
+  denominators don't make MAPE explode meaninglessly)
 - **R^2:** 0.9836
 - **% of a full charge:** **0.995 %** -- the per-segment MAE
   expressed against the 600 kWh usable battery; a fleet-intuitive

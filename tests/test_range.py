@@ -254,3 +254,57 @@ def test_low_confidence_note_names_the_estimate_actually_used(model_path):
     assert expected_tag in r["confidence_note"]
     # The decision must use the conservative (higher) of the two estimates.
     assert r["energy_needed_kwh"] == pytest.approx(max(r["model_kwh"], r["physics_kwh"]))
+
+
+def test_routine_descent_is_not_falsely_flagged_out_of_envelope(model_path):
+    """A normal downhill leg must stay HIGH confidence, not be called OOD.
+
+    WHY: the physics cross-check exists to catch the model UNDER-predicting on
+    steep climbs (the dangerous, optimistic direction). On a descent the
+    first-principles estimate can go *negative* (net regen), and a symmetric
+    abs() test — with a ``0.15 * physics`` band that collapses when physics is
+    negative — used to flag every routine descent as "outside the envelope the
+    model was trained on" and tell the dispatcher to keep a wide reserve. But a
+    -4% grade is squarely inside the -6..+6% training range. The gate must be
+    directional: model predicting MORE than physics (the safe direction) keeps
+    high confidence and quotes the model, and the note must not lie about the
+    envelope. This fails if the symmetric/absolute gate is reintroduced.
+    """
+    r = check_reachability(
+        soc_pct=70.0,
+        distance_km=80.0,
+        payload_t=10.0,
+        speed_kph=75.0,
+        gradient_pct=-4.0,
+        temperature_c=8.0,
+        model_path=model_path,
+    )
+    assert r["confidence"] == "high"
+    assert "outside the envelope" not in r["confidence_note"]
+    # On a descent the model (realistic) sits above the negative physics estimate;
+    # the decision quotes the model, not the physics floor.
+    assert r["energy_needed_kwh"] == pytest.approx(r["model_kwh"], rel=1e-6)
+
+
+def test_descent_remaining_range_is_physically_bounded(model_path):
+    """``remaining_range_km`` must never exceed the truck's nominal range.
+
+    WHY: it used to extrapolate the *segment's* kWh/km forward, but a descent's
+    near-zero (or net-regen negative) rate cannot be sustained — a truck cannot
+    descend forever — so the figure exploded to 1,000-1,800 km for a 600 kWh /
+    ~500 km truck, an obviously impossible operator-facing number. Flooring the
+    consumption rate at the nominal flat rate keeps it physical. This fails if
+    the consumption floor is removed.
+    """
+    from nexdash.config import TRUCK
+
+    r = check_reachability(
+        soc_pct=70.0,
+        distance_km=80.0,
+        payload_t=10.0,
+        speed_kph=75.0,
+        gradient_pct=-4.0,
+        temperature_c=8.0,
+        model_path=model_path,
+    )
+    assert 0.0 <= r["remaining_range_km"] <= TRUCK.nominal_range_km

@@ -310,6 +310,9 @@ def _build_report(
     headline_mae = float(held_out.get("mae_kwh", float("nan")))
     headline_mape = float(held_out.get("mape_pct", float("nan")))
     pct_range = float(held_out.get("pct_range_error", float("nan")))
+    headline_n = int(held_out.get("n", 0))
+    headline_mape_n = int(held_out.get("mape_n", headline_n))
+    headline_mape_excluded = headline_n - headline_mape_n
 
     feature_cols = [c for c in df.columns if c != "energy_kwh"]
     desc = df[feature_cols + ["energy_kwh"]].describe().T
@@ -362,8 +365,10 @@ segments the model never saw during training.
 - **MAE:** **{_fmt(headline_mae, 3)} kWh** per segment -- the typical absolute
   miss on a single leg.
 - **RMSE:** {_fmt(held_out.get("rmse_kwh"), 3)} kWh
-- **MAPE:** {_fmt(headline_mape, 2)} % (per-segment, over rows above the
-  {MAPE_FLOOR_KWH:.0f} kWh floor)
+- **MAPE:** {_fmt(headline_mape, 2)} % (per-segment, computed on
+  {headline_mape_n:,} of {headline_n:,} test rows; the {headline_mape_excluded:,}
+  near-zero rows below the {MAPE_FLOOR_KWH:.0f} kWh floor are excluded so tiny
+  denominators don't make MAPE explode meaninglessly)
 - **R^2:** {_fmt(held_out.get("r2"), 4)}
 - **% of a full charge:** **{_fmt(pct_range, 3)} %** -- the per-segment MAE
   expressed against the {NOMINAL_TRIP_KWH:.0f} kWh usable battery; a fleet-intuitive

@@ -9,7 +9,7 @@ import { useState } from "react";
  */
 
 const SPECS = [
-  { icon: "battery_full", label: "Battery", value: "621 kWh" },
+  { icon: "battery_full", label: "Battery", value: "621 kWh (600 usable)" },
   { icon: "bolt", label: "Max Charging", value: "400 kW" },
   { icon: "package_2", label: "Max Payload", value: "22 t (22,000 kg)" },
   { icon: "scale", label: "Curb Weight", value: "~18 t" },

@@ -40,6 +40,10 @@ class Truck:
         drivetrain_eff: Battery-to-wheel drivetrain efficiency (0-1).
         regen_eff: Fraction of available braking/downhill energy recovered (0-1).
         aux_base_kw: Baseline auxiliary/HVAC power draw at mild temperature (kW).
+        nominal_range_km: Rated real-world range on a usable charge (km). Used
+            only as a sane flat-consumption floor when extrapolating a
+            *remaining* range from a single segment (a regen-dominated descent's
+            near-zero rate cannot be sustained over further distance).
     """
 
     # Values below are calibrated to real Mercedes-Benz eActros 600 figures and
@@ -55,6 +59,7 @@ class Truck:
     drivetrain_eff: float = 0.85  # battery-to-wheel for 800 V e-axle at cruise. [S1]
     regen_eff: float = 0.60  # ~50-70% braking capture, ~25% favourable-stage recovery. [S4][S5][S11]
     aux_base_kw: float = 2.0  # steady electronics/aux floor on top of U-shaped HVAC. [S10][S12]
+    nominal_range_km: float = 500.0  # ~500 km real-world on a usable charge. [S1][S2]
 
 
 #: Canonical truck specification used throughout the package.

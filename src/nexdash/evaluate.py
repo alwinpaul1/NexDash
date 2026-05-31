@@ -157,6 +157,9 @@ def evaluate(model: Any, df_test: pd.DataFrame) -> dict[str, float]:
         * ``r2`` -- coefficient of determination; fraction of target variance
           explained. *Does not tell us* the magnitude of error in kWh.
         * ``n`` -- number of test rows scored.
+        * ``mape_n`` -- number of those rows above the MAPE floor (i.e. actually
+          included in ``mape_pct``); ``n - mape_n`` near-zero rows are excluded.
+          Surfaced so the report can disclose the exclusion count transparently.
 
     Raises:
         KeyError: if required columns are missing from ``df_test``.
@@ -175,6 +178,7 @@ def evaluate(model: Any, df_test: pd.DataFrame) -> dict[str, float]:
         "pct_range_error": pct_range_error,
         "r2": core["r2"],
         "n": core["n"],
+        "mape_n": core["mape_n"],
     }
 
 

@@ -233,3 +233,78 @@ def test_flat_fallback_without_geometry_omits_enrichment():
     assert "conditions" not in result
     assert result["summary"]["elevationGainM"] == pytest.approx(0.0)
     assert result["summary"]["energyKwh"] > 0
+
+
+# --------------------------------------------------------------------------- #
+# Geometry-mode energy must track physics, not polyline density
+# --------------------------------------------------------------------------- #
+def test_geometry_energy_invariant_to_polyline_density(monkeypatch):
+    """The SAME uniform-condition route must cost ~the same energy regardless of
+    how finely its polyline is sampled.
+
+    WHY: the energy model over-predicts on very short (<~5 km) legs, so the old
+    "predict per enriched sub-chunk and sum" inflated total route energy with
+    polyline DENSITY — a real downsampled TomTom polyline is ~2-10 km/segment,
+    well inside the inflated regime, producing absurd >600 kWh/100km totals and
+    phantom charging stops. The planner now aggregates enriched segments into
+    ~CHUNK_KM windows (distance-weighted-average conditions) before predicting,
+    so energy depends on physics, not segment count. This is the load-bearing
+    guard against reintroducing per-sub-chunk prediction.
+    """
+    common = dict(
+        distance_km=200.0,
+        duration_s=200.0 / 70.0 * 3600.0,
+        start_soc=100.0,
+        min_soc=0.0,            # disable charging so we compare raw energy
+        payload_kg=22000.0,
+        temperature_c=-10.0,
+        geometry=GEOMETRY,
+        model_path=DEFAULT_MODEL_PATH,
+    )
+
+    energies = []
+    for n, d in ((4, 50.0), (40, 5.0), (80, 2.5)):  # 200 km as coarse / fine / finer
+        monkeypatch.setattr(
+            route_planner.geodata,
+            "enrich_route",
+            lambda geometry, departure_iso=None, _n=n, _d=d: _fake_enrichment(
+                gradient_pct=0.0, n_segments=_n, dist_km_each=_d, wind=8.0
+            ),
+        )
+        energies.append(route_planner.plan_route(**common)["summary"]["energyKwh"])
+
+    # Identical physics, identical net terrain -> energy must not drift with the
+    # number of polyline segments (it varied ~4x before the fix).
+    assert max(energies) - min(energies) < 5.0, (
+        f"geometry-mode energy still varies with polyline density: {energies}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Charging look-ahead: no spurious charge on a reachable trip
+# --------------------------------------------------------------------------- #
+def test_short_reachable_trip_inserts_no_charge():
+    """A short trip that finishes above the hard floor must NOT force a charge.
+
+    WHY: the trigger used floor = min_soc + reserve and fired whenever any chunk
+    merely dipped into the reserve band, so a 30 km hop from 20% SOC got a full
+    ~76 min recharge AT THE ORIGIN even though it arrives ~15% — comfortably above
+    the 10% hard floor — directly contradicting check_reachability, which calls
+    the identical trip reachable. The planner now only charges if continuing would
+    breach the HARD min_soc before the destination. Fails if the look-ahead is
+    removed (the reserve band must be a soft cushion, not a hard origin trigger).
+    """
+    result = route_planner.plan_route(
+        distance_km=30.0,
+        duration_s=30.0 / 70.0 * 3600.0,
+        start_soc=20.0,
+        min_soc=10.0,
+        payload_kg=0.0,
+        reserve_pct=10.0,
+        temperature_c=15.0,
+        model_path=DEFAULT_MODEL_PATH,
+    )
+    assert len(result["chargingStops"]) == 0, "reachable short trip must not charge"
+    assert all(s["type"] != "charge" for s in result["segments"])
+    # Arrives above the hard floor (the reserve cushion may be dipped into).
+    assert result["summary"]["arrivalSoc"] >= 10.0

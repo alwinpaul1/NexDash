@@ -90,7 +90,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
                 "gradient_pct": {
                     "type": "number",
                     "description": (
-                        "Average road gradient in percent; positive = uphill, "
+                        "Net road gradient in percent; positive = uphill, "
                         "negative = downhill (typically -6 to +6)."
                     ),
                 },
@@ -146,7 +146,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
                 },
                 "gradient_pct": {
                     "type": "number",
-                    "description": "Average road gradient in percent (positive = uphill).",
+                    "description": "Net road gradient in percent; positive = uphill, negative = downhill.",
                 },
                 "temperature_c": {
                     "type": "number",

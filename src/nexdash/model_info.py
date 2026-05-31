@@ -81,12 +81,17 @@ def _metrics_from_report(info: dict[str, Optional[float]]) -> dict[str, Optional
         "rmse_kwh": r"\*\*RMSE:\*\*\s*([\d.]+)\s*kWh",
         "mape_pct": r"\*\*MAPE:\*\*\s*([\d.]+)\s*%",
         "r2": r"\*\*R\^2:\*\*\s*([\d.]+)",
-        "pct_range_error": r"\*\*% range error:\*\*\s*\*\*([\d.]+)\s*%\*\*",
     }
     for key, pattern in patterns.items():
         match = re.search(pattern, text)
         if match:
             info[key] = _as_float(match.group(1))
+    # Derive pct_range_error from the parsed MAE exactly as the artifact path does,
+    # rather than scrape the report's prose label (which has drifted before, e.g.
+    # "% of a full charge" vs "% range error", silently yielding None). This keeps
+    # the fallback consistent with model_info()'s own definition and wording-robust.
+    if info["mae_kwh"] is not None and TRUCK.battery_kwh > 0:
+        info["pct_range_error"] = round(info["mae_kwh"] / TRUCK.battery_kwh * 100.0, 3)
     return info
 
 

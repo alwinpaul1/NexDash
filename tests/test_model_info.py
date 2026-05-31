@@ -50,6 +50,29 @@ def test_model_info_numeric_metrics(model_path):
     assert info["pct_range_error"] == pytest.approx(expected, abs=1e-2)
 
 
+def test_model_info_report_fallback_derives_pct_range_error(tmp_path):
+    """With no artifact, the report-fallback must still yield pct_range_error.
+
+    WHY: the fallback used to scrape a prose label (``% range error:``) that had
+    drifted in the generated report (``% of a full charge:``), so the regex never
+    matched and pct_range_error silently resolved to ``None`` on the ONLY path
+    that uses it -- a partial ``/api/model-info`` result. It is now derived from
+    the parsed MAE exactly as the artifact path does, so the fallback stays
+    consistent and robust to report wording. Fails if the regex dependency
+    returns (or pct_range_error goes None) while MAE parses fine.
+    """
+    from nexdash.config import TRUCK
+
+    missing = tmp_path / "no_artifact.joblib"
+    # Default REPORTS_DIR points at the real committed evaluation_report.md.
+    info = model_info_module.model_info(model_path=missing)
+    assert info["mae_kwh"] is not None, "fallback should parse MAE from the report"
+    assert info["pct_range_error"] is not None, "pct_range_error must not be None"
+    assert info["pct_range_error"] == pytest.approx(
+        info["mae_kwh"] / TRUCK.battery_kwh * 100.0, abs=1e-2
+    )
+
+
 def test_model_info_fails_soft_to_nulls(tmp_path, monkeypatch):
     """With no artifact AND no report, metrics must degrade to nulls, not raise."""
     missing = tmp_path / "does_not_exist.joblib"

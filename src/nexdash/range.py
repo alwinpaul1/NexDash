@@ -125,9 +125,19 @@ def check_reachability(
     # the envelope it was trained on; handed a physically implausible segment (e.g.
     # a sustained steep grade over a long distance, which never occurs in real
     # data), it extrapolates and can *under*-predict badly — the dangerous
-    # direction. We therefore compute a first-principles estimate and, when the two
-    # disagree by more than ~3 error bands (or 15%), refuse to quote the optimistic
-    # number: we use the more conservative value and flag low confidence.
+    # direction. We therefore compute a first-principles estimate and, when the
+    # model is OPTIMISTIC relative to physics by more than ~3 error bands (or 15%),
+    # refuse to quote the optimistic number: we use the more conservative (higher)
+    # value and flag low confidence.
+    #
+    # The test is DIRECTIONAL on purpose. Only model under-prediction (model far
+    # BELOW physics) is dangerous. When the model predicts MORE than physics — which
+    # is normal on a regen-dominated descent, where the first-principles estimate can
+    # even go negative — that is the safe/conservative direction, so we keep high
+    # confidence and quote the model. A symmetric ``abs(...)`` test (and a
+    # ``0.15 * physics`` band that collapses to zero when physics is negative) would
+    # otherwise falsely flag every routine downhill leg — which is squarely inside the
+    # -6..+6% training envelope — as "outside the envelope".
     physics_kwh = float(
         segment_energy_kwh(
             distance_km=distance_km,
@@ -140,7 +150,8 @@ def check_reachability(
         )
     )
     mae_band = _held_out_mae_kwh(str(model_path))
-    diverges = abs(model_kwh - physics_kwh) > max(3.0 * mae_band, 0.15 * physics_kwh)
+    divergence_band = max(3.0 * mae_band, 0.15 * abs(physics_kwh))
+    diverges = (physics_kwh - model_kwh) > divergence_band
     energy_needed_kwh = max(model_kwh, physics_kwh) if diverges else model_kwh
     confidence = "low" if diverges else "high"
 
@@ -159,9 +170,17 @@ def check_reachability(
     # Estimate how much further the truck could go after this segment, assuming
     # the same average consumption (kWh/km) as the predicted segment. Energy
     # below the reserve is not counted toward usable remaining range.
+    #
+    # The segment rate is FLOORED at the truck's nominal flat consumption: a
+    # downhill leg can have a near-zero (or net-regen negative) kWh/km, but a truck
+    # cannot descend forever, so extrapolating that rate would quote a physically
+    # impossible 1000+ km of remaining range. Flooring at the rated flat rate keeps
+    # the estimate a sane "further range on average terrain", and leaves uphill
+    # legs (rate above nominal) conservatively unchanged.
     remaining_range_km = 0.0
     if distance_km > 0 and energy_needed_kwh > 0:
-        kwh_per_km = energy_needed_kwh / distance_km
+        nominal_kwh_per_km = battery_kwh / TRUCK.nominal_range_km
+        kwh_per_km = max(energy_needed_kwh / distance_km, nominal_kwh_per_km)
         usable_remaining_kwh = max(
             0.0, (energy_available_kwh - energy_needed_kwh) - reserve_kwh
         )

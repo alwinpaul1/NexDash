@@ -19,7 +19,7 @@ import argparse
 import os
 import sys
 
-from nexdash.agent import DispatcherAgent
+from nexdash.agent import DEFAULT_CLAUDE_MODEL, DispatcherAgent
 
 # --------------------------------------------------------------------------- #
 # Terminal styling helpers
@@ -187,8 +187,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--model",
-        default="claude-opus-4-8",
-        help="Anthropic model id to use (default: claude-opus-4-8).",
+        default=DEFAULT_CLAUDE_MODEL,
+        help=(
+            f"Model id to use (default: {DEFAULT_CLAUDE_MODEL}). Left at the "
+            "default, the agent auto-selects the MiniMax provider when "
+            "MINIMAX_API_KEY is set, else Anthropic."
+        ),
     )
     return parser
 

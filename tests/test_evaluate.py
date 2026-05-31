@@ -75,11 +75,16 @@ def test_evaluate_returns_documented_keys(trained) -> None:
         "pct_range_error",
         "r2",
         "n",
+        "mape_n",
     }
     assert expected_keys.issubset(result.keys()), (
         f"evaluate must return the documented headline keys; "
         f"got {sorted(result.keys())}"
     )
+    # mape_n is the count of rows above the MAPE floor; it is surfaced so the
+    # report can disclose how many near-zero rows the headline MAPE excludes.
+    # It must be a subset of the scored rows.
+    assert 0 <= result["mape_n"] <= result["n"]
 
 
 def test_evaluate_metrics_are_sane(trained) -> None:

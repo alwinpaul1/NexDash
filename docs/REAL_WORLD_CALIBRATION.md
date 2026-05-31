@@ -47,7 +47,7 @@ envelope are now **explicit, first-principles physics channels** in
 | CRR speed slope | **0.0015** /km/h | `f_speed = max(1 + 0.0015·(speed_kph − 80), 0.90)` | Modest speed-dependent rolling-resistance rise, normalised to 1.0 at the 80 km/h reference. SAE J2452. [S15] |
 | CRR cold slope | **0.004** /°C | `f_temp = 1 + 0.004·(20 − T_C)` for T < 20 °C, else 1.0 | Cold-side tyre stiffening only (~+0.4%/°C), normalised to 1.0 at the 20 °C reference. Deliberately conservative (literature is 0.6–0.9%/°C). [S15] |
 | regen temp floor `g_temp` | **0.45** at −15 °C | Cold-BMS charge-acceptance taper: `g_temp` = 1.0 at/above +10 °C, linear down to 0.45 at −15 °C | Reasoned engineering bound (cold lithium charge-acceptance limit), Battery University BU-410. **Not** an eActros-specific measurement — Daimler publishes no regen-vs-temperature curve. [S16] |
-| regen grade floor `g_grade` | **0.55** at −10% | Regen-power-cap taper: `g_grade` = 1.0 up to −5% descent, linear down to 0.55 at −10% | Reasoned engineering bound (steep descents exceed the regen power cap → friction braking). **Not** eActros-measured. [S16] |
+| regen grade floor `g_grade` | **0.70** at −10% | Regen-power-cap taper: `g_grade` = 1.0 up to −5% descent, linear down to 0.70 at −10% | Reasoned engineering bound (steep descents exceed the regen power cap → friction braking); the floor is set at 0.70 (not lower) so recovered energy stays **monotonically non-decreasing in |grade|** — a steeper descent must never return less charge. **Not** eActros-measured. [S16] |
 
 Both Crr factors and both regen factors equal **1.0 at their reference points**
 (80 km/h, 20 °C, descents ≤ −5%, T ≥ +10 °C), so the §1 calibration anchors are
@@ -151,15 +151,20 @@ the recovery path (round-trip loss). The 0.60 base is now **tapered by two
 factors** so it only applies in full under mild, moderate conditions:
 `regen_eff_eff = 0.60 · g_temp · g_grade`, where `g_temp` falls from 1.0 at/above
 +10 °C to a floor of **0.45 at −15 °C** (cold-BMS charge-acceptance limit) and
-`g_grade` falls from 1.0 up to a −5% descent to a floor of **0.55 at −10%**
+`g_grade` falls from 1.0 up to a −5% descent to a floor of **0.70 at −10%**
 (steep descents exceed the regen power cap, so the surplus goes to friction
-braking). A mild descent in mild weather keeps the full 0.60. A climb-then-
-descend on the same grade still does **not** cancel — net consumption stays
-positive because only ~50–70% of potential energy is recaptured, less when cold
-or steep. This reproduces Daimler's "~25% of total energy recovered on
-favourable stages" and the ~51% steady-6%-downhill capture seen in comparable
-BEV trucks. The 0.45/0.55 floors are reasoned engineering bounds (BU-410 /
-industry sources), **not** eActros-specific measurements. [S4][S5][S11][S16]
+braking). The floor is set at 0.70 rather than lower so that recovered energy
+stays **monotonically non-decreasing in |grade|**: with a lower floor the
+fraction taper out-ran the rising potential-energy term between −8% and −10%, so
+a *steeper* descent recovered *less* total charge — physically wrong, and now
+guarded by a regression test. A mild descent in mild weather keeps the full
+0.60. A climb-then-descend on the same grade still does **not** cancel — net
+consumption stays positive because only ~50–70% of potential energy is
+recaptured, less when cold or steep. This reproduces Daimler's "~25% of total
+energy recovered on favourable stages" and the ~51% steady-6%-downhill capture
+seen in comparable BEV trucks. The 0.45/0.70 floors are reasoned engineering
+bounds (BU-410 / industry sources), **not** eActros-specific measurements.
+[S4][S5][S11][S16]
 
 ### Speed / aero
 Aerodynamic drag dominates at Autobahn speed (30–50%+ of tractive energy above
@@ -190,4 +195,4 @@ driveable German window. [S6][S8]
 - **[S3-de]** Speed limits in Germany (Wikipedia) — https://en.wikipedia.org/wiki/Speed_limits_in_Germany ; Autobahn (Wikipedia) — https://en.wikipedia.org/wiki/Autobahn ; Germany Relief (Britannica) — https://www.britannica.com/place/Germany/Relief
 - **[S14]** ISO 2533:1975 Standard Atmosphere (International Standard Atmosphere; sea-level pressure 101325 Pa, dry-air specific gas constant R = 287.05 J/kg/K) — https://www.iso.org/standard/7472.html ; Density of air (Wikipedia, ideal-gas formulation) — https://en.wikipedia.org/wiki/Density_of_air
 - **[S15]** SAE J2452 — Stepwise Coastdown Methodology for Measuring Tire Rolling Resistance (speed- and load-dependence of Crr) — https://www.sae.org/standards/content/j2452_201707/ ; rolling-resistance temperature sensitivity discussion — https://www.tut.fi (heavy-truck tyre literature)
-- **[S16]** Battery University BU-410: Charging at High and Low Temperatures (cold lithium charge-acceptance limits) — https://batteryuniversity.com/article/bu-410-charging-at-high-and-low-temperatures ; reasoned regen power-cap bounds (industry sources). Note: Daimler publishes no eActros regen-vs-temperature or regen-vs-grade curve, so the 0.45 / 0.55 floors are defensible engineering estimates, not primary measurements.
+- **[S16]** Battery University BU-410: Charging at High and Low Temperatures (cold lithium charge-acceptance limits) — https://batteryuniversity.com/article/bu-410-charging-at-high-and-low-temperatures ; reasoned regen power-cap bounds (industry sources). Note: Daimler publishes no eActros regen-vs-temperature or regen-vs-grade curve, so the 0.45 / 0.70 floors are defensible engineering estimates, not primary measurements.
