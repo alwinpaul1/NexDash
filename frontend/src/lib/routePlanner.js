@@ -36,11 +36,24 @@ export async function geocode(query) {
     const res = await fetch(url);
     if (!res.ok) return [];
     const data = await res.json();
-    return (data.results || []).map((r) => ({
-      label: r.address?.freeformAddress || q,
-      lat: r.position?.lat,
-      lng: r.position?.lon,
-    }));
+    // Build clean "name + region" results (e.g. "Berlin" / "Berlin, Germany")
+    // and de-duplicate so we don't show six near-identical suburb rows.
+    const out = [];
+    const seen = new Set();
+    for (const r of data.results || []) {
+      const a = r.address || {};
+      const name =
+        r.poi?.name || a.municipality || a.localName || (a.freeformAddress || q).split(",")[0].trim();
+      const region = [a.countrySubdivision, a.country].filter(Boolean).join(", ");
+      const lat = r.position?.lat;
+      const lng = r.position?.lon;
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      const key = `${name}|${region}`.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ name, region, label: name, lat, lng });
+    }
+    return out;
   } catch {
     return [];
   }
@@ -105,7 +118,128 @@ async function tomtomRoute(waypoints) {
     geometry,
     distanceKm: (summary.lengthInMeters || 0) / 1000,
     durationS: summary.travelTimeInSeconds || 0,
+    // Live-traffic delay baked into travelTime (routeType=fastest + traffic=true
+    // means TomTom already routes around closures / heavy congestion).
+    trafficDelayS: summary.trafficDelayInSeconds || 0,
   };
+}
+
+// --------------------------------------------------------------------------- //
+// Live traffic incidents (TomTom Traffic Incident Details v5)
+// --------------------------------------------------------------------------- //
+
+// iconCategory → short human label (TomTom v5 codes).
+const INCIDENT_LABEL = {
+  0: "Traffic incident",
+  1: "Accident",
+  2: "Fog",
+  3: "Dangerous conditions",
+  4: "Rain",
+  5: "Ice",
+  6: "Traffic jam",
+  7: "Lane closed",
+  8: "Road closed",
+  9: "Road works",
+  10: "Wind",
+  11: "Flooding",
+  14: "Broken-down vehicle",
+};
+
+// Query incidents in small bboxes sampled along the route (the v5 bbox has an
+// area limit, so we can't send one giant box for a 600 km corridor), then keep
+// only those within ~6 km of the road and dedupe by incident id.
+async function fetchIncidents(geometry) {
+  if (!TOMTOM_KEY || !Array.isArray(geometry) || geometry.length < 2) return [];
+
+  const N = Math.min(10, Math.max(2, Math.round(geometry.length / 60)));
+  const step = Math.max(1, Math.floor(geometry.length / N));
+  const samples = [];
+  for (let i = 0; i < geometry.length; i += step) samples.push(geometry[i]);
+
+  const fields = encodeURIComponent(
+    "{incidents{type,geometry{type,coordinates},properties{id,iconCategory,magnitudeOfDelay,events{description,code},from,to,delay,roadNumbers}}}"
+  );
+  const pad = 0.18; // ~20 km half-box keeps each query under the area limit
+
+  const batches = await Promise.all(
+    samples.map(async ([lat, lng]) => {
+      const bbox = `${(lng - pad).toFixed(5)},${(lat - pad).toFixed(5)},${(lng + pad).toFixed(5)},${(lat + pad).toFixed(5)}`;
+      // categoryFilter: only flow-affecting incidents (1 accident, 6 jam,
+      // 7 lane-closed, 8 road-closed, 9 roadworks, 14 broken-down) — drop pure
+      // weather (fog/rain/ice/wind/flooding) that doesn't change truck ETA.
+      const url =
+        `https://api.tomtom.com/traffic/services/5/incidentDetails` +
+        `?key=${TOMTOM_KEY}&bbox=${bbox}&fields=${fields}&language=en-GB` +
+        `&timeValidityFilter=present&categoryFilter=1,6,7,8,9,14`;
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return [];
+        const data = await res.json();
+        return data.incidents || [];
+      } catch {
+        return [];
+      }
+    })
+  );
+
+  const seen = new Set();
+  const out = [];
+  for (const inc of batches.flat()) {
+    const p = inc.properties || {};
+    if (p.id) {
+      if (seen.has(p.id)) continue;
+      seen.add(p.id);
+    }
+    const g = inc.geometry || {};
+    let lat0;
+    let lng0;
+    if (g.type === "Point") {
+      [lng0, lat0] = g.coordinates || [];
+    } else if (g.type === "LineString" && Array.isArray(g.coordinates) && g.coordinates.length) {
+      [lng0, lat0] = g.coordinates[Math.floor(g.coordinates.length / 2)];
+    }
+    if (!Number.isFinite(lat0) || !Number.isFinite(lng0)) continue;
+
+    // Corridor filter: keep only incidents essentially ON the route (<= 2.5 km),
+    // checked against a DENSE sample of the polyline. Also remember the nearest
+    // route point so we can SNAP the marker onto the travelled line (otherwise it
+    // floats on a parallel road, which looks wrong).
+    const CORRIDOR_KM = 2.5;
+    const corridorStride = Math.max(1, Math.floor(geometry.length / 400));
+    let nearest = Infinity;
+    let snapPt = [lat0, lng0];
+    for (let i = 0; i < geometry.length; i += corridorStride) {
+      const dd = haversineKm(geometry[i], [lat0, lng0]);
+      if (dd < nearest) {
+        nearest = dd;
+        snapPt = geometry[i];
+      }
+    }
+    if (nearest > CORRIDOR_KM) continue;
+
+    out.push({
+      lat: snapPt[0],
+      lng: snapPt[1],
+      category: p.iconCategory ?? 0,
+      magnitude: p.magnitudeOfDelay ?? 0,
+      description: p.events?.[0]?.description || INCIDENT_LABEL[p.iconCategory] || "Traffic incident",
+      from: p.from || "",
+      to: p.to || "",
+      delayS: p.delay || 0,
+      road: Array.isArray(p.roadNumbers) ? p.roadNumbers.join(", ") : "",
+    });
+  }
+
+  // Keep only incidents that actually affect the truck's ETA: a measurable
+  // delay, a major-severity event, a full road closure (forces a reroute), or a
+  // traffic jam. This drops minor lane closures / roadworks with no delay that
+  // were cluttering the map.
+  const etaRelevant = (x) =>
+    x.delayS >= 30 || x.magnitude >= 3 || x.category === 8 || x.category === 6;
+  const relevant = out.filter(etaRelevant);
+  // ETA impact first: biggest delay, then severity. Cap to keep the map clean.
+  relevant.sort((a, b) => b.delayS - a.delayS || b.magnitude - a.magnitude);
+  return relevant.slice(0, 8);
 }
 
 // --------------------------------------------------------------------------- //
@@ -123,6 +257,8 @@ async function backendPlan({ waypoints, geometry, distanceKm, durationS, planner
     startSoc: planner?.startSoc ?? 100,
     minSoc: planner?.minSoc ?? 15,
     payloadKg: planner?.payloadKg ?? 0,
+    reservePct: planner?.reservePct ?? 10,
+    maxChargeKw: planner?.maxChargeKw ?? 350,
     departure: planner?.departure || null,
     temperatureC: planner?.temperatureC ?? 15,
   };
@@ -136,6 +272,158 @@ async function backendPlan({ waypoints, geometry, distanceKm, durationS, planner
 }
 
 // --------------------------------------------------------------------------- //
+// Real charging-station lookup (TomTom EV charging POIs, category 7309)
+// --------------------------------------------------------------------------- //
+
+// Map TomTom connector enums → short dispatcher-friendly labels. Falls back to
+// the raw enum so we never hide an unknown connector type.
+const CONNECTOR_LABEL = {
+  IEC62196Type2CCS: "CCS",
+  IEC62196Type2CableAttached: "Type 2",
+  IEC62196Type2Outlet: "Type 2",
+  Combo: "CCS",
+  Chademo: "CHAdeMO",
+  GBT20234Part2: "GB/T",
+  GBT20234Part3: "GB/T",
+  IEC62196Type1: "Type 1",
+  IEC62196Type1CCS: "CCS",
+  Tesla: "Tesla",
+};
+function connectorLabel(type) {
+  if (!type) return "Unknown";
+  if (CONNECTOR_LABEL[type]) return CONNECTOR_LABEL[type];
+  if (type.startsWith("GBT")) return "GB/T";
+  if (type.includes("CCS")) return "CCS";
+  if (type.includes("Type2")) return "Type 2";
+  return type;
+}
+
+// Live availability for one station (EV Charging Stations Availability API).
+// Best-effort: returns { available, total } or null. Never throws.
+async function fetchAvailability(availabilityId) {
+  if (!availabilityId) return null;
+  try {
+    const url =
+      `https://api.tomtom.com/search/2/chargingAvailability.json` +
+      `?key=${TOMTOM_KEY}&chargingAvailability=${encodeURIComponent(availabilityId)}`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    let available = 0;
+    let total = 0;
+    for (const c of data.connectors || []) {
+      total += c.total || 0;
+      available += c.availability?.current?.available || 0;
+    }
+    if (total === 0) return null;
+    return { available, total };
+  } catch {
+    return null;
+  }
+}
+
+// Replace each simulated charging stop with the nearest REAL EV charging
+// station from TomTom, so stops show actual operator names (e.g. "Aral pulse",
+// "IONITY") at real coordinates on/near the route instead of "MCS Charging Hub".
+//
+// Returns a richer station object per stop, preserving the caller's existing
+// fields (name, lat, lng, address, + kWh attached later). Adds:
+//   connectors:   [{ label, powerKw }]  — distinct connector types at the site
+//   maxPowerKw:   number | null         — max ratedPowerKW across connectors
+//   availability: { available, total } | null  — live "X of Y free" (best-effort)
+//   openingHours: string | null         — short human string
+async function enrichStations(stops, radiusKm = 30) {
+  if (!TOMTOM_KEY || !Array.isArray(stops) || stops.length === 0) return stops || [];
+  const radius = Math.max(1000, Math.round((radiusKm || 30) * 1000));
+  // A 40 t eActros charges on high-power DC (CCS Combo / MCS), NOT the slow AC
+  // "normal" points cars use. TomTom has no dedicated truck-charging category,
+  // so we proxy "truck charging" with CCS connector + high power. Preference:
+  //   1) truck-capable HPC: CCS, >=150 kW
+  //   2) any DC fast charger (>=150 kW)
+  //   3) nearest-any (last-resort fallback so a stop is never empty)
+  const TRUCK_MIN_KW = 150;
+  const TRUCK_CONNECTORS = "IEC62196Type2CCS"; // CCS Combo — the truck/HPC DC standard
+  return Promise.all(
+    stops.map(async (s) => {
+      if (!Number.isFinite(s?.lat) || !Number.isFinite(s?.lng)) return s;
+      try {
+        const base =
+          `https://api.tomtom.com/search/2/categorySearch/EV%20charging.json` +
+          `?key=${TOMTOM_KEY}&lat=${s.lat}&lon=${s.lng}&radius=${radius}&categorySet=7309&limit=5` +
+          `&openingHours=nextSevenDays&relatedPois=child`;
+        const nearest = async ({ minPowerKW = 0, connectorSet = "" } = {}) => {
+          let u = base;
+          if (minPowerKW) u += `&minPowerKW=${minPowerKW}`;
+          if (connectorSet) u += `&connectorSet=${connectorSet}`;
+          const res = await fetch(u);
+          if (!res.ok) return null;
+          const data = await res.json();
+          return (data.results || [])[0] || null;
+        };
+        const r =
+          (await nearest({ minPowerKW: TRUCK_MIN_KW, connectorSet: TRUCK_CONNECTORS })) ||
+          (await nearest({ minPowerKW: TRUCK_MIN_KW })) ||
+          (await nearest());
+        if (!r) return s;
+
+        // Connectors: dedupe by label, keep the highest power seen per label.
+        const rawConnectors = r.chargingPark?.connectors || [];
+        let maxPowerKw = 0;
+        const byLabel = new Map();
+        for (const c of rawConnectors) {
+          const powerKw = Number(c.ratedPowerKW) || 0;
+          if (powerKw > maxPowerKw) maxPowerKw = powerKw;
+          const label = connectorLabel(c.connectorType);
+          const prev = byLabel.get(label);
+          if (!prev || powerKw > prev.powerKw) byLabel.set(label, { label, powerKw });
+        }
+        const connectors = [...byLabel.values()].sort((a, b) => b.powerKw - a.powerKw);
+
+        // Live availability (best-effort, never breaks the route).
+        const availability = await fetchAvailability(r.dataSources?.chargingAvailability?.id);
+
+        // Opening hours → short human string (e.g. "Mon 06:00-22:00 …").
+        let openingHours = null;
+        const oh = r.poi?.openingHours;
+        if (oh?.timeRanges?.length) {
+          const t = oh.timeRanges[0];
+          const fmt = (x) =>
+            x ? `${String(x.hour).padStart(2, "0")}:${String(x.minute).padStart(2, "0")}` : "";
+          const open = fmt(t.startTime);
+          const close = fmt(t.endTime);
+          if (open && close) openingHours = open === "00:00" && close === "00:00" ? "Open 24/7" : `${open}–${close}`;
+        }
+
+        // Realistic charge time at THIS station: energy ÷ real connector power.
+        // Divide by ~0.9 to roughly account for the charge-curve taper at high
+        // SOC (a flat estimate would read optimistically fast). Null when we
+        // lack either the planned kWh or the station's power.
+        const powerKw = maxPowerKw > 0 ? maxPowerKw : null;
+        const chargeMinutes =
+          powerKw && Number.isFinite(s.kWh) && s.kWh > 0
+            ? Math.round((s.kWh / (powerKw * 0.9)) * 60)
+            : null;
+
+        return {
+          ...s,
+          name: r.poi?.name || s.name,
+          lat: r.position?.lat ?? s.lat,
+          lng: r.position?.lon ?? s.lng,
+          address: r.address?.municipality || r.address?.freeformAddress || s.address,
+          connectors,
+          maxPowerKw: powerKw ? Math.round(powerKw) : null,
+          chargeMinutes,
+          availability,
+          openingHours,
+        };
+      } catch {
+        return s;
+      }
+    })
+  );
+}
+
+// --------------------------------------------------------------------------- //
 // Public entry point
 // --------------------------------------------------------------------------- //
 
@@ -146,11 +434,13 @@ export async function optimizeRoute(planner) {
   let geometry;
   let distanceKm;
   let durationS;
+  let trafficDelayS = 0;
   try {
     const r = await tomtomRoute(waypoints);
     geometry = r.geometry;
     distanceKm = r.distanceKm;
     durationS = r.durationS;
+    trafficDelayS = r.trafficDelayS || 0;
   } catch {
     const fb = straightLineRoute(waypoints);
     geometry = fb.geometry;
@@ -160,16 +450,33 @@ export async function optimizeRoute(planner) {
 
   // 2. SOC simulation from the backend. Fall back to a local linear drain.
   try {
-    const sim = await backendPlan({ waypoints, geometry, distanceKm, durationS, planner });
+    // SOC sim + real charging stations + live traffic incidents — independent
+    // calls, so run them together.
+    const [sim, incidents] = await Promise.all([
+      backendPlan({ waypoints, geometry, distanceKm, durationS, planner }),
+      fetchIncidents(geometry),
+    ]);
+    // Swap simulated hubs for real nearby TomTom charging stations.
+    const chargingStops = await enrichStations(sim.chargingStops || [], planner?.maxDetourKm);
+    // Re-label the charge timeline segments to the enriched stations, in order.
+    let ci = 0;
+    const segments = (sim.segments || []).map((seg) => {
+      if (seg.type === "charge" && chargingStops[ci]) {
+        const e = chargingStops[ci++];
+        return { ...seg, station: { name: e.name, lat: e.lat, lng: e.lng, address: e.address } };
+      }
+      return seg;
+    });
     return {
       geometry,
       socProfile: sim.socProfile || [],
-      segments: sim.segments || [],
-      chargingStops: sim.chargingStops || [],
+      segments,
+      chargingStops,
       // Enriched real-world layers from the backend (Open-Meteo).
       elevationProfile: sim.elevationProfile || [],
       conditions: sim.conditions || {},
       summary: sim.summary || {},
+      traffic: { delayS: trafficDelayS, incidents },
     };
   } catch {
     return localFallback({ planner, geometry, distanceKm, durationS });

@@ -151,7 +151,12 @@ export default function LocationSearch({
                 >
                   location_on
                 </span>
-                <span className="leading-snug">{r.label}</span>
+                <span className="leading-snug min-w-0">
+                  <span className="block font-medium text-on-surface truncate">{r.name || r.label}</span>
+                  {r.region ? (
+                    <span className="block text-xs text-on-surface-variant truncate">{r.region}</span>
+                  ) : null}
+                </span>
               </button>
             </li>
           ))}

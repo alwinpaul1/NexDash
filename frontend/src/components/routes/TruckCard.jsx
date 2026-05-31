@@ -21,15 +21,19 @@ export default function TruckCard() {
   const [showSpecs, setShowSpecs] = useState(false);
 
   return (
-    <div className="relative rounded-2xl border border-outline-variant/50 bg-surface-low/40 p-4">
-      <img
-        src="/eactros-600.png"
-        alt="Mercedes-Benz eActros 600"
-        className="w-full h-40 object-contain"
-      />
+    <div className="relative rounded-2xl border border-outline-variant/50 bg-surface-lowest p-4">
+      {/* Framed render box — truck blended onto a soft panel (matches the brief). */}
+      <div className="rounded-xl bg-surface-low/50 border border-outline-variant/40 overflow-hidden p-2">
+        <img
+          src="/eactros-600.png"
+          alt="Mercedes-Benz eActros 600"
+          className="w-full h-44 object-contain"
+          style={{ mixBlendMode: "multiply" }}
+        />
+      </div>
 
       <div className="mt-3 flex items-center justify-between">
-        <h3 className="font-headline font-bold text-lg text-on-surface">eActros 600</h3>
+        <h3 className="font-headline font-bold text-xl text-on-surface">eActros 600</h3>
         <button
           type="button"
           onClick={() => setShowSpecs((s) => !s)}

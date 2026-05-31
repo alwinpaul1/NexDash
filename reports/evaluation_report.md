@@ -1,6 +1,6 @@
 # NexDash Energy Model -- Evaluation Report
 
-_Generated 2026-05-29 22:57:50 by `run_pipeline.py` (seed = 42, deterministic)._
+_Generated 2026-05-31 01:18:10 by `run_pipeline.py` (seed = 42, deterministic)._
 
 This report evaluates the energy-consumption model for the
 **Mercedes-Benz eActros 600** (~600 kWh usable battery, ~500 km
@@ -30,24 +30,24 @@ all learnable structure comes from the physics.
 | distance_km | 1.00 | 60.06 | 350.00 | 42.33 |
 | payload_t | 0.00 | 11.08 | 21.99 | 6.37 |
 | speed_kph | 30.00 | 71.52 | 85.00 | 10.49 |
-| gradient_pct | -6.00 | 0.02 | 6.00 | 2.22 |
+| gradient_pct | -6.00 | 0.01 | 6.00 | 1.34 |
 | temperature_c | -15.00 | 12.08 | 40.00 | 10.90 |
-| wind_mps | 0.01 | 3.94 | 12.00 | 2.67 |
-| energy_kwh | 0.05 | 103.63 | 1268.15 | 134.44 |
+| wind_mps | -12.00 | -0.04 | 12.00 | 3.37 |
+| energy_kwh | 0.05 | 72.58 | 518.93 | 59.08 |
 
 ## 2. Headline performance (held-out test set)
 
 Computed by `nexdash.evaluate.evaluate` on the 1,200 held-out
 segments the model never saw during training.
 
-- **MAE:** **8.070 kWh**
-- **RMSE:** 16.543 kWh
-- **MAPE:** 13.05 %
-- **R^2:** 0.9854
-- **% range error:** **1.416 %** -- MAE expressed against a
+- **MAE:** **5.368 kWh**
+- **RMSE:** 9.048 kWh
+- **MAPE:** 9.48 %
+- **R^2:** 0.9755
+- **% range error:** **0.942 %** -- MAE expressed against a
   nominal full-trip energy of 600 kWh (the energy spent
   across the truck's ~500 km real-world range, i.e. the usable battery). A
-  8.07 kWh average miss is therefore a 1.42%
+  5.37 kWh average miss is therefore a 0.94%
   slice of a full charge -- comfortably inside a typical 10% reserve.
 
 ## 3. Model vs. linear baseline
@@ -59,10 +59,10 @@ to quantify the value of the non-linear model over a transparent reference.
 
 | Metric | HistGradientBoosting (primary) | LinearRegression (baseline) |
 | --- | --- | --- |
-| MAE (kWh) | 7.683 | 39.139 |
-| RMSE (kWh) | 14.961 | 62.690 |
-| MAPE (%) | 11.91 | 172.51 |
-| R^2 | 0.9856 | 0.7468 |
+| MAE (kWh) | 5.476 | 16.192 |
+| RMSE (kWh) | 9.112 | 24.049 |
+| MAPE (%) | 15.73 | 67.53 |
+| R^2 | 0.9720 | 0.8047 |
 
 ## 4. Failure-mode analysis
 
@@ -74,25 +74,25 @@ become large relative ones.
 
 | Temperature bin | MAE (kWh) | MAPE (%) | n |
 | --- | --- | --- | --- |
-| cold (<0C) | 6.729 | 12.13 | 166 |
-| mild (0-30C) | 8.314 | 13.39 | 979 |
-| hot (>30C) | 7.776 | 9.89 | 55 |
+| cold (<0C) | 4.898 | 9.88 | 166 |
+| mild (0-30C) | 5.492 | 9.51 | 979 |
+| hot (>30C) | 4.572 | 7.62 | 55 |
 
 ### By gradient
 
 | Gradient bin | MAE (kWh) | MAPE (%) | n |
 | --- | --- | --- | --- |
-| steep_down (<-4%) | 5.498 | 344.32 | 48 |
-| flat (-4..+4%) | 7.302 | 12.88 | 1113 |
-| steep_up (>+4%) | 33.164 | 9.01 | 39 |
+| steep_down (<-4%) | 1.577 | n/a | 10 |
+| flat (-4..+4%) | 5.317 | 9.40 | 1174 |
+| steep_up (>+4%) | 11.443 | 14.84 | 16 |
 
 ### By payload
 
 | Payload bin | MAE (kWh) | MAPE (%) | n |
 | --- | --- | --- | --- |
-| light (<7t) | 6.723 | 11.58 | 390 |
-| mid (7-15t) | 7.835 | 14.01 | 432 |
-| heavy (>15t) | 9.729 | 13.59 | 378 |
+| light (<7t) | 4.548 | 9.09 | 390 |
+| mid (7-15t) | 4.935 | 8.85 | 432 |
+| heavy (>15t) | 6.709 | 10.62 | 378 |
 
 ## 5. Diagnostic figures
 
@@ -110,12 +110,12 @@ become large relative ones.
 
 ## 6. Where it breaks, and why
 
-The model's average error is small, but it is **not uniform** across the operating envelope (overall MAPE ~ 13.05%). The failure-mode tables above expose where it degrades and the physics behind each weak spot.
+The model's average error is small, but it is **not uniform** across the operating envelope (overall MAPE ~ 9.48%). The failure-mode tables above expose where it degrades and the physics behind each weak spot.
 
-- **Temperature.** The `mild (0-30C)` slice is the weakest by MAPE (13.39%). Auxiliary/HVAC draw rises steeply at both temperature extremes and is spread over travel time rather than distance, so short, slow segments in cold or hot weather have an outsized, harder-to-predict auxiliary share.
+- **Temperature.** The `mild (0-30C)` slice carries the largest absolute error (MAE 5.49 kWh; MAPE 9.51%). Auxiliary/HVAC draw rises at both temperature extremes and is spread over travel time rather than distance, so short, slow segments in cold or hot weather have an outsized, harder-to-predict auxiliary share.
 
-- **Gradient.** The `steep_down (<-4%)` slice carries the largest relative error (344.32%). Steep downhill segments depend on regenerative recovery, which is capped by `regen_eff` and behaves non-linearly; net energy there can approach zero, so even a small absolute miss becomes a large *percentage* miss.
+- **Gradient (the safety-critical one).** Ranked by absolute energy, the `steep_up (>+4%)` slice is the weakest (MAE 11.44 kWh). Steep *climbs* convert payload mass into potential energy fastest, so any miss there is a large *absolute* kWh miss — exactly the regime that strands a truck. Note the downhill slice can show a huge *percentage* error, but its absolute error is tiny (regen drives net energy near zero, so the denominator collapses); that is loud in MAPE yet operationally harmless, which is why we headline MAE, not MAPE.
 
-- **Payload.** The `mid (7-15t)` slice shows the highest MAPE (14.01%). Payload scales rolling resistance and gradient potential energy linearly; empty/very-light runs have tiny denominators, inflating percentage error even when absolute error stays low.
+- **Payload.** The `heavy (>15t)` slice shows the highest absolute error (MAE 6.71 kWh; MAPE 10.62%). Payload scales rolling resistance and gradient potential energy linearly, so heavy loads both consume the most energy and leave the most room to be wrong about it in absolute terms.
 
-Two structural caveats apply. First, labels carry multiplicative (~6%) plus additive sensor noise, which sets a hard floor on achievable accuracy -- the model cannot beat the noise it was trained on. Second, features are sampled independently, so rare *combinations* (e.g. heavy payload + steep climb + extreme cold simultaneously) are under-represented and should be treated as lower-confidence extrapolations until real telematics data is available.
+Two structural caveats apply, and both are limits of the *synthetic data*, not just the model. First, labels carry multiplicative (~6%) plus additive sensor noise, which sets a hard floor on achievable accuracy -- the model cannot beat the noise it was trained on. Second, features are sampled from independent marginals except for a deliberate gradient/distance coupling (long legs cannot sustain steep grades); rare *combinations* of the remaining features (e.g. heavy payload + steep climb + extreme cold at once) are still under-represented and should be treated as lower-confidence extrapolations until real telematics data is available.

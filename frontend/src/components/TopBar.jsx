@@ -7,7 +7,7 @@ export default function TopBar() {
 
       <div className="hidden sm:block">
         <h1 className="font-headline font-bold text-xl text-on-surface">Dispatcher Console</h1>
-        <p className="text-xs text-on-surface-variant -mt-0.5">EV Truck Range Intelligence · Germany Network</p>
+        <p className="text-xs text-on-surface-variant -mt-0.5">EV Truck Range Intelligence</p>
       </div>
     </header>
   );

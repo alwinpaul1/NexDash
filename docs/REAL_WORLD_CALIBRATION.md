@@ -29,10 +29,30 @@ mixed long-haul envelope, not laboratory WLTP conditions.
 | `kerb_mass_kg` | 18000.0 | **18000.0** (keep, re-documented) | This is the **loaded-rig baseline** (tractor + empty semitrailer), NOT the bare tractor. The bare 4×2 tractor kerb mass is ~11.7 t (hylane: 11,546 kg chassis+cab). 18 t base + 22 t payload = 40 t GCW, the reference combination weight for the official 500 km range and all field tests. Keeping 18 t makes "payload_t = 0" mean "empty trailer attached" (~18 t) and "payload_t = 22" mean a fully loaded 40 t rig — the correct operating span. [S3] |
 | `frontal_area_m2` | 10.0 | **10.0** (keep) | Not published by Daimler. 10 m² is the standard literature value for a European tractor-semitrailer frontal area (cab width ~2.48 m × height ~3.9 m gives ~9–10 m² effective). Defensible class value. [S3][S8] |
 | `cd` | 0.55 | **0.55** (keep) | No absolute Cd is published; Daimler states only the new ProCabin lowers the cW value **9% vs the current series Actros** (front extended +80 mm, wheel infills, no MirrorCam) for a ~2–3% efficiency gain. 0.55 is a standard literature drag coefficient for a modern aero tractor-trailer and is consistent with the relative-improvement claim. [S1][S6] |
-| `crr` | 0.006 | **0.0055** | Not published. Long-haul truck tyres on good asphalt sit ~0.005–0.007; the eActros uses low-rolling-resistance 315/70 R22.5 drive / 385/55 R22.5 steer tyres. 0.0055 is a defensible mid value that, combined with the Cd/area above, reproduces the real-world consumption band (see §3). [S2][S8] |
+| `crr` | 0.006 | **0.0055** (BASE value) | Not published. Long-haul truck tyres on good asphalt sit ~0.005–0.007; the eActros uses low-rolling-resistance 315/70 R22.5 drive / 385/55 R22.5 steer tyres. 0.0055 is a defensible mid value that, combined with the Cd/area above, reproduces the real-world consumption band (see §3). **This is now a BASE coefficient**: `physics.py` multiplies it by a speed factor `f_speed` and a temperature factor `f_temp` (`Crr_eff = Crr0 · f_speed · f_temp`), both normalised to 1.0 at the 80 km/h / 20 °C reference so this anchor is unchanged. See "New physics-module constants" below and §3. [S2][S8] |
 | `drivetrain_eff` | 0.87 | **0.85** | Not published. 0.85 is a standard battery-to-wheel efficiency for an 800 V e-axle drivetrain (motor + inverter + 4-speed gearbox) under steady cruise; slightly lower than 0.87 to better hit the measured ~1.1–1.3 kWh/km band. [S1] |
-| `regen_eff` | 0.60 | **0.60** (keep) | Well-supported. eActros regen is 400 kW continuous / 600 kW peak with 5 recuperation levels. Field evidence: ~10% of battery recovered on the Drackensteiner Hang descent; up to ~25% of total energy recovered on favourable stages; capture efficiency ~60–70% of a braking event; ~51% on a steady 6% downhill in a comparable BEV-truck study. 0.60 is a sound central value. [S4][S5][S11] |
+| `regen_eff` | 0.60 | **0.60** (BASE value) | Well-supported. eActros regen is 400 kW continuous / 600 kW peak with 5 recuperation levels. Field evidence: ~10% of battery recovered on the Drackensteiner Hang descent; up to ~25% of total energy recovered on favourable stages; capture efficiency ~60–70% of a braking event; ~51% on a steady 6% downhill in a comparable BEV-truck study. 0.60 is a sound central value. **This is now a BASE fraction**: on descents `physics.py` tapers it by a temperature factor `g_temp` and a grade factor `g_grade` (`regen_eff_eff = 0.60 · g_temp · g_grade`); mild descents in mild weather keep the full 0.60. See "New physics-module constants" below and §3. [S4][S5][S11] |
 | `aux_base_kw` | 2.0 | **2.0** (keep) | Steady electronics/aux floor on top of the U-shaped HVAC term. EV base loads sit ~1–2 kW; the variable HVAC load is layered above this (see §3). [S10][S12] |
+
+### New physics-module constants (temperature / speed / grade channels)
+
+The four "honest limitations" formerly absorbed into the aero term and the noise
+envelope are now **explicit, first-principles physics channels** in
+`src/nexdash/physics.py`. The constants that drive them:
+
+| Constant | Value | Drives | Basis / source |
+|---|---|---|---|
+| `P_SEA_LEVEL_PA` | **101325** Pa | Air density via ideal gas law | ISO 2533 International Standard Atmosphere (sea-level pressure). [S14] |
+| `R_SPECIFIC_DRY_AIR` | **287.05** J/kg/K | Air density via ideal gas law | Specific gas constant for dry air; `rho(T) = P_SEA_LEVEL_PA / (R_SPECIFIC_DRY_AIR · (T_C + 273.15))`. `rho(15 °C) = 1.225` exactly — the **pivot**, continuous with the old constant. [S14] |
+| CRR speed slope | **0.0015** /km/h | `f_speed = max(1 + 0.0015·(speed_kph − 80), 0.90)` | Modest speed-dependent rolling-resistance rise, normalised to 1.0 at the 80 km/h reference. SAE J2452. [S15] |
+| CRR cold slope | **0.004** /°C | `f_temp = 1 + 0.004·(20 − T_C)` for T < 20 °C, else 1.0 | Cold-side tyre stiffening only (~+0.4%/°C), normalised to 1.0 at the 20 °C reference. Deliberately conservative (literature is 0.6–0.9%/°C). [S15] |
+| regen temp floor `g_temp` | **0.45** at −15 °C | Cold-BMS charge-acceptance taper: `g_temp` = 1.0 at/above +10 °C, linear down to 0.45 at −15 °C | Reasoned engineering bound (cold lithium charge-acceptance limit), Battery University BU-410. **Not** an eActros-specific measurement — Daimler publishes no regen-vs-temperature curve. [S16] |
+| regen grade floor `g_grade` | **0.55** at −10% | Regen-power-cap taper: `g_grade` = 1.0 up to −5% descent, linear down to 0.55 at −10% | Reasoned engineering bound (steep descents exceed the regen power cap → friction braking). **Not** eActros-measured. [S16] |
+
+Both Crr factors and both regen factors equal **1.0 at their reference points**
+(80 km/h, 20 °C, descents ≤ −5%, T ≥ +10 °C), so the §1 calibration anchors are
+left untouched; the channels only bend consumption away from the warm, moderate
+reference.
 
 ---
 
@@ -53,22 +73,35 @@ mixed long-haul envelope, not laboratory WLTP conditions.
 
 ### Target baseline consumption band
 The recalibrated generator should reproduce, for a **40 t combination on the
-flat at 80–85 km/h, 20 °C, no wind**, a battery-side consumption of
-**~1.25–1.35 kWh/km** (the pure-physics, no-route-regen figure). On *real
-mixed routes* (which include descents that feed regen) this averages down toward
-the field-measured **~0.95–1.05 kWh/km**:
+flat at 80 km/h, 20 °C, no wind**, a battery-side warm anchor of
+**~1.265 kWh/km** (the pure-physics, no-route-regen figure, referenced at
+`rho(20 °C) = 1.204`), rising to **~1.55 kWh/km at −10 °C** on the same segment
+once the temperature-dependent air-density and cold-tyre channels engage (15 °C
+is the pivot at the old 1.225 density). On *real mixed routes* (which include
+descents that feed regen) the warm figure averages down toward the
+field-measured **~0.95–1.05 kWh/km**:
 
 - ADAC fully-loaded 40 t, ~350 km Munich–Wörth at ≤85 km/h: **~0.88 kWh/km**. [S4]
 - Daimler 15,000+ km European tour (40 t, 22 countries, 20 °C ref): **~1.03 kWh/km** average, envelope **0.85** (downhill) to **1.40** (cold + unpaved). [S5]
 - Vandijck 1,530 km long-haul: **0.963 kWh/km**; aero-kit truck **0.934 kWh/km**. [S7]
 - WLTP declared: **1.19 kWh/km**; spec-implied (600 kWh / 500 km): **~1.20 kWh/km**. [S2]
 
-With the §1 values (`crr=0.0055, cd=0.55, A=10, dt=0.85`) the model yields
-**1.29 kWh/km** at 40 t / 80 km/h flat and **1.35 kWh/km** at 85 km/h — squarely
-in the WLTP/spec-implied band. Empty-rig (18 t) flat at 80 km/h falls to
-**~0.90 kWh/km**; mid-load (29 t) to **~1.09 kWh/km**. The empty→full span
-(~0.90 → ~1.29) is ~+43% gross, consistent with the +0.6–0.8% per tonne field
-sensitivity over a 22 t payload swing. [S8][S5]
+With the §1 values (`crr=0.0055, cd=0.55, A=10, dt=0.85`) and the now
+temperature-dependent air density, the model yields a **warm anchor of
+~1.265 kWh/km** at 40 t / 80 km/h flat / **20 °C** — referenced at
+`rho(20 °C) = 1.204` (the old constant 1.225 lowered the warm aero share, so the
+anchor moved down ~0.025 kWh/km from the previous ~1.29). **15 °C remains the
+pivot**: `rho(15 °C) = 1.225` exactly, continuous with the old constant, so the
+calibration is unchanged at the reference temperature. The same 40 t / 80 km/h
+flat segment **in the cold rises to ~1.55 kWh/km at −10 °C** (denser air +
+cold-tyre stiffening), a ~+22% winter swing on this physics-only segment and the
+explicit-channel counterpart of the field-observed +25% winter penalty. Both
+figures sit inside the WLTP/spec-implied band at the warm end and the field
+"cold + unpaved" envelope (up to 1.40 measured, higher on the steady-state
+physics-only run) at the cold end. Empty-rig (18 t) flat at 80 km/h / 20 °C
+falls to **~0.90 kWh/km**; mid-load (29 t) to **~1.09 kWh/km**. The empty→full
+span (~0.90 → ~1.265) is ~+40% gross, consistent with the +0.6–0.8% per tonne
+field sensitivity over a 22 t payload swing. [S8][S5]
 
 ### HVAC / auxiliary load vs temperature (U-shape)
 Aux power = `aux_base_kw` (flat comfort band) + a linear rise on each side.
@@ -92,17 +125,39 @@ literature). [S6][S10][S12]
 > Note: the *full* winter penalty (+25%) is not from HVAC alone — denser cold
 > air + winter tyres (~15%), reduced regen (~4%) and battery heating (<1%) make
 > up the rest. The temperature-driven aux term captures only the cabin/aux
-> share (~5%); the air-density and tyre effects are implicitly folded into the
-> physics aero/roll terms and the noise envelope.
+> share (~5%). The denser-cold-air, cold-tyre and reduced-regen shares are now
+> **explicit physics channels** (`rho(T)` in the aero term, `f_temp`/`f_speed`
+> in the roll term, `g_temp`/`g_grade` in the regen term — see §1 "New
+> physics-module constants"), **not** quantities folded into the aero term or
+> the noise envelope.
+>
+> ⚠️ **CRITICAL — calibration / noise owner, read this.** Because the winter
+> drag (denser cold air), cold-tyre stiffening and reduced cold/steep regen are
+> now modelled **explicitly**, the noise envelope (`noise_frac` and the additive
+> sensor term in `data_gen.py`) **must NOT also carry any temperature-,
+> speed- or grade-correlated winter share.** If the cold-weather penalty is
+> baked into both the explicit physics channels *and* the noise envelope, the
+> winter penalty is **double-counted** and consumption at −10 °C will overshoot.
+> The noise term must stay **unstructured** (mean-zero, uncorrelated with the
+> features). This is the single biggest integration risk in this upgrade —
+> verify it before regenerating the dataset.
 
 ### Regen recovery fraction
-Use **regen_eff = 0.60**: on a descent, the model recovers 60% of the downhill
-potential energy, then scales by drivetrain efficiency on the recovery path
-(round-trip loss). A climb-then-descend on the same grade does **not** cancel —
-net consumption stays positive because only ~50–70% of potential energy is
-recaptured. This reproduces Daimler's "~25% of total energy recovered on
+Use **regen_eff = 0.60 as the BASE fraction**: on a descent, the model recovers
+0.60 of the downhill potential energy, then scales by drivetrain efficiency on
+the recovery path (round-trip loss). The 0.60 base is now **tapered by two
+factors** so it only applies in full under mild, moderate conditions:
+`regen_eff_eff = 0.60 · g_temp · g_grade`, where `g_temp` falls from 1.0 at/above
++10 °C to a floor of **0.45 at −15 °C** (cold-BMS charge-acceptance limit) and
+`g_grade` falls from 1.0 up to a −5% descent to a floor of **0.55 at −10%**
+(steep descents exceed the regen power cap, so the surplus goes to friction
+braking). A mild descent in mild weather keeps the full 0.60. A climb-then-
+descend on the same grade still does **not** cancel — net consumption stays
+positive because only ~50–70% of potential energy is recaptured, less when cold
+or steep. This reproduces Daimler's "~25% of total energy recovered on
 favourable stages" and the ~51% steady-6%-downhill capture seen in comparable
-BEV trucks. [S4][S5][S11]
+BEV trucks. The 0.45/0.55 floors are reasoned engineering bounds (BU-410 /
+industry sources), **not** eActros-specific measurements. [S4][S5][S11][S16]
 
 ### Speed / aero
 Aerodynamic drag dominates at Autobahn speed (30–50%+ of tractive energy above
@@ -131,3 +186,6 @@ driveable German window. [S6][S8]
 - **[S12]** From real operations: e-truck consumption values 2024 (Designwerk) — https://www.designwerk.com/en/post/e-truck/from-real-operation-consumption-values-of-electric-trucks-in-special-applications/ ; Clean Energy Wire — German wind 2023 — https://www.cleanenergywire.org/news/windiest-year-over-decade-enabled-germanys-2023-renewables-success-weather-service
 - **[S13]** Driving time and rest periods (EU Regulation 561/2006, EUR-Lex) — https://eur-lex.europa.eu/EN/legal-content/summary/driving-time-and-rest-periods-in-the-road-transport-sector.html ; Milence Fact Sheet (charging hubs) — https://milence.com/app/uploads/2026/04/Milence-Fact-Sheet_General-EN.pdf
 - **[S3-de]** Speed limits in Germany (Wikipedia) — https://en.wikipedia.org/wiki/Speed_limits_in_Germany ; Autobahn (Wikipedia) — https://en.wikipedia.org/wiki/Autobahn ; Germany Relief (Britannica) — https://www.britannica.com/place/Germany/Relief
+- **[S14]** ISO 2533:1975 Standard Atmosphere (International Standard Atmosphere; sea-level pressure 101325 Pa, dry-air specific gas constant R = 287.05 J/kg/K) — https://www.iso.org/standard/7472.html ; Density of air (Wikipedia, ideal-gas formulation) — https://en.wikipedia.org/wiki/Density_of_air
+- **[S15]** SAE J2452 — Stepwise Coastdown Methodology for Measuring Tire Rolling Resistance (speed- and load-dependence of Crr) — https://www.sae.org/standards/content/j2452_201707/ ; rolling-resistance temperature sensitivity discussion — https://www.tut.fi (heavy-truck tyre literature)
+- **[S16]** Battery University BU-410: Charging at High and Low Temperatures (cold lithium charge-acceptance limits) — https://batteryuniversity.com/article/bu-410-charging-at-high-and-low-temperatures ; reasoned regen power-cap bounds (industry sources). Note: Daimler publishes no eActros regen-vs-temperature or regen-vs-grade curve, so the 0.45 / 0.55 floors are defensible engineering estimates, not primary measurements.

@@ -12,19 +12,25 @@ For a constant-speed segment of length ``d`` (m) at speed ``v`` (m/s) the
 energy delivered at the wheels is the sum of four resistive contributions,
 each integrated over the distance:
 
-* **Rolling resistance** — ``F_roll = Crr * m * g`` so the energy is
-  ``E_roll = Crr * m * g * d``. Independent of speed (a standard
-  first-order approximation for truck tyres).
-* **Aerodynamic drag** — ``F_aero = 0.5 * rho * Cd * A * v_air^2`` where the
+* **Rolling resistance** — ``F_roll = Crr(v, T) * m * g`` so the energy is
+  ``E_roll = Crr(v, T) * m * g * d``. ``Crr`` is no longer constant: it rises
+  modestly with speed (SAE J2452) and on the cold side of ~20 C (tyre pressure
+  loss + rubber stiffening), both normalised to 1.0 at the 80 km/h / 20 C
+  reference (see :func:`_crr_factor`).
+* **Aerodynamic drag** — ``F_aero = 0.5 * rho(T) * Cd * A * v_air^2`` where the
   air speed ``v_air = v + wind`` is the headwind-relative speed (a positive
-  ``wind_mps`` is modelled as an opposing headwind, the conservative case).
-  Energy: ``E_aero = 0.5 * rho * Cd * A * v_air^2 * d``.
+  ``wind_mps`` is an opposing headwind, a negative one a tailwind) and the air
+  density ``rho(T)`` now follows the ideal gas law — denser (more drag) in the
+  cold, lighter when hot, with ``rho(15 C) = 1.225`` as the pivot (see
+  :func:`_air_density`). Energy: ``E_aero = 0.5 * rho(T) * Cd * A * v_air^2 * d``.
 * **Gradient / potential energy** — ``F_grade = m * g * sin(theta)`` with
-  ``theta = atan(grade_pct / 100)``. On climbs this adds energy; on descents
-  it is negative and a fraction ``regen_eff`` of that downhill potential
-  energy is recovered through regenerative braking (the rest is lost to
-  friction/heat). Energy: ``E_grade = m * g * sin(theta) * d`` for climbs,
-  and ``regen_eff * m * g * sin(theta) * d`` (a negative number) for descents.
+  ``theta = atan(grade_pct / 100)``. On climbs this adds energy; on descents it
+  is negative and a fraction of that downhill potential energy is recovered
+  through regenerative braking. That fraction is no longer fixed at
+  ``regen_eff``: it tapers in the cold (BMS limits charge-acceptance) and on
+  very steep descents (braking power exceeds the regen cap, so friction brakes
+  dissipate the excess) — see :func:`_regen_fraction`. Mild descents in mild
+  weather keep the full baseline recovery.
 * **Auxiliary / HVAC** — a power draw ``P_aux`` (kW) sustained for the travel
   time ``t = d / v``. ``P_aux`` is U-shaped in ambient temperature: minimal in
   the ~18-22 C comfort band and rising at both cold extremes (battery
@@ -41,15 +47,23 @@ drivetrain-efficiency scaling, which approximates the round-trip loss on the
 recovery path.
 
 All energies are returned in **kWh** (Joules / 3.6e6). For a mid-load truck on
-flat ground at motorway speed this yields roughly 1.0-1.6 kWh/km, consistent
-with published eActros 600 real-world consumption figures.
+flat ground at motorway speed this yields roughly 1.0-1.6 kWh/km at mild
+temperatures, rising toward ~1.5 kWh/km in the cold (-10 C) as denser air and
+stiffer tyres bite — consistent with published eActros 600 real-world figures.
 """
 
 from __future__ import annotations
 
 import math
 
-from nexdash.config import AIR_DENSITY, G, TRUCK, Truck
+from nexdash.config import (
+    G,
+    P_SEA_LEVEL_PA,
+    R_SPECIFIC_DRY_AIR,
+    T_KELVIN_OFFSET,
+    TRUCK,
+    Truck,
+)
 
 __all__ = ["segment_energy_kwh", "energy_breakdown"]
 
@@ -74,6 +88,92 @@ _AUX_HOT_SLOPE_KW_PER_C: float = 0.13
 #: Half-width (C) of the comfort band around :data:`_COMFORT_TEMP_C` within
 #: which only the baseline auxiliary load applies (comfort band 20 +/- 3 C).
 _COMFORT_HALF_WIDTH_C: float = 3.0
+
+# --------------------------------------------------------------------------- #
+# Rolling-resistance speed/temperature dependence (Crr is not actually constant)
+# --------------------------------------------------------------------------- #
+#: Crr rises modestly with speed for long-haul tyres (SAE J2452); normalised to
+#: 1.0 at the reference speed so the calibration anchor (80 km/h) is unchanged.
+_CRR_SPEED_SLOPE_PER_KPH: float = 0.0015
+_CRR_SPEED_REF_KPH: float = 80.0
+#: Floor on the speed factor so very low speeds don't drive Crr implausibly low.
+_CRR_SPEED_FLOOR: float = 0.90
+#: Cold-side stiffening: tyres lose pressure and rubber stiffens below ~20 C,
+#: raising Crr ~0.4%/C (deliberately conservative; literature 0.6-0.9%/C from
+#: surface temp conflates self-heating). Warm side is flat (clamped to 1.0).
+_CRR_TEMP_SLOPE_PER_C: float = 0.004
+_CRR_TEMP_REF_C: float = 20.0
+
+# --------------------------------------------------------------------------- #
+# Regen taper: cold batteries accept less charge; steep descents exceed the
+# regen power cap so friction braking dissipates the excess.
+# --------------------------------------------------------------------------- #
+_REGEN_T_FULL_C: float = 10.0  # full regen at/above this temperature
+_REGEN_T_COLD_C: float = -15.0  # regen floor reached at/below this temperature
+_REGEN_TEMP_FLOOR: float = 0.45  # cold multiplier floor on regen_base
+_REGEN_GRADE_KNEE_PCT: float = 5.0  # |descent| beyond which recovery tapers
+_REGEN_GRADE_MAX_PCT: float = 10.0  # |descent| at which the grade floor is hit
+_REGEN_GRADE_FLOOR: float = 0.55  # steep-descent multiplier floor on regen_base
+
+
+def _air_density(temperature_c: float) -> float:
+    """Air density (kg/m^3) from the ideal gas law ``P / (R * T_kelvin)``.
+
+    Colder air is denser, so winter segments carry more aerodynamic drag. By
+    construction ``_air_density(15) == 1.225`` (the ISA sea-level reference), so
+    this is continuous with the previous constant. Sea-level pressure is assumed
+    (no altitude term — see the module's residual-limitations note).
+    """
+    return P_SEA_LEVEL_PA / (R_SPECIFIC_DRY_AIR * (temperature_c + T_KELVIN_OFFSET))
+
+
+def _crr_factor(speed_kph: float, temperature_c: float, truck: Truck) -> float:
+    """Effective rolling-resistance coefficient.
+
+    Base ``truck.crr`` scaled by a modest speed rise (SAE J2452) and a cold-side
+    stiffening ramp. Both factors are 1.0 at the reference (80 km/h, >= 20 C), so
+    the flat-motorway calibration anchor is unchanged.
+    """
+    f_speed = max(
+        1.0 + _CRR_SPEED_SLOPE_PER_KPH * (speed_kph - _CRR_SPEED_REF_KPH),
+        _CRR_SPEED_FLOOR,
+    )
+    f_temp = (
+        1.0 + _CRR_TEMP_SLOPE_PER_C * (_CRR_TEMP_REF_C - temperature_c)
+        if temperature_c < _CRR_TEMP_REF_C
+        else 1.0
+    )
+    return truck.crr * f_speed * f_temp
+
+
+def _regen_fraction(temperature_c: float, gradient_pct: float, truck: Truck) -> float:
+    """Effective fraction of downhill potential energy recovered on a descent.
+
+    ``truck.regen_eff`` tapered by two physical limits: cold battery
+    charge-acceptance (BMS caps regen current in the cold) and very steep
+    descents whose braking power exceeds the motor/regen cap (friction brakes
+    dissipate the excess). Mild descents in mild weather keep the full baseline.
+    """
+    # Temperature ramp: full at/above T_full, linear down to the floor at T_cold.
+    if temperature_c >= _REGEN_T_FULL_C:
+        g_temp = 1.0
+    elif temperature_c <= _REGEN_T_COLD_C:
+        g_temp = _REGEN_TEMP_FLOOR
+    else:
+        frac = (temperature_c - _REGEN_T_COLD_C) / (_REGEN_T_FULL_C - _REGEN_T_COLD_C)
+        g_temp = _REGEN_TEMP_FLOOR + (1.0 - _REGEN_TEMP_FLOOR) * frac
+
+    # Grade ramp: full up to the knee, linear down to the floor at the max grade.
+    steep = abs(gradient_pct)
+    if steep <= _REGEN_GRADE_KNEE_PCT:
+        g_grade = 1.0
+    elif steep >= _REGEN_GRADE_MAX_PCT:
+        g_grade = _REGEN_GRADE_FLOOR
+    else:
+        frac = (steep - _REGEN_GRADE_KNEE_PCT) / (_REGEN_GRADE_MAX_PCT - _REGEN_GRADE_KNEE_PCT)
+        g_grade = 1.0 - (1.0 - _REGEN_GRADE_FLOOR) * frac
+
+    return truck.regen_eff * g_temp * g_grade
 
 
 def _auxiliary_power_kw(temperature_c: float, truck: Truck) -> float:
@@ -161,10 +261,11 @@ def energy_breakdown(
     travel_time_h = distance_km / speed_kph  # hours, for kW * h -> kWh
 
     # --- Wheel-side traction forces and energies (Joules) ----------------- #
-    f_rolling = truck.crr * mass_kg * G
+    f_rolling = _crr_factor(speed_kph, temperature_c, truck) * mass_kg * G
     e_rolling_j = f_rolling * distance_m
 
-    f_aero = 0.5 * AIR_DENSITY * truck.cd * truck.frontal_area_m2 * air_speed_mps**2
+    rho_air = _air_density(temperature_c)  # denser in the cold -> more drag
+    f_aero = 0.5 * rho_air * truck.cd * truck.frontal_area_m2 * air_speed_mps**2
     e_aero_j = f_aero * distance_m
 
     theta = math.atan(gradient_pct / 100.0)
@@ -180,9 +281,10 @@ def energy_breakdown(
         gradient_kwh = (e_grade_j / _J_PER_KWH) / truck.drivetrain_eff
         regen_kwh = 0.0
     else:
-        # Descending: only a fraction is recovered, then scaled by drivetrain
-        # efficiency to approximate the round-trip recovery loss.
-        recovered_j = -e_grade_j * truck.regen_eff
+        # Descending: only a fraction is recovered (tapered by cold battery and
+        # steep-grade power limits), then scaled by drivetrain efficiency to
+        # approximate the round-trip recovery loss.
+        recovered_j = -e_grade_j * _regen_fraction(temperature_c, gradient_pct, truck)
         regen_kwh = (recovered_j / _J_PER_KWH) * truck.drivetrain_eff
         gradient_kwh = -regen_kwh  # net battery credit (negative energy)
 

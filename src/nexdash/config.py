@@ -64,8 +64,18 @@ TRUCK = Truck()
 # Physical constants
 # --------------------------------------------------------------------------- #
 
-#: Air density at sea level / mild conditions (kg/m^3).
+#: ISA sea-level air density at 15 C (kg/m^3). Retained as the reference / pivot:
+#: the temperature-dependent :func:`nexdash.physics._air_density` reproduces this
+#: exactly at 15 C, so the upgraded model stays continuous with the old constant.
 AIR_DENSITY: float = 1.225
+
+#: Standard sea-level pressure (Pa) and specific gas constant of dry air
+#: (J/kg/K), used to compute temperature-dependent air density from the ideal
+#: gas law ``rho = P / (R * T_kelvin)``. [ISO 2533 International Standard
+#: Atmosphere; R_specific = R_universal / M_dry_air = 287.05.]
+P_SEA_LEVEL_PA: float = 101325.0
+R_SPECIFIC_DRY_AIR: float = 287.05
+T_KELVIN_OFFSET: float = 273.15
 
 #: Standard gravitational acceleration (m/s^2).
 G: float = 9.81

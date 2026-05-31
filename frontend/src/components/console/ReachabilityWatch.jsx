@@ -160,7 +160,7 @@ export default function ReachabilityWatch() {
   const atRiskCount = trucks.filter((t) => t.atRisk).length;
 
   return (
-    <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm overflow-hidden flex flex-col">
+    <div className="h-[640px] bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm overflow-hidden flex flex-col">
       <div className="flex items-center justify-between px-5 pt-5 pb-3">
         <div>
           <h2 className="font-headline font-semibold text-lg text-on-surface">Reachability Watch</h2>
@@ -183,7 +183,7 @@ export default function ReachabilityWatch() {
         ) : null}
       </div>
 
-      <div className="flex-1 overflow-y-auto max-h-[26rem]">
+      <div className="flex-1 overflow-y-auto">
         {loading ? (
           <div className="px-4 py-3 space-y-3">
             {[0, 1, 2, 3].map((i) => (

@@ -2,6 +2,7 @@
 // driver-hours bars + EU561 badge, trip timeline, energy overview.
 import SocGauge from "./SocGauge.jsx";
 import TripTimeline from "./TripTimeline.jsx";
+import ChargingStopsList from "./ChargingStopsList.jsx";
 
 function InfoCard({ icon, value, label, tint = "#006d32" }) {
   return (
@@ -76,6 +77,28 @@ export default function RouteResults({ plan }) {
           <InfoCard icon="schedule" value={`${fmtH(s.totalTimeH)} h`} label="Total Time" />
           <InfoCard icon="bolt" value={`${Math.round(s.chargingTimeMin || 0)} min`} label="Charging Time" tint="#f59e0b" />
         </div>
+
+        {/* Live traffic — TomTom routes around closures/congestion (fastest +
+            traffic), so this delay is already baked into the ETA above. */}
+        {(() => {
+          const t = plan.traffic || {};
+          const delayMin = Math.round((t.delayS || 0) / 60);
+          const nInc = (t.incidents || []).length;
+          if (delayMin <= 0 && nInc === 0) return null;
+          return (
+            <div className="mt-3 flex items-center gap-2 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-900">
+              <span className="material-symbols-outlined" style={{ fontSize: "18px", color: "#d97706" }}>
+                traffic
+              </span>
+              <span>
+                <span className="font-semibold">Live traffic:</span>{" "}
+                {delayMin > 0 ? `+${delayMin} min delay` : "no significant delay"}
+                {nInc > 0 ? ` · ${nInc} incident${nInc > 1 ? "s" : ""} on route` : ""}
+                <span className="text-amber-700"> — already factored into ETA</span>
+              </span>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Driver hours */}
@@ -134,6 +157,9 @@ export default function RouteResults({ plan }) {
         <h3 className="text-[11px] uppercase tracking-wide font-medium text-on-surface-variant mb-3">Trip Timeline</h3>
         <TripTimeline segments={plan.segments} />
       </div>
+
+      {/* Charging stops — real TomTom stations: connectors, power, availability */}
+      <ChargingStopsList stops={plan.chargingStops} />
 
       {/* Energy overview */}
       <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm p-5">

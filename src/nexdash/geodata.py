@@ -90,6 +90,15 @@ def _haversine_km(a: tuple[float, float], b: tuple[float, float]) -> float:
     return 2 * r * math.asin(min(1.0, math.sqrt(h)))
 
 
+def _bearing_deg(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Initial compass bearing (deg, 0=N, clockwise) for travel from a to b."""
+    lat1, lat2 = math.radians(a[0]), math.radians(b[0])
+    dlon = math.radians(b[1] - a[1])
+    x = math.sin(dlon) * math.cos(lat2)
+    y = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
+    return (math.degrees(math.atan2(x, y)) + 360.0) % 360.0
+
+
 def _coerce_points(geometry) -> list[tuple[float, float]]:
     """Normalise a [[lat, lng], ...] polyline into clean (lat, lon) tuples.
 
@@ -403,9 +412,16 @@ def enrich_route(geometry, departure_iso=None) -> dict:
             if abs(grad) > abs(max_grad):
                 max_grad = grad
 
-            temp_i, wind_i, _ = nearest_weather(i)
+            temp_i, wind_speed_i, wind_dir_i = nearest_weather(i)
+            # Signed headwind for the MODEL. Open-Meteo wind_direction_10m is the
+            # WMO convention (compass bearing the wind blows FROM). Project it onto
+            # the segment's travel bearing so a head-on wind is a full +headwind
+            # and a following wind is a -tailwind:
+            #   headwind = speed * cos(fromDir - travelBearing)
+            travel_bearing = _bearing_deg(sampled[i - 1], sampled[i])
+            headwind_i = wind_speed_i * math.cos(math.radians(wind_dir_i - travel_bearing))
             temp_acc += temp_i * span_km
-            wind_acc += wind_i * span_km
+            wind_acc += wind_speed_i * span_km  # magnitude, for the display tile
             dist_acc += span_km
 
             segments.append({
@@ -414,7 +430,7 @@ def enrich_route(geometry, departure_iso=None) -> dict:
                 "gradientPct": round(grad, 3),
                 "elevM": round(float(elev[i]), 1),
                 "temperatureC": round(temp_i, 1),
-                "windMps": round(wind_i, 2),
+                "windMps": round(headwind_i, 2),  # signed headwind fed to the model
             })
             elevation_profile.append({"distKm": round(cum_km, 3), "elevM": round(float(elev[i]), 1)})
 

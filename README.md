@@ -10,8 +10,9 @@ NexDash is a small but complete AI-engineering system:
 2. A **synthetic dataset generator** built on that physics.
 3. A **machine-learning energy model** (gradient boosting, with a linear baseline for honest comparison).
 4. A **range-reachability service** wrapping the model with an operational reserve.
-5. An **LLM dispatcher agent** that answers natural-language questions using tools — also exposed over **MCP**.
-6. A **FastAPI + dashboard** front-end for live range checks.
+5. A **route planner** that enriches a trip with real Open-Meteo elevation, temperature and wind before predicting.
+6. An **LLM dispatcher agent** that answers natural-language questions using tools — exposed over a **CLI**, an **MCP** server, and an `/api/chat` endpoint.
+7. A **FastAPI backend** plus two front-ends: a static admin dashboard and a Vite + React console (route planner + a floating chat widget). The chat UI is a *bonus* per the brief; the CLI / MCP / `/api/chat` are the required Part-2 interface.
 
 ---
 
@@ -45,11 +46,21 @@ Everything below assumes step 3 has run (it creates the trained model the agent,
 python -m nexdash.cli --once "Can a truck at 62% SOC reach 240 km with 18 t in the cold?"
 python -m nexdash.cli                       # interactive REPL
 
-# Launch the dashboard (FastAPI on http://localhost:8000)
+# Launch the API + static admin dashboard (FastAPI on http://localhost:8000)
 python dashboard/server.py
 ```
 
 A `Makefile` wraps the common flows: `make setup`, `make data`, `make train`, `make test`, `make serve`, `make agent`.
+
+**Bonus React console.** The brief notes a chat UI is a plus. A Vite + React front-end (route planner + a floating chat widget) lives in `frontend/` and talks to the same FastAPI backend. With the backend running, start it separately:
+
+```bash
+cd frontend
+npm install
+npm run dev        # Vite dev server, proxies API calls to http://localhost:8000
+```
+
+The React console is optional — everything in Part 1/2 (model, evaluation, agent, CLI, MCP, `/api/chat`) works without it.
 
 ### API keys
 
@@ -97,21 +108,26 @@ NexDash/
 │   ├── model.py               # EnergyModel: HistGradientBoosting + LinearRegression baseline
 │   ├── evaluate.py            # Metrics, failure-mode slicing, matplotlib plots
 │   ├── range.py               # check_reachability: SOC → reach/no-reach + margin
+│   ├── geodata.py             # Open-Meteo elevation/temperature/wind enrichment (fails soft, cached)
+│   ├── route_planner.py       # Plans a trip end-to-end (geodata → segments → predictions)
+│   ├── fleet.py               # Sample fleet roster used by the dashboard /api/fleet view
 │   ├── tools.py               # Anthropic tool schemas + dispatch()
 │   ├── mcp_server.py          # FastMCP server exposing the same tools
 │   ├── agent.py               # DispatcherAgent: tool-use loop
 │   └── cli.py                 # REPL / --once front-end for the agent
-├── dashboard/
-│   ├── server.py              # FastAPI: GET / , POST /api/predict
-│   ├── index.html             # EV-green admin dashboard + live Range Check panel
-│   └── app.js                 # Fetch wiring for the Range Check panel
+├── dashboard/                 # Static admin dashboard served by FastAPI
+│   ├── server.py              # FastAPI: /api/predict, /api/route-plan, /api/fleet, /api/model-info, /api/chat, /api/health
+│   ├── index.html             # EV-green admin dashboard
+│   └── app.js                 # Fetch wiring for the dashboard panels
+├── frontend/                  # BONUS: Vite + React console (route planner + chat widget); calls the same FastAPI
 ├── data/                      # Generated dataset.csv lands here
 ├── models/                    # Trained energy_model.joblib lands here
 ├── reports/                   # evaluation_report.md + figures/ (generated)
 ├── docs/
 │   ├── DESIGN.md              # Physics + feature + modelling rationale
-│   └── LONG_TERM.md           # Retraining, versioning, drift strategy
-├── examples/                  # Runnable usage snippets (physics, prediction, range, agent)
+│   ├── LONG_TERM.md           # Retraining, versioning, drift strategy
+│   └── REAL_WORLD_CALIBRATION.md  # eActros 600 parameters tied to cited sources
+├── examples/                  # Example agent conversations (a reach case + a no-reach case)
 └── tests/                     # pytest suite (LLM/network mocked)
 ```
 
@@ -123,9 +139,9 @@ NexDash predicts **energy consumption (kWh) for a single driving segment** and u
 
 **Ground truth — physics.** `segment_energy_kwh(...)` sums the four classic loads, all divided by drivetrain efficiency:
 
-- **Rolling resistance** — `Crr · m · g · distance`, scaling with total mass (kerb + payload).
-- **Aerodynamic drag** — `½ · ρ · Cd · A · v² · distance`, using the effective air speed (`speed + headwind`); the dominant term at motorway pace.
-- **Gradient (potential energy)** — `m · g · Δh`; downhill segments recover `regen_eff` (60%) of the would-be energy via regenerative braking, which is why steep descents can net *negative* kWh.
+- **Rolling resistance** — `Crr · m · g · distance`, scaling with total mass (kerb + payload). `Crr` is a **base** coefficient bent by speed and temperature (`Crr_eff = Crr0 · f_speed · f_temp`): a modest rise above 80 km/h and cold-tyre stiffening below 20 °C, both normalised to 1.0 at the 80 km/h / 20 °C reference.
+- **Aerodynamic drag** — `½ · ρ(T) · Cd · A · v² · distance`, using the effective air speed (`speed + headwind`); the dominant term at motorway pace. Air density is **temperature-dependent** via the ideal gas law (`ρ(T) = 101325 / (287.05 · (T + 273.15))`), so cold air (`ρ(−10 °C) = 1.341`) costs more drag than warm (`ρ(35 °C) = 1.146`); `ρ(15 °C) = 1.225` is the pivot.
+- **Gradient (potential energy)** — `m · g · Δh`; downhill segments recover a **base** `regen_eff` (60%) of the would-be energy via regenerative braking, which is why steep descents can net *negative* kWh. The base is tapered on descents by temperature (`g_temp`, floor 0.45 at −15 °C: cold BMS charge-acceptance) and grade (`g_grade`, floor 0.55 at −10%: steep descents exceed the regen power cap and bleed to friction braking).
 - **Auxiliary / HVAC** — a base load plus a cabin-conditioning term that rises at **both** cold and hot extremes, scaled by travel time (`distance / speed`).
 
 `energy_breakdown(...)` returns each component separately for transparency.
@@ -142,28 +158,53 @@ Full rationale, formulas and assumptions: **[docs/DESIGN.md](docs/DESIGN.md)**.
 
 `run_pipeline.py` writes `reports/evaluation_report.md` with **real, regenerated numbers** plus figures. The values below are the **actual results** from the committed run (`n=6000`, `seed=42`, 4,800 train / 1,200 held-out test). The truck spec and synthetic operating envelope are now **calibrated to real Mercedes-Benz eActros 600 figures** (German long-haul ops) — see [`docs/REAL_WORLD_CALIBRATION.md`](docs/REAL_WORLD_CALIBRATION.md) for every cited assumption.
 
-**Held-out test set (gradient-boosting primary):** MAE **8.070 kWh**, RMSE 16.543 kWh, MAPE 13.05 %, R² 0.9854 — a range-error proxy of **1.416 %** of a nominal 500 km full-charge trip.
+**Held-out test set (gradient-boosting primary, n=1,200):** MAE **5.368 kWh**, RMSE 9.048 kWh, MAPE 9.48 %, R² 0.9755.
+
+The headline metric is the **MAE in kWh (5.37)** — that is the number a dispatcher should reason about per segment. We also report a *fleet-intuitive* proxy: 5.37 kWh is **0.94 %** of the eActros 600's ~600 kWh usable battery (the energy it spends across its ~500 km real-world range). This proxy is flattering on long segments (whose absolute energies are large), so treat the per-kWh MAE — and the per-regime failure table below — as the real accuracy signal, not the percentage.
 
 The model-vs-baseline comparison (internal validation split) shows how much the non-linear model buys us over a transparent linear reference:
 
 | Metric              | Gradient Boosting (primary) | Linear baseline |
 | ------------------- | --------------------------- | --------------- |
-| MAE (kWh)           | 7.683                       | 39.139          |
-| RMSE (kWh)          | 14.961                      | 62.690          |
-| MAPE (%)            | 11.91                       | 172.51          |
-| R²                  | 0.9856                      | 0.7468          |
+| MAE (kWh)           | 5.476                       | 16.192          |
+| RMSE (kWh)          | 9.112                       | 24.049          |
+| MAPE (%)            | 15.73                       | 67.53           |
+| R²                  | 0.9720                      | 0.8047          |
 
-The gradient-boosting model cuts held-out MAE by roughly **5×** versus the linear baseline. Three diagnostic figures are saved to `reports/figures/`: **predicted-vs-actual**, **residual-vs-temperature**, and **error-by-payload**.
+The gradient-boosting model cuts MAE by roughly **3×** versus the linear baseline. Three diagnostic figures are saved to `reports/figures/`: **predicted-vs-actual**, **residual-vs-temperature**, and **error-by-payload**.
 
 ### Where it fails and why
 
-A model is only trustworthy if you know its blind spots. `failure_mode_report(...)` slices error by operating regime; the patterns we consistently observe:
+A model is only trustworthy if you know its blind spots. `failure_mode_report(...)` slices error by operating regime, ranked by **absolute MAE (kWh)** — what actually strands a truck — not MAPE, which explodes on near-zero-denominator downhill slices. The two most decision-relevant failures are **steep uphill** and **heavy payload**:
 
-- **Temperature extremes (cold < 0 °C, hot > 30 °C).** HVAC is the hardest term to model — its U-shape and time-dependence mean the tails carry the largest MAPE. A dispatcher planning a winter run should treat the margin as *narrower* than the headline number.
-- **Steep gradients (|grade| > 4%).** Regen recovery on descents is governed by a fixed efficiency in the physics, but real recovery depends on speed, battery state and braking style — so steep-down and steep-up bins show elevated error and more variance.
-- **Heavy payloads (> 15 t).** These are under-represented at the *combined* extremes (e.g. heavy **and** cold **and** uphill), so the model extrapolates rather than interpolates and the error band widens.
+- **Steep climbs (gradient > +4 %).** This is the dangerous slice. Held-out MAE here is **11.44 kWh** (n=16) versus the overall 5.37 kWh. Steep *climbs* convert payload mass into potential energy fastest, so any miss is a large *absolute* kWh miss — exactly the regime that can strand a truck. (Small sample: n=16, so treat as indicative, not precise.)
+- **Heavy payload (> 15 t).** MAE **6.71 kWh** (n=378) — the worst-error payload bin. Payload scales rolling resistance and gradient potential energy linearly, so heavy loads both consume the most and leave the most room to be wrong in absolute terms.
+- **Steep descents (gradient < −4 %).** Tiny absolute error (MAE 1.58 kWh, n=10) because regen drives net energy near zero. Its *percentage* error is meaningless (the denominator collapses), which is precisely why we rank by MAE, not MAPE — ranking by MAPE used to crown this harmless bin as the "worst".
+- **Temperature.** Cold is **not** the hardest regime to *predict*, even though the upgraded physics makes it the most *expensive*: the cold consumption channels (denser air + cold tyres + reduced regen) are smooth and learnable, so the error slices stay flat — cold MAE 4.90 (n=166), mild 5.49 (n=979), hot 4.57 (n=55). A winter run costs more energy (see below) but is not meaningfully harder to predict than a mild one; don't conflate the two.
 
-The reachability service exposes this honestly: every verdict carries a `confidence_note` referencing the model's MAE band, and the dashboard turns the verdict **red** when the margin is within that band rather than pretending a knife-edge result is safe.
+The reachability service exposes uncertainty on every verdict in two ways. First, `range.check_reachability` reads the model's **real held-out MAE** (~6 kWh) straight from the artifact (`metrics.hgb.mae_kwh`) and reports it in the `confidence_note` — no more hardcoded band. Second, it runs a **first-principles physics cross-check** on every call: if the data-driven model and the physics estimate disagree by more than ~3 error-bands (or 15%), it returns `confidence: "low"`, uses the conservative (higher) value for the GO/NO-GO, and the note explains the segment is outside the trained envelope. New result keys: `confidence`, `model_kwh`, `physics_kwh`. The dashboard turns the verdict **red** when the margin is within the error band rather than pretending a knife-edge result is safe.
+
+**What this evaluation can and cannot tell us.** The data is synthetic: labels are a physics ground truth plus realistic noise (multiplicative ~6% + a small additive sensor term), which sets a **noise floor** the model cannot beat — an ~6% MAPE is essentially the irreducible scatter, not a tuning failure. The gradient/distance coupling in the generator is a **deliberate realism fix**: steep grades only occur on short segments, because a sustained steep grade over a long leg implies a physically impossible net climb. That coupling is also the resolution of an earlier mistake of ours — we had documented conversation 2 as a "tree extrapolation blow-up" (the model inventing ~752 kWh), but on re-checking, the physics label for those exact inputs is ~769 kWh, so the *old* model was faithfully reproducing an **unphysical training label**. The real defect was the data distribution, not the model; we fixed the generator and the failure narrative now ranks slices by MAE.
+
+**What used to be a limitation and now isn't.** Four simplifications the earlier write-up listed as honest gaps are now **modelled as explicit physics channels**, not constants:
+
+- **Air density** is temperature-dependent via the ideal gas law (was a constant 1.225). `ρ(−10 °C) = 1.341` vs `ρ(35 °C) = 1.146`; `ρ(15 °C) = 1.225` is the pivot.
+- **Rolling resistance** rises with speed and with cold (`Crr_eff = Crr0 · f_speed · f_temp`; was a flat 0.0055 independent of speed and temperature).
+- **Regen** is tapered on descents by temperature and grade (`0.60 · g_temp · g_grade`, floors 0.45 cold / 0.55 steep; was a flat 60%).
+- **Temperature** therefore acts through *four* channels — cold-air drag, cold-tyre roll, reduced regen and the U-shaped HVAC aux — not HVAC alone.
+
+The combined winter signal is visible end-to-end: a flat 40 t / 80 km/h segment costs **~1.265 kWh/km at 20 °C** but **~1.55 kWh/km at −10 °C** (a 22 t / 85 km/h flat run shows the same +16% swing, 1.337 → 1.549 kWh/km), the explicit-channel counterpart of the field-observed +25% winter penalty.
+
+**The honest residual limitations that remain** — fixing the big four does not make the model perfect:
+
+- **Steady-state per segment.** Each segment is modelled at constant speed; there are no acceleration transients, and only **gravitational** potential energy is regenerated — kinetic energy lost in braking-to-stop is not recovered.
+- **No absolute altitude / pressure.** `ρ(T)` assumes sea level, so alpine hauls slightly **over-state cold-air drag** (Germany is mostly 0–1000 m, so this is a known *one-sided* bias). Fixing it needs an elevation input and a dataset regeneration.
+- **Linear ramps, reasoned floors.** `f_temp`, `g_temp` and `g_grade` are linear approximations of smooth BMS/tyre curves, and the regen floors (0.45 cold / 0.55 steep) are **reasoned engineering bounds, not eActros measurements** (Daimler publishes no regen-vs-temperature curve) — treat their magnitudes as defensible estimates pending primary data.
+- **Grade-only regen proxy.** The regen power-cap taper keys off **grade**, but the true motor-cap knee depends on `m·g·sin(θ)·v`, not grade alone.
+- **No state-of-charge channel** (a full battery also refuses regen) and **no humidity** (a sub-1% effect that partly cancels the cold-density gain).
+- **Conservative cold-Crr slope.** The 0.4%/°C cold rolling slope is deliberately below the literature 0.6–0.9%/°C (surface-temperature figures conflate tyre self-heating), so the cold rolling penalty here is a **lower bound**.
+
+The candid framing stands: "no weaknesses" is impossible. We fixed the big four and the bullets above name what remains. The steep-up slice is small (n=16, indicative only), rare *combinations* of features are still under-represented, and accuracy must be re-earned on real telemetry — the synthetic numbers establish that the pipeline works, not that it is calibrated to a real eActros.
 
 ---
 
@@ -173,10 +214,13 @@ The dispatcher experience is an **LLM tool-use loop**, not free-form generation 
 
 - **Tools (`nexdash.tools`).** Two Anthropic tool schemas — `predict_energy` and `check_reachability` — with thin, JSON-serializable wrappers and a `dispatch(name, args)` router. The model is *forbidden in the system prompt from inventing numbers*; it must call a tool.
 - **Agent (`nexdash.agent.DispatcherAgent`).** `ask(question)` sends the question plus `TOOL_SPECS` to Claude, executes any `tool_use` blocks via `dispatch`, feeds the `tool_result` back, and loops until the model returns plain-language text. The system prompt frames it as a fleet dispatcher assistant that always states the **margin** and a **caveat**. The client is injectable, so tests run fully mocked with no network.
-- **MCP (`nexdash.mcp_server`).** The exact same two tools are registered on a `FastMCP` server named `nexdash`, so any MCP-capable host gets NexDash's reasoning without importing Python.
-- **CLI (`nexdash.cli`).** A friendly REPL (or `--once`) over the agent, with a clear message if `ANTHROPIC_API_KEY` is missing.
+- **MCP (`nexdash.mcp_server`).** The exact same two tools are registered on a `FastMCP` server named `nexdash`, delegating to `nexdash.tools` so there is no logic drift — any MCP-capable host gets NexDash's reasoning without importing Python.
+- **CLI (`nexdash.cli`).** A friendly REPL (or `--once`) over the agent, with a clear message and exit code if `ANTHROPIC_API_KEY` is missing.
+- **HTTP + chat UI (bonus).** `POST /api/chat` wires `DispatcherAgent.chat` over the same loop, returning the reply plus which tools were used, and degrades gracefully (no crash) when no API key is set. The React console in `frontend/` exposes this as a floating **chat widget** (`ChatWidget` / `ChatPanel`) — the brief's "chat UI is a plus."
 
-This separation means the *numbers* are deterministic and testable while the *explanation* is the only thing the LLM is responsible for.
+This separation means the *numbers* are deterministic and testable while the *explanation* is the only thing the LLM is responsible for, and the CLI, MCP server and `/api/chat` all share one tool source of truth.
+
+Two faithful end-to-end transcripts — a comfortable reach and a no-reach case — live in **[examples/](examples/)**; their numbers are copied verbatim from live `check_reachability` output (including the no-reach case, where the physics cross-check catches an out-of-envelope under-prediction and the verdict falls back to the conservative estimate).
 
 ---
 
@@ -185,14 +229,14 @@ This separation means the *numbers* are deterministic and testable while the *ex
 The synthetic-physics approach is a launchpad, not the destination. As real eActros telemetry arrives, NexDash is designed to swap the data source without touching the model interface. The strategy — **continuous retraining, model versioning, and drift detection** — is detailed in **[docs/LONG_TERM.md](docs/LONG_TERM.md)**:
 
 - **Retraining.** Telemetry replaces the synthetic generator as the labelled source; `features.transform` and `EnergyModel` are unchanged, so the pipeline is a one-line data swap. The physics simulator survives as a sanity oracle and a cold-start prior for routes with little real data.
-- **Versioning.** Models are persisted with joblib alongside their metrics and training-data hash, so every deployed verdict is traceable to a specific model + dataset, and rollback is trivial.
+- **Versioning.** Models are persisted with joblib alongside their held-out metrics (`EnergyModel.save()` stores `{pipeline, baseline, metrics, feature_columns}`). The next step toward full traceability — a metadata sidecar carrying the training-data hash and git SHA so every deployed verdict maps to a specific model + dataset — is designed but **not yet implemented**; see [docs/LONG_TERM.md](docs/LONG_TERM.md) for the planned lineage/rollback scheme.
 - **Drift.** Monitor input-feature distributions (e.g. seasonal temperature shift, new payload mixes) and live prediction residuals against actual consumption; trigger retraining when MAPE on recent trips exceeds the validated band.
 
 ---
 
 ## Examples
 
-Runnable, self-contained snippets live in **[examples/](examples/)** — physics breakdowns, a single ML prediction from raw features, a reachability check, and a mocked agent conversation. They double as the fastest way to learn the public API.
+Two annotated dispatcher transcripts live in **[examples/](examples/)**: [`conversation_1.md`](examples/conversation_1.md) (a comfortable, high-confidence reach) and [`conversation_2.md`](examples/conversation_2.md) (a no-reach case where a charging stop is advised, in which the physics cross-check flags low confidence and the verdict falls back to the conservative estimate). Both show the agent's tool call, the verbatim tool result, and the plain-language answer; every number matches what the live `check_reachability` tool returns.
 
 ---
 

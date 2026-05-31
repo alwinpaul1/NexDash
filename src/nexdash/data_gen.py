@@ -14,10 +14,13 @@ and then perturbed with realistic measurement noise:
 * a small *additive* gaussian term ``N(0, 0.3)`` kWh modelling sensor/telemetry
   measurement error.
 
-Feature values are drawn independently from realistic marginal distributions;
-**no correlations are injected artificially** between features. Any structure the
-downstream model learns therefore comes from the physics relationship and the
-genuine variability of the operating envelope, not from synthetic shortcuts.
+Feature values are drawn from realistic marginal distributions. The only
+deliberate coupling is **physical, not statistical**: the average gradient a
+segment can sustain is attenuated as its distance grows, because a long leg
+cannot hold a steep grade without implying an impossible net elevation change
+(see the ``gradient_pct`` sampling below). No *other* correlations are injected;
+any further structure the model learns comes from the physics relationship and
+the genuine variability of the operating envelope, not from synthetic shortcuts.
 
 .. note::
    This generator is a deliberate *stand-in* for future real telematics data.
@@ -93,13 +96,39 @@ def generate_dataset(
     speed_kph = np.clip(rng.normal(loc=72.0, scale=12.0, size=n_samples), 30.0, 85.0)
 
     # Road gradient is symmetric about flat; most segments are gentle.
-    gradient_pct = np.clip(rng.normal(loc=0.0, scale=2.2, size=n_samples), -6.0, 6.0)
+    #
+    # CRITICAL realism constraint: the *average* gradient a real leg can sustain
+    # shrinks as the leg lengthens. A 3 km ramp can average +6 %, but a 110 km
+    # leg averaging +4.5 % would imply a ~5 km net climb — higher than any Alpine
+    # pass. Sampling gradient independently of distance (as an earlier version
+    # did) produced labels up to ~5x battery capacity and a misleading "model
+    # extrapolates wildly" failure mode that was really a data-distribution bug.
+    # We attenuate the sampled gradient by distance so net elevation change stays
+    # physically plausible: steep grades remain, but only on short segments.
+    # The base spread (2.8) and the 0.18 floor are tuned so that (a) no label
+    # exceeds the 600 kWh battery and (b) the steep-grade evaluation slices stay
+    # populated enough (~15 steep-up / ~11 steep-down test rows) to report a
+    # credible failure-mode metric rather than a 2-sample fluke.
+    grad_distance_scale = np.clip(15.0 / distance_km, 0.18, 1.0)
+    gradient_pct = np.clip(
+        rng.normal(loc=0.0, scale=2.8, size=n_samples) * grad_distance_scale,
+        -6.0,
+        6.0,
+    )
 
     # German ambient temperature across the year (-15..40 C).
     temperature_c = np.clip(rng.normal(loc=12.0, scale=11.0, size=n_samples), -15.0, 40.0)
 
-    # Wind speed is non-negative and typically light (0-12 m/s).
-    wind_mps = np.clip(rng.gamma(shape=2.0, scale=2.0, size=n_samples), 0.0, 12.0)
+    # Wind enters the model as a *signed headwind component* (positive = headwind
+    # opposing travel, negative = tailwind), because at inference we project real
+    # Open-Meteo wind direction onto the truck's heading. We mirror that here: draw
+    # a light wind magnitude (gamma) and a uniformly-random bearing relative to
+    # travel, then take the along-track component speed*cos(angle). This teaches the
+    # model that tailwinds *reduce* energy — without it the model would never see
+    # negative wind and would extrapolate on every following wind.
+    wind_speed = np.clip(rng.gamma(shape=2.0, scale=2.0, size=n_samples), 0.0, 14.0)
+    wind_angle = rng.uniform(0.0, 2.0 * np.pi, size=n_samples)
+    wind_mps = np.clip(wind_speed * np.cos(wind_angle), -12.0, 12.0)
 
     # --- Ground-truth physics label --------------------------------------- #
     # segment_energy_kwh is scalar; vectorise over the sampled rows.
