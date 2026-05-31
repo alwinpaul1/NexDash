@@ -81,6 +81,23 @@ VITE_TOMTOM_API_KEY=...
 VITE_MAPTILER_API_KEY=...     # optional; falls back to TomTom / CARTO tiles
 ```
 
+> **What TomTom does — and doesn't — decide (honest scope).** TomTom supplies the
+> *road geometry*, *live traffic*, and *real charging-station* names/power/availability
+> for display. It does **not** decide the charging plan: **stop placement comes from our
+> own physics-grounded SOC simulation** (`nexdash.route_planner`), and each synthetic stop
+> is then matched to the nearest real DC-fast POI for the map. A consequence to be candid
+> about: a displayed station whose real power is too low to refill within the simulated
+> window is **not** currently detected — the energy decision is the model's, the station
+> card is cosmetic. (We evaluated TomTom's Long-Distance EV Routing as a *cross-check*
+> oracle, not a replacement — the case study is about our model; see `docs/LONG_TERM.md`.)
+>
+> **Security.** `VITE_TOMTOM_API_KEY` ships to the browser (unavoidable for client-side
+> maps). Per TomTom's guidance, **domain-whitelist** the key (restrict per-domain and
+> per-product) so a leaked key can't be abused; the demo key is also rate/transaction
+> limited. For production, proxy the calls through the FastAPI backend so the key never
+> leaves the server. Calls retry with backoff on 429/5xx and time out (`tomtomFetch`),
+> and every external call fails soft to a local fallback.
+
 ### Registering the MCP server
 
 NexDash ships an MCP server (`nexdash.mcp_server`) exposing `predict_energy` and `check_reachability` as tools. Add it to any MCP client (e.g. Claude Desktop) like so:
@@ -150,6 +167,18 @@ NexDash predicts **energy consumption (kWh) for a single driving segment** and u
 - **Aerodynamic drag** — `½ · ρ(T) · Cd · A · v² · distance`, using the effective air speed (`speed + headwind`); the dominant term at motorway pace. Air density is **temperature-dependent** via the ideal gas law (`ρ(T) = 101325 / (287.05 · (T + 273.15))`), so cold air (`ρ(−10 °C) = 1.341`) costs more drag than warm (`ρ(35 °C) = 1.146`); `ρ(15 °C) = 1.225` is the pivot.
 - **Gradient (potential energy)** — `m · g · Δh`; downhill segments recover a **base** `regen_eff` (60%) of the would-be energy via regenerative braking, which is why steep descents can net *negative* kWh. The base is tapered on descents by temperature (`g_temp`, floor 0.45 at −15 °C: cold BMS charge-acceptance) and grade (`g_grade`, floor 0.70 at −10%: steep descents exceed the regen power cap and bleed to friction braking).
 - **Auxiliary / HVAC** — a base load plus a cabin-conditioning term that rises at **both** cold and hot extremes, scaled by travel time (`distance / speed`).
+
+**Uphill vs. downhill — the gradient channel in one table.** The same 50 km / 15 t / 70 km/h / 10 °C / no-wind leg, varying *only* the road gradient. Climbing spends potential energy; descending **recovers** it via regen, so a steep descent can net *negative* kWh (energy returned to the pack). Reproduce with `python -c "from nexdash.physics import segment_energy_kwh as e; from nexdash.config import TRUCK; [print(g, e(distance_km=50, payload_t=15, speed_kph=70, gradient_pct=g, temperature_c=10, wind_mps=0, truck=TRUCK)) for g in (8,4,0,-4,-8)]"`:
+
+| Gradient | Energy (kWh) | Behaviour |
+| --- | --- | --- |
+| +8 % | **475.1** | uphill — lifting ~33 t gross up the climb dominates |
+| +4 % | 264.7 | uphill |
+| 0 % (flat) | 53.3 | baseline rolling + aero + aux |
+| −4 % | **−38.3** | downhill — regen returns more than the segment spends (net negative) |
+| −8 % | −96.6 | steeper descent recovers more |
+
+Regen is capped, not unlimited: it is tapered by temperature and grade (a steeper descent never recovers *less* than a gentler one — guaranteed by the `g_grade` floor and a regression test), and only gravitational potential energy is recovered, never kinetic braking-to-stop. The evaluation's failure-mode table reports `steep_up (>+4%)` and `steep_down (<−4%)` slices separately so each direction's error is visible.
 
 `energy_breakdown(...)` returns each component separately for transparency.
 
@@ -238,11 +267,12 @@ Two faithful end-to-end transcripts — a comfortable reach and a no-reach case 
 
 ## Long-term: real data
 
-The synthetic-physics approach is a launchpad, not the destination. As real eActros telemetry arrives, NexDash is designed to swap the data source without touching the model interface. The strategy — **continuous retraining, model versioning, and drift detection** — is detailed in **[docs/LONG_TERM.md](docs/LONG_TERM.md)**:
+The synthetic-physics approach is a launchpad, not the destination. As real eActros telemetry arrives, NexDash is designed to swap the data source without touching the model interface. The strategy — **continuous retraining, model versioning, and drift detection** — is detailed in **[docs/LONG_TERM.md](docs/LONG_TERM.md)**, and the core of it is now **implemented and runnable**, not just described:
 
 - **Retraining.** Telemetry replaces the synthetic generator as the labelled source; `features.transform` and `EnergyModel` are unchanged, so the pipeline is a one-line data swap. The physics simulator survives as a sanity oracle and a cold-start prior for routes with little real data.
-- **Versioning.** Models are persisted with joblib alongside their held-out metrics (`EnergyModel.save()` stores `{pipeline, baseline, metrics, feature_columns}`). The next step toward full traceability — a metadata sidecar carrying the training-data hash and git SHA so every deployed verdict maps to a specific model + dataset — is designed but **not yet implemented**; see [docs/LONG_TERM.md](docs/LONG_TERM.md) for the planned lineage/rollback scheme.
-- **Drift.** Monitor input-feature distributions (e.g. seasonal temperature shift, new payload mixes) and live prediction residuals against actual consumption; trigger retraining when MAPE on recent trips exceeds the validated band.
+- **Versioning & lineage.** Every trained model now gets a **content-addressed provenance record** (`nexdash.registry`): a training-data SHA-256 + code (git) SHA + seed + full held-out metrics, written as a JSON sidecar next to the artifact and into `models/registry/` — so every deployed verdict maps to a specific model + dataset. The `model_version` is surfaced in the report header and `/api/model-info`. (The joblib bytes are deliberately left untouched, so the pipeline stays byte-reproducible.)
+- **"Is the new version actually better?"** — `python -m nexdash.promote <champion> <challenger>` scores both on one frozen held-out set and **promotes only if** a paired-bootstrap 95% CI on the MAE improvement excludes zero, **no failure-mode slice regresses**, and the **optimistic-error rate does not rise** — the fraction of held-out rows where the model under-predicts energy (the direction that strands a truck), the safety-asymmetric check. An aggregate win that hides a cold/steep regression is rejected.
+- **Drift.** `python -m nexdash.drift <reference.csv> <new_batch.csv>` computes per-feature **PSI + KS** against the training reference (standard 0.1 / 0.25 tiers) plus a realized-residual monitor when the batch carries labels, and exits non-zero on significant drift — a ready retraining trigger.
 
 ---
 

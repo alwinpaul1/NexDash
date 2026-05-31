@@ -49,6 +49,13 @@ export default function RouteResults({ plan }) {
 
   const s = plan.summary;
   const d = s.driver || {};
+  const stops = plan.stops || [];
+  // Show the per-stop panel only when it adds information (multi-stop, or any
+  // stop carries delivery data) — a lone final stop with no data is noise.
+  const showStops =
+    stops.length > 1 ||
+    stops.some((st) => st.dropWeightKg > 0 || st.deliverBy || st.unloadMin > 0);
+  const assumptions = s.assumptions || [];
 
   return (
     <div className="space-y-5">
@@ -100,6 +107,52 @@ export default function RouteResults({ plan }) {
           );
         })()}
       </div>
+
+      {/* Per-stop arrivals (per-leg simulation): arrival SOC, ETA, deliver-by */}
+      {showStops && (
+        <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm p-5">
+          <h3 className="text-[11px] uppercase tracking-wide font-medium text-on-surface-variant mb-3">
+            Delivery Stops
+          </h3>
+          <div className="space-y-2">
+            {stops.map((st) => (
+              <div
+                key={st.index}
+                className="flex items-center gap-3 rounded-xl bg-surface-low border border-outline-variant/50 px-3 py-2"
+              >
+                <span className="flex items-center justify-center w-5 h-5 shrink-0 rounded-full bg-primary/15 text-primary text-[11px] font-semibold ring-1 ring-primary/30">
+                  {st.index + 1}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-on-surface truncate">
+                    {st.label}
+                    {st.isFinal ? " · destination" : ""}
+                  </p>
+                  <p className="text-[11px] text-on-surface-variant tabular-nums">
+                    {Math.round(st.distKm)} km · ETA {st.etaLabel} · arrive {Math.round(st.arriveSoc)}% SOC
+                    {st.dropWeightKg > 0 ? ` · drop ${(st.dropWeightKg / 1000).toFixed(1)} t` : ""}
+                  </p>
+                </div>
+                {st.deliverBy && (
+                  <span
+                    className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${
+                      st.onTime
+                        ? "bg-primary/10 text-primary ring-1 ring-primary/25"
+                        : "bg-error/10 text-error ring-1 ring-error/25"
+                    }`}
+                    title={`Deliver by ${st.deliverBy}`}
+                  >
+                    <span className="material-symbols-outlined" style={{ fontSize: "13px" }}>
+                      {st.onTime ? "schedule" : "running_with_errors"}
+                    </span>
+                    {st.onTime ? "On time" : "Late"}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Driver hours */}
       <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm p-5 space-y-3">
@@ -171,6 +224,24 @@ export default function RouteResults({ plan }) {
           <InfoCard icon="euro" value={`€${(s.chargingCostEur || 0).toFixed(0)}`} label="Charging Cost" />
         </div>
       </div>
+
+      {/* Honest modelling assumptions — surfaced from the backend so the
+          dispatcher sees the caveats, not just a confident number. */}
+      {assumptions.length > 0 && (
+        <details className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm p-4 text-sm text-on-surface-variant">
+          <summary className="cursor-pointer font-medium text-on-surface flex items-center gap-1.5">
+            <span className="material-symbols-outlined" style={{ fontSize: "16px" }}>
+              info
+            </span>
+            Modelling assumptions &amp; limitations
+          </summary>
+          <ul className="mt-2 list-disc pl-5 space-y-1">
+            {assumptions.map((a, i) => (
+              <li key={i}>{a}</li>
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   );
 }

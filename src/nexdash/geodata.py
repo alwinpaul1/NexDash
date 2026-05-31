@@ -29,6 +29,9 @@ from __future__ import annotations
 
 import json
 import math
+import socket
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -44,31 +47,69 @@ DEFAULT_WIND_DIR_DEG = 0.0
 # Open-Meteo accepts up to ~100 coordinates per request; stay a little under.
 _ELEV_BATCH = 90
 # Forecast is comparatively expensive, so sample weather at fewer points and
-# interpolate the rest along the route.
+# interpolate the rest along the route. NOTE (honest limitation): a long route
+# gets temperature/wind from only this many points (each segment reuses the
+# nearest), so on a 600 km route weather samples are ~100 km apart and can miss a
+# frontal passage or a mountain-pass wind shift — see `conditions.weatherSamples`.
 _WEATHER_SAMPLES = 6
 _HTTP_TIMEOUT_S = 8
 
+# Bounded retry/backoff for transient failures (429 / 5xx / connection / timeout).
+# A single dropped packet otherwise collapses an entire elevation batch to 0.0 m,
+# silently flattening terrain for the energy model — worse than a brief stall.
+_HTTP_RETRIES = 2  # extra attempts after the first (so up to 3 total)
+_HTTP_BACKOFF_S = 0.5  # base backoff, doubled each retry
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+
 _ELEV_API = "https://api.open-meteo.com/v1/elevation"
 _FORECAST_API = "https://api.open-meteo.com/v1/forecast"
+# Recent-past departures (older than the forecast window below) are most
+# accurately served by the Historical Forecast API, which mirrors the forecast
+# response shape. Avoids silently quoting today's weather for a past trip.
+_HIST_FORECAST_API = "https://historical-forecast-api.open-meteo.com/v1/forecast"
+# The forecast endpoint only accepts roughly [today-92d, today+15d]; outside that
+# it returns {"error": true, "reason": "...out of allowed range..."}.
+_FORECAST_PAST_LIMIT_DAYS = 92
+_FORECAST_FUTURE_LIMIT_DAYS = 15
 
 # In-process caches. Keyed on rounded coords to fold near-identical lookups.
 _elev_cache: dict[tuple[float, float], float] = {}
-_weather_cache: dict[tuple[float, float, str], tuple[float, float, float]] = {}
+_weather_cache: dict[tuple[float, float, str], tuple[float, float, float, str]] = {}
 
 
 # ---------------------------------------------------------------------------
 # Low-level HTTP helper (stdlib only, always fail-soft)
 # ---------------------------------------------------------------------------
 def _get_json(url: str):
-    """GET ``url`` and parse JSON. Returns ``None`` on any failure."""
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "NexDash/1.0"})
-        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_S) as resp:
-            raw = resp.read()
-        return json.loads(raw.decode("utf-8"))
-    except Exception:
-        # Network down, timeout, HTTP error, bad JSON -- caller degrades.
-        return None
+    """GET ``url`` and parse JSON, with bounded retry. Returns ``None`` on failure.
+
+    Retries only *transient* conditions — HTTP 429/5xx and connection/timeout
+    errors — with exponential backoff; a permanent 4xx or a JSON-decode error is
+    not retried (it would never succeed). Always fail-soft: after the retries are
+    exhausted (or on a non-retryable error) it returns ``None`` and the caller
+    degrades to defaults, so the planner still runs offline.
+    """
+    for attempt in range(_HTTP_RETRIES + 1):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "NexDash/1.0"})
+            with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_S) as resp:
+                raw = resp.read()
+            return json.loads(raw.decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code in _RETRYABLE_STATUS and attempt < _HTTP_RETRIES:
+                time.sleep(_HTTP_BACKOFF_S * (2 ** attempt))
+                continue
+            return None
+        except (urllib.error.URLError, socket.timeout, TimeoutError):
+            # Transient connection / timeout: back off and retry.
+            if attempt < _HTTP_RETRIES:
+                time.sleep(_HTTP_BACKOFF_S * (2 ** attempt))
+                continue
+            return None
+        except Exception:
+            # Bad JSON or anything unexpected: don't retry, degrade.
+            return None
+    return None
 
 
 def _key(lat: float, lon: float) -> tuple[float, float]:
@@ -131,12 +172,23 @@ def elevations(points) -> list[float]:
     fail-soft: any point we cannot resolve becomes ``0.0`` (DEFAULT_ELEV_M).
     Output length always matches the cleaned input length.
     """
+    return _fetch_elevations(points)[0]
+
+
+def _fetch_elevations(points) -> tuple[list[float], bool]:
+    """Like :func:`elevations` but also reports whether every fetch succeeded.
+
+    The ``ok`` flag is ``False`` if any batch we had to fetch over the network
+    returned no usable elevation list, so :func:`enrich_route` can flag that the
+    terrain is a degraded default (0.0 m) rather than genuine sea level.
+    """
     pts = _coerce_points(points)
     if not pts:
-        return []
+        return [], True
 
     result: list[float | None] = [None] * len(pts)
     missing_idx: list[int] = []
+    ok = True
 
     # Serve from cache first.
     for i, p in enumerate(pts):
@@ -154,6 +206,8 @@ def elevations(points) -> list[float]:
         url = f"{_ELEV_API}?latitude={lats}&longitude={lons}"
         data = _get_json(url)
         elev_list = data.get("elevation") if isinstance(data, dict) else None
+        if not isinstance(elev_list, list):
+            ok = False  # this batch fell back to defaults
 
         for j, i in enumerate(batch_idx):
             val = DEFAULT_ELEV_M
@@ -170,7 +224,7 @@ def elevations(points) -> list[float]:
             if isinstance(elev_list, list) and j < len(elev_list):
                 _elev_cache[_key(*pts[i])] = val
 
-    return [DEFAULT_ELEV_M if v is None else float(v) for v in result]
+    return [DEFAULT_ELEV_M if v is None else float(v) for v in result], ok
 
 
 # ---------------------------------------------------------------------------
@@ -235,11 +289,19 @@ def _parse_departure(departure_iso):
 
 
 def _weather_at(lat: float, lon: float, dep: datetime):
-    """Return (temperatureC, windMps, windDirDeg) for a point & departure hour.
+    """Return ``(temperatureC, windMps, windDirDeg, source)`` for a point & hour.
 
-    Tries the forecast hourly series at the nearest hour to ``dep``; falls back
-    to ``current=`` if the date is out of forecast range; finally to defaults.
-    Cached per (lat, lon, date-hour).
+    Picks the right Open-Meteo endpoint for the departure date — the standard
+    forecast API within roughly ``[today-92d, today+15d]``, the Historical
+    Forecast API for older trips — and reads the hourly value nearest ``dep``.
+
+    Crucially it does **not** quietly pass off today's live ``current=`` weather
+    as the departure-time weather: that ``current=`` fallback is used only when
+    the departure is genuinely "now-ish" (within a day). For an out-of-window
+    date the forecast API returns ``{"error": true}`` and we degrade to documented
+    defaults with ``source="default"`` so the caller can flag the data as
+    unavailable rather than silently wrong. ``source`` is one of
+    ``forecast | historical | current | default``. Cached per (lat, lon, hour).
     """
     date_str = dep.strftime("%Y-%m-%d")
     ckey = (round(lat, 3), round(lon, 3), dep.strftime("%Y-%m-%dT%H"))
@@ -251,15 +313,26 @@ def _weather_at(lat: float, lon: float, dep: datetime):
         f"latitude={lat:.4f}&longitude={lon:.4f}"
         "&wind_speed_unit=ms&temperature_unit=celsius&timezone=UTC"
     )
+
+    # Choose the endpoint by how far the departure is from today.
+    days_off = (dep.date() - datetime.now(timezone.utc).date()).days
+    if days_off < -_FORECAST_PAST_LIMIT_DAYS:
+        api, source = _HIST_FORECAST_API, "historical"
+    else:
+        api, source = _FORECAST_API, "forecast"
+
     url = (
-        f"{_FORECAST_API}?{common}"
+        f"{api}?{common}"
         "&hourly=temperature_2m,wind_speed_10m,wind_direction_10m"
         f"&start_date={date_str}&end_date={date_str}"
     )
     data = _get_json(url)
+    # Out-of-window dates come back as {"error": true, "reason": "..."}; treat
+    # that as "no usable hourly data", NOT as a reason to substitute live weather.
+    api_error = bool(isinstance(data, dict) and data.get("error"))
+    hourly = data.get("hourly") if (isinstance(data, dict) and not api_error) else None
 
     temp = wind = wdir = None
-    hourly = data.get("hourly") if isinstance(data, dict) else None
     if isinstance(hourly, dict):
         times = hourly.get("time") or []
         target = dep.strftime("%Y-%m-%dT%H:00")
@@ -268,7 +341,6 @@ def _weather_at(lat: float, lon: float, dep: datetime):
             if target in times:
                 idx = times.index(target)
             else:
-                # Nearest by hour prefix.
                 prefix = dep.strftime("%Y-%m-%dT%H")
                 for n, t in enumerate(times):
                     if isinstance(t, str) and t.startswith(prefix):
@@ -281,26 +353,37 @@ def _weather_at(lat: float, lon: float, dep: datetime):
             wind = _pick(hourly.get("wind_speed_10m"), idx)
             wdir = _pick(hourly.get("wind_direction_10m"), idx)
 
-    # Fallback: current conditions (e.g. departure date outside forecast window).
-    if temp is None or wind is None:
-        url_cur = (
+    # Live ``current=`` is a legitimate proxy ONLY for a near-now departure.
+    if (temp is None or wind is None) and abs(days_off) <= 1:
+        cur = _get_json(
             f"{_FORECAST_API}?{common}"
             "&current=temperature_2m,wind_speed_10m,wind_direction_10m"
         )
-        cur = _get_json(url_cur)
         block = cur.get("current") if isinstance(cur, dict) else None
         if isinstance(block, dict):
-            temp = temp if temp is not None else _num(block.get("temperature_2m"))
-            wind = wind if wind is not None else _num(block.get("wind_speed_10m"))
-            wdir = wdir if wdir is not None else _num(block.get("wind_direction_10m"))
+            c_temp = _num(block.get("temperature_2m"))
+            c_wind = _num(block.get("wind_speed_10m"))
+            c_wdir = _num(block.get("wind_direction_10m"))
+            if temp is None:
+                temp = c_temp
+            if wind is None:
+                wind = c_wind
+            if wdir is None:
+                wdir = c_wdir
+            if c_temp is not None and c_wind is not None:
+                source = "current"
+
+    if temp is None or wind is None:
+        source = "default"
 
     out = (
         temp if temp is not None else DEFAULT_TEMP_C,
         wind if wind is not None else DEFAULT_WIND_MPS,
         wdir if wdir is not None else DEFAULT_WIND_DIR_DEG,
+        source,
     )
-    # Cache only genuine network successes so failures can retry later.
-    if isinstance(data, dict) or (temp is not None and wind is not None):
+    # Cache only genuine readings so a transient failure can retry later.
+    if source != "default":
         _weather_cache[ckey] = out
     return out
 
@@ -355,6 +438,11 @@ def enrich_route(geometry, departure_iso=None) -> dict:
             "maxGradientPct": 0.0,
             "climbM": 0.0,
             "descentM": 0.0,
+            # Honesty flags: no real data here, so the values above are defaults.
+            "weatherSource": "default",
+            "weatherDegraded": True,
+            "elevationDegraded": True,
+            "weatherSamples": 0,
         },
     }
 
@@ -364,7 +452,7 @@ def enrich_route(geometry, departure_iso=None) -> dict:
             return empty
 
         dep = _parse_departure(departure_iso)
-        elev = elevations(sampled)
+        elev, elev_ok = _fetch_elevations(sampled)
         if len(elev) != len(sampled):
             elev = (elev + [DEFAULT_ELEV_M] * len(sampled))[:len(sampled)]
 
@@ -379,6 +467,12 @@ def enrich_route(geometry, departure_iso=None) -> dict:
         def nearest_weather(i: int):
             j = min(w_idx, key=lambda k: abs(k - i))
             return weather[j]
+
+        # Provenance of the weather: did real readings come back, and from where?
+        weather_sources = [v[3] for v in weather.values()]
+        weather_degraded = any(src == "default" for src in weather_sources)
+        real_sources = [s for s in weather_sources if s != "default"]
+        weather_source = max(set(real_sources), key=real_sources.count) if real_sources else "default"
 
         segments = []
         elevation_profile = [{"distKm": 0.0, "elevM": round(float(elev[0]), 1)}]
@@ -412,7 +506,7 @@ def enrich_route(geometry, departure_iso=None) -> dict:
             if abs(grad) > abs(max_grad):
                 max_grad = grad
 
-            temp_i, wind_speed_i, wind_dir_i = nearest_weather(i)
+            temp_i, wind_speed_i, wind_dir_i, _src_i = nearest_weather(i)
             # Signed headwind for the MODEL. Open-Meteo wind_direction_10m is the
             # WMO convention (compass bearing the wind blows FROM). Project it onto
             # the segment's travel bearing so a head-on wind is a full +headwind
@@ -450,6 +544,12 @@ def enrich_route(geometry, departure_iso=None) -> dict:
                 "maxGradientPct": round(max_grad, 2),
                 "climbM": round(climb, 1),
                 "descentM": round(descent, 1),
+                # Honesty flags so the planner/UI can tell real data from a
+                # fail-soft default and disclose the weather sampling coarseness.
+                "weatherSource": weather_source,
+                "weatherDegraded": bool(weather_degraded),
+                "elevationDegraded": not bool(elev_ok),
+                "weatherSamples": len(w_idx),
             },
         }
     except Exception:

@@ -313,3 +313,48 @@
   background: rgba(0, 109, 50, 0.08);
   font-weight: 700;
 }
+
+/* Planner range slider thumb (hoisted out of PlannerForm's per-render <style>). */
+.route-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 9999px;
+  outline: none;
+  cursor: pointer;
+}
+.route-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background: #006d32;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 2px rgba(0, 109, 50, 0.3);
+  cursor: pointer;
+}
+.route-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background: #006d32;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 2px rgba(0, 109, 50, 0.3);
+  cursor: pointer;
+}
+
+/* Accessibility: honour the OS "reduce motion" setting (WCAG 2.2.2). Stops the
+ * looping map pulses (.ping / .gps-pulse / .rr-pulse) and all other continuous
+ * animations/transitions for users who ask for less motion. The truck-runner
+ * video is additionally paused in JS (RouteMap RouteRunner). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
