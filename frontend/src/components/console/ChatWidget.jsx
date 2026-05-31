@@ -11,7 +11,7 @@ export default function ChatWidget({ open, onOpenChange }) {
     <>
       <div
         aria-hidden={!open}
-        className={`fixed bottom-24 right-6 z-[3000] w-[380px] max-w-[calc(100vw-3rem)] origin-bottom-right transition-all duration-200 ease-out ${
+        className={`fixed bottom-24 right-6 z-[3000] w-[460px] max-w-[calc(100vw-3rem)] origin-bottom-right transition-all duration-200 ease-out ${
           open
             ? "opacity-100 translate-y-0 scale-100"
             : "opacity-0 translate-y-3 scale-95 pointer-events-none"
