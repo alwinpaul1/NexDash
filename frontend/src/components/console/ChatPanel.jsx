@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 /* ChatPanel — the dispatcher's plain-language assistant (case-study Part 2).
  *
@@ -73,10 +75,12 @@ function MessageBubble({ message }) {
     );
   }
 
+  // Assistant replies are rendered as Markdown (the agent emits tables, bold,
+  // lists, and a caveat blockquote); GFM enables the pipe tables it uses.
   return (
     <div className="flex flex-col items-start max-w-[85%]">
-      <div className="bg-surface-low text-on-surface rounded-2xl rounded-bl-sm px-3.5 py-2 text-sm whitespace-pre-wrap">
-        {message.content}
+      <div className="chat-md bg-surface-low text-on-surface rounded-2xl rounded-bl-sm px-3.5 py-2 text-sm">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
       </div>
       <ToolChips tools={message.tools} />
     </div>

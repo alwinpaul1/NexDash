@@ -262,3 +262,67 @@
     opacity: 0;
   }
 }
+
+/* Markdown rendering inside an assistant chat bubble. The dispatcher agent
+   replies with GFM (tables, bold, lists, a caveat blockquote); style it tight
+   so it reads cleanly in the narrow chat panel. */
+.chat-md > :first-child { margin-top: 0; }
+.chat-md > :last-child { margin-bottom: 0; }
+.chat-md p { margin: 0.35rem 0; line-height: 1.45; }
+.chat-md strong { font-weight: 700; }
+.chat-md h1, .chat-md h2, .chat-md h3, .chat-md h4 {
+  font-family: "Space Grotesk", sans-serif;
+  font-weight: 700;
+  margin: 0.5rem 0 0.3rem;
+  line-height: 1.25;
+}
+.chat-md h1 { font-size: 1.05rem; }
+.chat-md h2 { font-size: 1rem; }
+.chat-md h3, .chat-md h4 { font-size: 0.92rem; }
+.chat-md ul, .chat-md ol { margin: 0.35rem 0; padding-left: 1.2rem; }
+.chat-md li { margin: 0.15rem 0; }
+.chat-md ul { list-style: disc; }
+.chat-md ol { list-style: decimal; }
+.chat-md a { color: #006d32; text-decoration: underline; }
+.chat-md code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  background: rgba(0, 0, 0, 0.06);
+  padding: 0.05rem 0.3rem;
+  border-radius: 4px;
+}
+.chat-md pre {
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 8px;
+  padding: 0.5rem 0.65rem;
+  overflow-x: auto;
+  margin: 0.4rem 0;
+}
+.chat-md pre code { background: none; padding: 0; }
+.chat-md blockquote {
+  border-left: 3px solid #f59e0b;          /* amber = caveat */
+  background: rgba(245, 158, 11, 0.08);
+  padding: 0.3rem 0.6rem;
+  margin: 0.45rem 0;
+  border-radius: 0 6px 6px 0;
+  color: #5b6472;
+}
+/* Tables — scrollable so wide go/no-go tables don't overflow the panel. */
+.chat-md table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.45rem 0;
+  font-size: 0.82rem;
+  display: block;
+  overflow-x: auto;
+}
+.chat-md th, .chat-md td {
+  border: 1px solid var(--md-border, #d9e2d6);
+  padding: 0.3rem 0.5rem;
+  text-align: left;
+  white-space: nowrap;
+}
+.chat-md thead th {
+  background: rgba(0, 109, 50, 0.08);
+  font-weight: 700;
+}
