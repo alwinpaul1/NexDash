@@ -168,6 +168,18 @@ NexDash predicts **energy consumption (kWh) for a single driving segment** and u
 - **Gradient (potential energy)** — `m · g · Δh`; downhill segments recover a **base** `regen_eff` (60%) of the would-be energy via regenerative braking, which is why steep descents can net *negative* kWh. The base is tapered on descents by temperature (`g_temp`, floor 0.45 at −15 °C: cold BMS charge-acceptance) and grade (`g_grade`, floor 0.70 at −10%: steep descents exceed the regen power cap and bleed to friction braking).
 - **Auxiliary / HVAC** — a base load plus a cabin-conditioning term that rises at **both** cold and hot extremes, scaled by travel time (`distance / speed`).
 
+**Uphill vs. downhill — the gradient channel in one table.** The same 50 km / 15 t / 70 km/h / 10 °C / no-wind leg, varying *only* the road gradient. Climbing spends potential energy; descending **recovers** it via regen, so a steep descent can net *negative* kWh (energy returned to the pack). Reproduce with `python -c "from nexdash.physics import segment_energy_kwh as e; from nexdash.config import TRUCK; [print(g, e(distance_km=50, payload_t=15, speed_kph=70, gradient_pct=g, temperature_c=10, wind_mps=0, truck=TRUCK)) for g in (8,4,0,-4,-8)]"`:
+
+| Gradient | Energy (kWh) | Behaviour |
+| --- | --- | --- |
+| +8 % | **475.1** | uphill — lifting ~33 t gross up the climb dominates |
+| +4 % | 264.7 | uphill |
+| 0 % (flat) | 53.3 | baseline rolling + aero + aux |
+| −4 % | **−38.3** | downhill — regen returns more than the segment spends (net negative) |
+| −8 % | −96.6 | steeper descent recovers more |
+
+Regen is capped, not unlimited: it is tapered by temperature and grade (a steeper descent never recovers *less* than a gentler one — guaranteed by the `g_grade` floor and a regression test), and only gravitational potential energy is recovered, never kinetic braking-to-stop. The evaluation's failure-mode table reports `steep_up (>+4%)` and `steep_down (<−4%)` slices separately so each direction's error is visible.
+
 `energy_breakdown(...)` returns each component separately for transparency.
 
 **Features.** The model consumes the six raw inputs — `distance_km, payload_t, speed_kph, gradient_pct, temperature_c, wind_mps` — plus engineered terms that encode the physics structure so a tree model finds the patterns faster: a **payload × gradient** interaction (mass amplifies grade), **|gradient|**, **temperature deviation from 20 °C** (HVAC is a U-shape, not linear), and a **speed² proxy** (drag is quadratic). Each is documented in `nexdash.features`.
