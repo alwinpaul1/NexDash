@@ -18,11 +18,15 @@ at this state of charge, reach its destination?* The honest answer depends on
 physics that interact non-linearly:
 
 - Aerodynamic drag scales with **speed²**, so it dominates on the Autobahn but is
-  almost irrelevant in city traffic.
+  almost irrelevant in city traffic — and the air density in that term is itself
+  **temperature-dependent** (cold air is denser, so the same speed costs more
+  drag in winter).
 - Gradient cost is **signed**: climbing burns potential energy; descending
   *returns* some of it through regenerative braking, but only a fraction
-  (`regen_eff`), and the recovered fraction is itself bounded by battery and
-  brake-blending limits.
+  (a base `regen_eff` of 60%), and the recovered fraction is itself bounded by
+  battery and brake-blending limits — so the base is tapered down in the cold
+  (a colder BMS accepts less charge) and on steep descents (the regen power cap
+  is exceeded and the surplus bleeds to friction braking).
 - Auxiliary/HVAC load is **U-shaped in temperature** — cabin and battery thermal
   management cost energy at both winter cold and summer heat, and that cost is
   paid *per unit time*, so a slow, cold, short-distance crawl can be
@@ -57,10 +61,14 @@ The generator (`data_gen.py`) samples realistic, independent feature
 distributions across the full operating envelope (distance 1–120 km, payload
 0–22 t, speed 30–90 kph, gradient ±6 %, temperature −15–40 °C, wind 0–12 m/s),
 labels each sample with a **deterministic physics ground truth**
-(`physics.segment_energy_kwh`: rolling resistance + speed/wind-dependent drag +
-signed gradient work with bounded regen + time-scaled U-shaped aux load, all
-divided by `drivetrain_eff`), then injects **multiplicative Gaussian noise**
-(`noise_frac`, default 6 %) plus a small absolute sensor noise term.
+(`physics.segment_energy_kwh`: speed- and temperature-dependent rolling
+resistance + temperature-dependent-air-density drag (with wind) + signed
+gradient work with temperature- and grade-tapered regen + time-scaled U-shaped
+aux load, all divided by `drivetrain_eff`), then injects **multiplicative
+Gaussian noise** (`noise_frac`, default 6 %) plus a small absolute sensor noise
+term. The noise stays **unstructured** (mean-zero, uncorrelated with the
+features): the temperature/speed/grade effects live in the physics channels, not
+the noise, so the winter penalty is never double-counted.
 
 This gives us the best of both worlds:
 
@@ -177,11 +185,25 @@ compares it against `battery_kwh × soc% − reserve` to return `reaches`,
 
 Crucially, every verdict carries a **confidence note tied to the model's MAE
 band**. A dispatcher should never see a bare "yes" — a 2 kWh margin against a
-model with a ±8 kWh MAE is effectively a coin flip, and the note says so. This is
+model with a ±6 kWh MAE is effectively a coin flip, and the note says so. This is
 where the synthetic-ground-truth choice pays off again: because we can measure
 MAE honestly across regimes, we can warn precisely when the margin is inside the
 error band, and the failure-mode report tells us *which* regimes deserve a wider
 safety factor.
+
+> **How the band is wired.** `range.check_reachability` reads the model's
+> **real held-out MAE** (~6 kWh) straight from the artifact
+> (`metrics.hgb.mae_kwh`) and reports it in the `confidence_note` — there is no
+> hardcoded band. On top of that it runs a **first-principles physics
+> cross-check** on every call (`physics.segment_energy_kwh` on the same inputs).
+> If the data-driven prediction and the physics estimate disagree by more than
+> ~3 error-bands (or 15%), the segment is outside the trained envelope: the tool
+> returns `confidence: "low"`, uses the **conservative (higher)** value for the
+> GO/NO-GO, and the note explains why. The result therefore exposes three
+> numbers — `model_kwh`, `physics_kwh`, and a `confidence` flag — so a dispatcher
+> can see both estimates and when they diverge. This is the sanity-clamp that
+> stops a confident-looking under-prediction in an unsampled corner from shipping
+> as a dangerous "yes" (see example conversation 2).
 
 ---
 
@@ -192,16 +214,30 @@ Intellectual honesty is part of the design, so the limits are explicit:
 - **The model can only be as right as the physics.** The synthetic label is our
   hand-built energy model. Effects it omits — auxiliary trailer drag, traffic
   stop-go cycles, tyre wear, battery degradation/SOH, driver aggressiveness,
-  altitude/air-density variation, road surface — are invisible to the learner.
-  The injected noise mimics *unstructured* scatter, not these *structured* gaps.
-- **Feature independence is an idealisation.** The generator samples inputs
-  independently, but in real fleets speed, gradient, and route are correlated.
-  This makes coverage excellent but the input *distribution* less realistic than
-  live telemetry; predictions on physically implausible combinations are
-  extrapolations the dispatcher should treat with care.
-- **Regen is modelled as a bounded efficiency, not a dynamic limit.** Real regen
-  saturates at high SOC and high braking demand; our fixed `regen_eff` is a
-  reasonable average but will over-credit downhill recovery near a full battery.
+  absolute altitude/pressure, humidity, road surface — are invisible to the
+  learner. (Air-density *temperature* variation is now modelled via the ideal
+  gas law; only the absolute-altitude/pressure offset is omitted, so `ρ(T)`
+  assumes sea level and slightly over-states cold-air drag on alpine hauls — a
+  known one-sided bias.) The injected noise mimics *unstructured* scatter, not
+  these *structured* gaps.
+- **Feature independence is a near-idealisation.** The generator samples most
+  inputs from independent marginals, with one **deliberate coupling**: average
+  gradient is attenuated as distance grows, because a sustained steep grade over
+  a long leg implies a physically impossible net climb (a +4.5% grade held over
+  110 km would be a ~5 km ascent, higher than any Alpine pass). Steep grades
+  therefore only occur on short segments, matching real terrain. Other
+  correlations real fleets exhibit (speed/route/load) are still absent, so
+  predictions on physically implausible combinations remain extrapolations the
+  dispatcher should treat with care — and the reachability layer's physics
+  cross-check is what flags them.
+- **Regen is modelled as a tapered efficiency, not a fully dynamic limit.** The
+  base `regen_eff` (0.60) is now bent down by temperature (`g_temp`, floor 0.45
+  at −15 °C) and grade (`g_grade`, floor 0.55 at −10%), so the model captures the
+  cold-BMS and steep-descent caps that a flat 60% missed. Two limits remain: the
+  grade taper is a **proxy** (the true motor-power knee depends on
+  `m·g·sin(θ)·v`, not grade alone), and there is **no state-of-charge channel**,
+  so the model still over-credits downhill recovery near a full battery. The
+  0.45/0.55 floors are reasoned engineering bounds, not eActros-measured.
 - **Calibration transfers, accuracy must be re-earned on real data.** The right
   productionisation path is to keep this architecture (engineered physics
   features + gradient boosting + linear baseline + per-regime failure report) and

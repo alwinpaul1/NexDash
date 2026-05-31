@@ -35,6 +35,9 @@ EXPECTED_KEYS = {
     "margin_kwh",
     "remaining_soc_pct",
     "remaining_range_km",
+    "confidence",
+    "model_kwh",
+    "physics_kwh",
     "confidence_note",
 }
 
@@ -152,6 +155,48 @@ def test_output_contract_keys_and_bounds(model_path):
     assert 0.0 <= result["remaining_soc_pct"] <= 100.0
     # Energy figures are non-negative quantities of charge on board / needed.
     assert result["energy_available_kwh"] >= 0.0
+
+
+def test_out_of_envelope_segment_flags_low_confidence(model_path):
+    """A physically implausible segment must trip the physics sanity-clamp.
+
+    A +4.5% grade sustained over 110 km implies a ~5 km net climb — it cannot
+    occur in the (physically-coupled) training data, so the model extrapolates
+    and *under*-predicts. The decision must NOT use that optimistic number: the
+    cross-check has to flag low confidence and fall back to the conservative
+    physics estimate, or the tool would green-light a trip that strands a truck.
+    This test fails if the clamp is removed or quietly trusts the model.
+    """
+    result = check_reachability(
+        soc_pct=80.0,
+        distance_km=110.0,
+        payload_t=22.0,
+        speed_kph=70.0,
+        gradient_pct=4.5,
+        temperature_c=-12.0,
+        model_path=model_path,
+    )
+    assert result["confidence"] == "low"
+    # Model under-predicts vs first-principles here, and the decision uses the
+    # conservative (higher) value — never the optimistic one.
+    assert result["physics_kwh"] > result["model_kwh"]
+    assert result["energy_needed_kwh"] == pytest.approx(result["physics_kwh"], rel=1e-6)
+
+
+def test_in_envelope_segment_is_high_confidence(model_path):
+    """A normal segment inside the envelope: model and physics agree, so
+    confidence is high and the model's own data-driven prediction is used."""
+    result = check_reachability(
+        soc_pct=80.0,
+        distance_km=120.0,
+        payload_t=12.0,
+        speed_kph=80.0,
+        gradient_pct=0.5,
+        temperature_c=2.0,
+        model_path=model_path,
+    )
+    assert result["confidence"] == "high"
+    assert result["energy_needed_kwh"] == pytest.approx(result["model_kwh"], rel=1e-6)
     assert result["energy_needed_kwh"] >= 0.0
     assert result["remaining_range_km"] >= 0.0
     # Margin must be internally consistent with the reported sub-values.

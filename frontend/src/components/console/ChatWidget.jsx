@@ -17,7 +17,7 @@ export default function ChatWidget({ open, onOpenChange }) {
             : "opacity-0 translate-y-3 scale-95 pointer-events-none"
         }`}
       >
-        <ChatPanel />
+        <ChatPanel onClose={() => onOpenChange(false)} />
       </div>
 
       <button
@@ -28,9 +28,9 @@ export default function ChatWidget({ open, onOpenChange }) {
       >
         <span
           className="material-symbols-outlined transition-transform duration-200"
-          style={{ fontSize: "26px", transform: open ? "rotate(90deg)" : "none" }}
+          style={{ fontSize: "26px" }}
         >
-          {open ? "close" : "smart_toy"}
+          {open ? "keyboard_arrow_down" : "forum"}
         </span>
       </button>
     </>

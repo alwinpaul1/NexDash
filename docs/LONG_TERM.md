@@ -74,8 +74,8 @@ Truck (FMS/CAN) ──► Telematics gateway ──► Streaming ingest (Kafka/K
   always re-derive labels when the labeling logic improves.
 - **Schema contract & validation:** each ingested batch passes schema + range checks
   (a Great Expectations / Pandera suite) mirroring the bounds already encoded in
-  `data_gen.py` (distance 1–120 km, payload 0–22 t, speed 30–90 kph, gradient ±6%,
-  temperature −15..40 °C, wind 0–12 m/s). Out-of-contract rows are quarantined, not
+  `data_gen.py` (distance 1–350 km, payload 0–22 t, speed 30–90 kph, gradient ±6%
+  attenuated on long legs, temperature −15..40 °C, wind 0–12 m/s). Out-of-contract rows are quarantined, not
   silently dropped — quarantine volume is itself a monitored signal.
 
 ### 1.3 Segmentation and label derivation
@@ -175,8 +175,11 @@ the real-world reliability that buffer is meant to provide.
 
 ### 3.4 Calibration and uncertainty
 Beyond point error, the challenger must be **calibrated**: predicted confidence bands
-(`confidence_note` in `range.py` currently cites the MAE band) should match observed error
-coverage. We track interval coverage (e.g. does the stated band contain the true value ~90%
+should match observed error coverage. The seed already reports the model's real held-out
+MAE in `range.py`'s `confidence_note` and runs a first-principles physics cross-check that
+flags `confidence: "low"` when the two estimates diverge (**implemented** — this is the
+seed's sanity-clamp). The long-term extension is to validate that band against *measured*
+error: we track interval coverage (e.g. does the stated band contain the true value ~90%
 of the time?) and reject challengers that are sharper but over-confident.
 
 ### 3.5 Champion / challenger + shadow mode (online gate)
@@ -241,7 +244,7 @@ Models silently rot as the world moves. We monitor four layers, each with alerti
 
 ### 5.1 What we version
 Every artifact is content-addressed and joined by a single `model_version`:
-- **Code** (git SHA), **dependencies** (lockfile hash) — extends the seed's pinned deps.
+- **Code** (git SHA), **dependencies** (a lockfile hash; the seed's `requirements.txt` would be pinned to exact versions as part of this step).
 - **Data snapshot** (immutable dataset hash; the seed already writes a deterministic
   `dataset.csv`).
 - **Feature transform** (`features.py` `ENGINEERED_COLUMNS` + transform logic version) —

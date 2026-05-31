@@ -115,7 +115,7 @@ function EmptyState({ onPick, disabled }) {
   );
 }
 
-export default function ChatPanel() {
+export default function ChatPanel({ onClose }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -198,10 +198,7 @@ export default function ChatPanel() {
     <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm overflow-hidden flex flex-col h-[520px]">
       {/* Header — mirrors the Live Range Check gradient treatment. */}
       <div className="px-5 py-4 bg-gradient-to-r from-primary to-accent text-on-primary">
-        <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined">smart_toy</span>
-          <h2 className="font-headline font-bold text-lg">Dispatcher Assistant</h2>
-        </div>
+        <h2 className="font-headline font-bold text-lg">Dispatcher Assistant</h2>
         <p className="text-sm text-on-primary/85 mt-0.5">
           Ask about range, energy &amp; reachability — eActros 600
         </p>

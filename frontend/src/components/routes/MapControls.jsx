@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useMap } from "react-leaflet";
 
 // Light-theme map control cluster: zoom +/-, locate, fullscreen.
@@ -6,6 +7,16 @@ import { useMap } from "react-leaflet";
 // whole component MUST be a child of <MapContainer>).
 export default function MapControls({ isFullscreen, onToggleFullscreen, onLocated }) {
   const map = useMap();
+
+  // Track zoom so we can grey-out + disable the zoom buttons at the limits.
+  const [zoom, setZoom] = useState(map.getZoom());
+  useEffect(() => {
+    const onZoom = () => setZoom(map.getZoom());
+    map.on("zoomend", onZoom);
+    return () => map.off("zoomend", onZoom);
+  }, [map]);
+  const atMax = zoom >= map.getMaxZoom();
+  const atMin = zoom <= map.getMinZoom();
 
   const locate = () => {
     if (!navigator.geolocation) {
@@ -32,16 +43,27 @@ export default function MapControls({ isFullscreen, onToggleFullscreen, onLocate
 
   const btn =
     "w-9 h-9 flex items-center justify-center bg-surface-lowest text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-colors";
+  // Disabled (limit reached): greyed and non-interactive.
+  const disabledBtn =
+    "w-9 h-9 flex items-center justify-center bg-surface-lowest text-on-surface-variant/30 cursor-not-allowed";
 
   return (
-    <div className="absolute bottom-24 right-4 z-[1000] flex flex-col gap-2">
+    <div
+      className={
+        "absolute right-4 z-[1000] flex flex-col gap-2 " +
+        // Lift above the global chat FAB in fullscreen; otherwise sit just above
+        // the attribution bar so the two don't overlap.
+        (isFullscreen ? "bottom-24" : "bottom-9")
+      }
+    >
       {/* Zoom cluster */}
       <div className="flex flex-col rounded-xl overflow-hidden border border-outline-variant/60 shadow-sm divide-y divide-outline-variant/50">
         <button
           type="button"
           onClick={() => map.zoomIn()}
+          disabled={atMax}
           aria-label="Zoom in"
-          className={btn}
+          className={atMax ? disabledBtn : btn}
         >
           <span className="material-symbols-outlined" style={{ fontSize: "20px" }}>
             add
@@ -50,8 +72,9 @@ export default function MapControls({ isFullscreen, onToggleFullscreen, onLocate
         <button
           type="button"
           onClick={() => map.zoomOut()}
+          disabled={atMin}
           aria-label="Zoom out"
-          className={btn}
+          className={atMin ? disabledBtn : btn}
         >
           <span className="material-symbols-outlined" style={{ fontSize: "20px" }}>
             remove

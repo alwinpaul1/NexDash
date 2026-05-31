@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   MapContainer,
   TileLayer,
@@ -93,7 +93,16 @@ const TILE_STYLES = MAPTILER_KEY
       },
     };
 
-const DEFAULT_LAYERS = { route: true, charging: true, stops: true, drain: true };
+const DEFAULT_LAYERS = { route: true, charging: true, stops: true, drain: true, incidents: true };
+
+// Friendly charge-duration label, e.g. 71 -> "71 min", 132 -> "2 h 12 min".
+function fmtChargeTime(min) {
+  if (!Number.isFinite(min) || min <= 0) return "";
+  if (min < 90) return `${Math.round(min)} min`;
+  const h = Math.floor(min / 60);
+  const m = Math.round(min % 60);
+  return m ? `${h} h ${m} min` : `${h} h`;
+}
 
 function socColor(soc) {
   if (soc >= 50) return "#00d166";
@@ -102,18 +111,29 @@ function socColor(soc) {
 }
 
 function pinIcon(kind) {
-  const color = kind === "origin" ? "#006d32" : "#0059bb";
-  const icon = kind === "origin" ? "trip_origin" : "flag";
+  const color = kind === "origin" ? "#1ca64c" : "#0059bb";
+  // Teardrop location pin: colored drop, white ring. Origin shows a center dot,
+  // destinations a small flag glyph inside the ring.
+  const center =
+    kind === "origin"
+      ? `<circle cx="12" cy="12" r="3" fill="${color}"/>`
+      : "";
+  const flag =
+    kind === "origin"
+      ? ""
+      : `<span class="material-symbols-outlined" style="position:absolute;left:19px;top:18px;transform:translate(-50%,-50%);font-size:14px;color:${color};">flag</span>`;
   return L.divIcon({
     className: "",
-    html: `<div style="transform:translate(-50%,-100%);display:flex;flex-direction:column;align-items:center;">
-      <div style="background:${color};color:#fff;border-radius:9999px;width:30px;height:30px;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,0.3);border:2px solid #fff;">
-        <span class="material-symbols-outlined" style="font-size:18px;">${icon}</span>
-      </div>
-      <div style="width:2px;height:8px;background:${color};"></div>
+    html: `<div style="position:relative;width:38px;height:48px;filter:drop-shadow(0 3px 4px rgba(0,0,0,0.35));">
+      <svg width="38" height="48" viewBox="0 0 24 32" xmlns="http://www.w3.org/2000/svg">
+        <path d="M12 0C5.37 0 0 5.37 0 12c0 8.5 10.5 18.7 11.1 19.3a1.3 1.3 0 0 0 1.8 0C13.5 30.7 24 20.5 24 12 24 5.37 18.63 0 12 0z" fill="${color}" stroke="#fff" stroke-width="1.5"/>
+        <circle cx="12" cy="12" r="6.5" fill="#fff"/>
+        ${center}
+      </svg>
+      ${flag}
     </div>`,
-    iconSize: [30, 40],
-    iconAnchor: [0, 0],
+    iconSize: [38, 48],
+    iconAnchor: [19, 48],
   });
 }
 
@@ -134,6 +154,33 @@ function chargeIcon(num) {
     className: "",
     html: `<div style="transform:translate(-50%,-50%);background:#f59e0b;color:#fff;border-radius:9999px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font:600 12px Inter,sans-serif;border:2px solid #fff;box-shadow:0 2px 5px rgba(0,0,0,0.3);">${num}</div>`,
     iconSize: [24, 24],
+    iconAnchor: [0, 0],
+  });
+}
+
+// Traffic-incident glyph + color (TomTom iconCategory / magnitudeOfDelay).
+const INCIDENT_GLYPH = {
+  1: "warning", // accident
+  6: "traffic", // jam
+  7: "block", // lane closed
+  8: "block", // road closed
+  9: "construction", // road works
+  14: "car_repair", // broken-down vehicle
+};
+function incidentColor(mag) {
+  return mag >= 3 ? "#ba1a1a" : mag === 2 ? "#f97316" : "#f59e0b";
+}
+function incidentGlyph(cat) {
+  return INCIDENT_GLYPH[cat] || "report";
+}
+function incidentIcon(inc) {
+  const color = incidentColor(inc.magnitude);
+  return L.divIcon({
+    className: "",
+    html: `<div style="transform:translate(-50%,-50%);background:${color};color:#fff;border-radius:9999px;width:26px;height:26px;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 2px 5px rgba(0,0,0,0.35);">
+      <span class="material-symbols-outlined" style="font-size:16px;">${incidentGlyph(inc.category)}</span>
+    </div>`,
+    iconSize: [26, 26],
     iconAnchor: [0, 0],
   });
 }
@@ -175,21 +222,98 @@ function buildSocSegments(geometry, socProfile, totalKm) {
     return last.soc;
   };
 
+  // Break a new sub-segment whenever the bucket color changes OR the rounded
+  // battery percentage ticks down by 1, so each hoverable piece carries a tight
+  // "X% → Y%" transition (matching the reference battery-level tooltip).
+  const soc0 = socAt(0);
   const segs = [];
-  let cur = { positions: [geometry[0]], color: socColor(socAt(0)) };
+  let cur = { positions: [geometry[0]], color: socColor(soc0), startSoc: soc0, endSoc: soc0 };
+  let curBand = Math.round(soc0);
   for (let i = 1; i < geometry.length; i++) {
     const km = cum[i] * scale;
-    const color = socColor(socAt(km));
-    if (color !== cur.color) {
-      cur.positions.push(geometry[i]);
+    const soc = socAt(km);
+    const color = socColor(soc);
+    const band = Math.round(soc);
+    cur.positions.push(geometry[i]);
+    cur.endSoc = soc;
+    if ((color !== cur.color || band !== curBand) && i < geometry.length - 1) {
       segs.push(cur);
-      cur = { positions: [geometry[i]], color };
-    } else {
-      cur.positions.push(geometry[i]);
+      cur = { positions: [geometry[i]], color, startSoc: soc, endSoc: soc };
+      curBand = band;
     }
   }
-  segs.push(cur);
+  if (cur.positions.length > 1) segs.push(cur);
   return segs;
+}
+
+// A single marker that travels the route source -> destination on a loop,
+// giving a live sense of direction/progress without cluttering the line.
+// Animated imperatively via requestAnimationFrame (rAF timestamp only — no
+// per-frame React re-render) and torn down cleanly when the route changes.
+function RouteRunner({ geometry }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!Array.isArray(geometry) || geometry.length < 2) return undefined;
+
+    const toRad = (d) => (d * Math.PI) / 180;
+    const cum = [0];
+    for (let i = 1; i < geometry.length; i++) {
+      const a = geometry[i - 1];
+      const b = geometry[i];
+      const R = 6371;
+      const dLat = toRad(b[0] - a[0]);
+      const dLng = toRad(b[1] - a[1]);
+      const h =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos(toRad(a[0])) * Math.cos(toRad(b[0])) * Math.sin(dLng / 2) ** 2;
+      cum.push(cum[i - 1] + 2 * R * Math.asin(Math.sqrt(h)));
+    }
+    const total = cum[cum.length - 1] || 1;
+
+    const icon = L.divIcon({
+      className: "",
+      html: `<div class="route-runner"><span class="rr-halo"></span><video class="rr-video" src="/truck.mp4" autoplay loop muted playsinline></video></div>`,
+      iconSize: [40, 40],
+      iconAnchor: [20, 20],
+    });
+    const marker = L.marker(geometry[0], {
+      icon,
+      interactive: false,
+      keyboard: false,
+      zIndexOffset: 650,
+    }).addTo(map);
+
+    // One lap takes ~6 s, gently scaled by route length and clamped.
+    const duration = Math.min(9000, Math.max(4500, total * 12));
+
+    const posAt = (d) => {
+      if (d <= 0) return geometry[0];
+      if (d >= total) return geometry[geometry.length - 1];
+      let lo = 1;
+      while (lo < cum.length - 1 && cum[lo] < d) lo++;
+      const a = geometry[lo - 1];
+      const b = geometry[lo];
+      const segLen = cum[lo] - cum[lo - 1] || 1;
+      const f = (d - cum[lo - 1]) / segLen;
+      return [a[0] + f * (b[0] - a[0]), a[1] + f * (b[1] - a[1])];
+    };
+
+    let raf;
+    let start = null;
+    const tick = (ts) => {
+      if (start === null) start = ts;
+      const t = ((ts - start) % duration) / duration; // 0..1, loops
+      marker.setLatLng(posAt(t * total));
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      map.removeLayer(marker);
+    };
+  }, [map, geometry]);
+  return null;
 }
 
 function FitBounds({ geometry }) {
@@ -383,6 +507,9 @@ export default function RouteMap({ plan, waypoints = [] }) {
   const stops = (plan?.chargingStops || []).filter(
     (s) => Number.isFinite(s.lat) && Number.isFinite(s.lng)
   );
+  const incidents = (plan?.traffic?.incidents || []).filter(
+    (i) => Number.isFinite(i.lat) && Number.isFinite(i.lng)
+  );
 
   const tile = TILE_STYLES[tileStyle];
 
@@ -401,21 +528,21 @@ export default function RouteMap({ plan, waypoints = [] }) {
         maxZoom={18}
         scrollWheelZoom={true}
         zoomControl={false}
-        attributionControl={false}
+        attributionControl={true}
         style={{ height: "100%", width: "100%", background: "#eff4ff" }}
       >
         <TileLayer
           key={tileStyle}
           url={tile.url}
           attribution={tile.attribution}
-          subdomains={tile.subdomains}
+          subdomains={tile.subdomains || "abc"}
         />
         {/* Transparent labels/roads overlay (satellite hybrid when provider has no native labels). */}
         {tile.overlay && (
           <TileLayer
             key={`${tileStyle}-overlay`}
             url={tile.overlay}
-            subdomains={tile.subdomains}
+            subdomains={tile.subdomains || "abc"}
           />
         )}
 
@@ -434,35 +561,53 @@ export default function RouteMap({ plan, waypoints = [] }) {
         {layers.route &&
           (layers.drain ? (
             socSegs.map((seg, i) => (
-              <Polyline
-                key={`soc-${i}`}
-                positions={seg.positions}
-                pathOptions={{
-                  color: seg.color,
-                  weight: 5,
-                  opacity: 0.92,
-                  lineCap: "round",
-                  lineJoin: "round",
-                }}
-              />
+              <Fragment key={`soc-${i}`}>
+                <Polyline
+                  positions={seg.positions}
+                  pathOptions={{
+                    color: seg.color,
+                    weight: 8,
+                    opacity: 0.95,
+                    lineCap: "round",
+                    lineJoin: "round",
+                  }}
+                />
+                {/* Invisible wide hit-line widens the hover target; the sticky
+                    tooltip then follows the cursor showing the battery drain. */}
+                <Polyline
+                  positions={seg.positions}
+                  pathOptions={{ color: seg.color, weight: 16, opacity: 0 }}
+                >
+                  <Tooltip sticky direction="top" offset={[0, -6]} className="battery-tip">
+                    <span className="bt-label">Battery Level</span>
+                    <span className="bt-value">
+                      <span className="bt-dot" style={{ background: seg.color }} />
+                      {Math.round(seg.startSoc)}% → {Math.round(seg.endSoc)}%
+                    </span>
+                  </Tooltip>
+                </Polyline>
+              </Fragment>
             ))
           ) : geometry.length >= 2 ? (
             <Polyline
               positions={geometry}
               pathOptions={{
                 color: "#006d32",
-                weight: 5,
-                opacity: 0.92,
+                weight: 8,
+                opacity: 0.95,
                 lineCap: "round",
                 lineJoin: "round",
               }}
             />
           ) : null)}
 
+        {/* A single live "runner" travelling source -> destination on a loop. */}
+        {layers.route && geometry.length >= 2 && <RouteRunner geometry={geometry} />}
+
         {/* Planned stops — origin + destinations. */}
         {layers.stops && origin && Number.isFinite(origin.lat) && (
           <Marker position={[origin.lat, origin.lng]} icon={pinIcon("origin")}>
-            <Tooltip direction="top" offset={[0, -28]}>
+            <Tooltip direction="top" offset={[0, -46]}>
               <span style={{ fontWeight: 600 }}>Origin</span>
               <br />
               {origin.label}
@@ -474,7 +619,7 @@ export default function RouteMap({ plan, waypoints = [] }) {
           dests.map((d, i) =>
             Number.isFinite(d.lat) ? (
               <Marker key={`dest-${i}`} position={[d.lat, d.lng]} icon={pinIcon("dest")}>
-                <Tooltip direction="top" offset={[0, -28]}>
+                <Tooltip direction="top" offset={[0, -46]}>
                   <span style={{ fontWeight: 600 }}>Destination {i + 1}</span>
                   <br />
                   {d.label}
@@ -487,12 +632,62 @@ export default function RouteMap({ plan, waypoints = [] }) {
         {layers.charging &&
           stops.map((s, i) => (
             <Marker key={`charge-${i}`} position={[s.lat, s.lng]} icon={chargeIcon(i + 1)}>
-              <Tooltip direction="top" offset={[0, -12]}>
-                <span style={{ fontWeight: 600 }}>{s.name || `Charging Stop ${i + 1}`}</span>
-                {Number.isFinite(s.kWh) ? (
-                  <>
-                    <br />+{Math.round(s.kWh)} kWh
-                  </>
+              <Tooltip direction="top" offset={[0, -14]} className="map-tip charge-tip">
+                <span className="ct-head">
+                  <span className="material-symbols-outlined mt-icon" style={{ color: "#f5a623" }}>
+                    ev_station
+                  </span>
+                  <span className="mt-name">
+                    Stop {i + 1}: {s.name || `Charging Stop ${i + 1}`}
+                  </span>
+                </span>
+                {(s.maxPowerKw || (s.connectors && s.connectors.length)) && (
+                  <span className="ct-line">
+                    {s.maxPowerKw ? `⚡ ${s.maxPowerKw} kW` : "⚡"}
+                    {s.connectors && s.connectors.length
+                      ? ` · ${s.connectors.map((c) => c.label).join(", ")}`
+                      : ""}
+                  </span>
+                )}
+                <span className="ct-line ct-sub">
+                  {s.availability ? (
+                    <span className="ct-avail">
+                      {s.availability.available} of {s.availability.total} free
+                    </span>
+                  ) : null}
+                  {Number.isFinite(s.kWh) ? (
+                    <span>
+                      +{Math.round(s.kWh)} kWh
+                      {Number.isFinite(s.chargeMinutes) ? ` · ~${fmtChargeTime(s.chargeMinutes)}` : ""}
+                    </span>
+                  ) : null}
+                </span>
+              </Tooltip>
+            </Marker>
+          ))}
+
+        {/* Live traffic incidents (accidents, jams, closures, road works). */}
+        {layers.incidents &&
+          incidents.map((inc, i) => (
+            <Marker
+              key={`inc-${i}`}
+              position={[inc.lat, inc.lng]}
+              icon={incidentIcon(inc)}
+              zIndexOffset={500}
+            >
+              <Tooltip direction="top" offset={[0, -14]} className="map-tip">
+                <span
+                  className="material-symbols-outlined mt-icon"
+                  style={{ color: incidentColor(inc.magnitude) }}
+                >
+                  {incidentGlyph(inc.category)}
+                </span>
+                <span className="mt-name">
+                  {inc.description}
+                  {inc.road ? ` · ${inc.road}` : ""}
+                </span>
+                {inc.delayS > 0 ? (
+                  <span className="mt-meta">+{Math.round(inc.delayS / 60)} min</span>
                 ) : null}
               </Tooltip>
             </Marker>

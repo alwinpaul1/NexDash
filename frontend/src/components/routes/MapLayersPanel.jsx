@@ -7,6 +7,7 @@ const ROWS = [
   { key: "charging", icon: "ev_station", label: "Charging Stations", color: "#f59e0b" },
   { key: "stops", icon: "flag", label: "Planned Stops", color: "#0059bb" },
   { key: "drain", icon: "battery_charging_full", label: "Battery Drain", color: "#00d166" },
+  { key: "incidents", icon: "warning", label: "Traffic Incidents", color: "#ba1a1a" },
 ];
 
 export default function MapLayersPanel({ layers, onToggle }) {

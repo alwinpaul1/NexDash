@@ -1,6 +1,8 @@
 // Elevation profile area chart from plan.elevationProfile ([{distKm, elevM}]),
 // with charging stops marked along the distance axis. Pure inline SVG (no deps).
 
+import { useRef, useState } from "react";
+
 function niceCeil(v) {
   if (v <= 0) return 1;
   const mag = Math.pow(10, Math.floor(Math.log10(v)));
@@ -10,6 +12,8 @@ function niceCeil(v) {
 }
 
 export default function ElevationProfile({ profile = [], chargingStops = [] }) {
+  const svgRef = useRef(null);
+  const [hover, setHover] = useState(null);
   const pts = (profile || []).filter(
     (p) => p && Number.isFinite(p.distKm) && Number.isFinite(p.elevM)
   );
@@ -84,6 +88,27 @@ export default function ElevationProfile({ profile = [], chargingStops = [] }) {
     .map((s) => (Number.isFinite(s.distKm) ? s.distKm : s.atKm))
     .filter((d) => Number.isFinite(d) && d > 0 && d < maxDist);
 
+  // Map cursor → distance along the route, then read the interpolated elevation.
+  // The SVG uses preserveAspectRatio="none", so viewBox X maps linearly to pixels.
+  const handleMove = (e) => {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect || rect.width === 0) return;
+    const relX = e.clientX - rect.left;
+    const vbX = (relX / rect.width) * W;
+    const dist = Math.min(Math.max(((vbX - padL) / plotW) * maxDist, 0), maxDist);
+    const elev = elevAt(dist);
+    setHover({
+      distKm: dist,
+      elevM: elev,
+      // Pixel positions (relative to the SVG box) for the HTML overlay.
+      px: (x(dist) / W) * rect.width,
+      py: (y(elev) / H) * rect.height,
+      topPx: (padT / H) * rect.height,
+      botPx: ((padT + plotH) / H) * rect.height,
+      flip: relX > rect.width * 0.62,
+    });
+  };
+
   return (
     <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm p-5">
       <div className="flex items-center gap-2 mb-1">
@@ -95,7 +120,15 @@ export default function ElevationProfile({ profile = [], chargingStops = [] }) {
           {Math.round(minElev)}–{Math.round(maxElev)} m
         </span>
       </div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-56" preserveAspectRatio="none">
+      <div className="relative">
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${W} ${H}`}
+        className="w-full h-56"
+        preserveAspectRatio="none"
+        onMouseMove={handleMove}
+        onMouseLeave={() => setHover(null)}
+      >
         <defs>
           <linearGradient id="elevFill" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="#00d166" stopOpacity="0.35" />
@@ -138,7 +171,43 @@ export default function ElevationProfile({ profile = [], chargingStops = [] }) {
             <circle cx={x(d)} cy={y(elevAt(d))} r="5" fill="#f59e0b" stroke="#ffffff" strokeWidth="2" />
           </g>
         ))}
+
+        {/* Hover crosshair (vertical guide line) */}
+        {hover && (
+          <line
+            x1={x(hover.distKm)}
+            y1={padT}
+            x2={x(hover.distKm)}
+            y2={padT + plotH}
+            stroke="#006d32"
+            strokeWidth="1"
+            strokeDasharray="3 3"
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
       </svg>
+
+      {/* Hover dot + tooltip as crisp HTML overlay (undistorted by the SVG scale). */}
+      {hover && (
+        <>
+          <div
+            className="pointer-events-none absolute z-10 w-3 h-3 rounded-full bg-primary border-2 border-white shadow"
+            style={{ left: hover.px, top: hover.py, transform: "translate(-50%, -50%)" }}
+          />
+          <div
+            className="pointer-events-none absolute z-10 rounded-xl bg-on-surface text-white shadow-lg px-3 py-2 whitespace-nowrap"
+            style={{
+              left: hover.px,
+              top: hover.topPx,
+              transform: `translate(${hover.flip ? "calc(-100% - 10px)" : "10px"}, 0)`,
+            }}
+          >
+            <div className="text-[13px] font-semibold leading-tight">{Math.round(hover.elevM)} m</div>
+            <div className="text-[11px] text-white/70 leading-tight">{Math.round(hover.distKm)} km</div>
+          </div>
+        </>
+      )}
+      </div>
       {stops.length > 0 && (
         <div className="flex items-center gap-1.5 mt-1 text-[11px] text-on-surface-variant">
           <span className="w-2.5 h-2.5 rounded-full bg-amber-500 ring-1 ring-white"></span>

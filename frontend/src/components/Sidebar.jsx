@@ -1,7 +1,6 @@
 const NAV = [
   { id: "dashboard", label: "Dashboard", icon: "grid_view" },
   { id: "routes", label: "Routes", icon: "route" },
-  { id: "assistant", label: "Assistant", icon: "smart_toy" },
 ];
 
 export default function Sidebar({ view = "dashboard", onNavigate }) {
@@ -14,7 +13,7 @@ export default function Sidebar({ view = "dashboard", onNavigate }) {
   }
 
   return (
-    <aside className="hidden lg:flex w-64 shrink-0 flex-col bg-surface-lowest border-r border-outline-variant/60">
+    <aside className="hidden lg:flex w-64 shrink-0 flex-col self-start sticky top-0 bg-surface-lowest border-r border-outline-variant/60 rounded-br-2xl">
       {/* Brand */}
       <div className="flex items-center gap-3 px-6 h-16 border-b border-outline-variant/40">
         <img
@@ -29,7 +28,7 @@ export default function Sidebar({ view = "dashboard", onNavigate }) {
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 px-3 py-5 space-y-1">
+      <nav className="px-3 py-5 space-y-1">
         {NAV.map((item) => {
           const active = item.id === view;
           const href = item.id === "range-check" ? "#range-check" : "#";

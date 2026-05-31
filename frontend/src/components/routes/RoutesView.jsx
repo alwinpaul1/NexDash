@@ -29,6 +29,9 @@ const initialPlanner = {
   startSoc: 100,
   minSoc: 15,
   payloadKg: 0,
+  reservePct: 10,
+  maxDetourKm: 50,
+  maxChargeKw: 400,
   origin: null,
   destinations: [newDest()],
   departure: nowLocalISO(),
@@ -43,6 +46,9 @@ export default function RoutesView() {
   const setStartSoc = useCallback((v) => setPlanner((p) => ({ ...p, startSoc: v })), []);
   const setMinSoc = useCallback((v) => setPlanner((p) => ({ ...p, minSoc: v })), []);
   const setPayloadKg = useCallback((v) => setPlanner((p) => ({ ...p, payloadKg: v })), []);
+  const setReservePct = useCallback((v) => setPlanner((p) => ({ ...p, reservePct: v })), []);
+  const setMaxDetourKm = useCallback((v) => setPlanner((p) => ({ ...p, maxDetourKm: v })), []);
+  const setMaxChargeKw = useCallback((v) => setPlanner((p) => ({ ...p, maxChargeKw: v })), []);
   const setOrigin = useCallback(
     (o) => setPlanner((p) => ({ ...p, origin: o })),
     []
@@ -76,6 +82,17 @@ export default function RoutesView() {
         if (swap < 0 || swap >= p.destinations.length) return p;
         const next = p.destinations.slice();
         [next[idx], next[swap]] = [next[swap], next[idx]];
+        return { ...p, destinations: next };
+      }),
+    []
+  );
+  const reorderDestination = useCallback(
+    (from, to) =>
+      setPlanner((p) => {
+        const next = p.destinations.slice();
+        if (from < 0 || from >= next.length || to < 0 || to >= next.length) return p;
+        const [moved] = next.splice(from, 1);
+        next.splice(to, 0, moved);
         return { ...p, destinations: next };
       }),
     []
@@ -130,11 +147,14 @@ export default function RoutesView() {
             onStartSoc={setStartSoc}
             onMinSoc={setMinSoc}
             onPayloadKg={setPayloadKg}
+            onReservePct={setReservePct}
+            onMaxDetourKm={setMaxDetourKm}
+            onMaxChargeKw={setMaxChargeKw}
             onSetOrigin={setOrigin}
             onAddDestination={addDestination}
             onUpdateDestination={updateDestination}
             onRemoveDestination={removeDestination}
-            onMoveDestination={moveDestination}
+            onReorderDestination={reorderDestination}
             onDeparture={setDeparture}
             onOptimize={onOptimize}
             onReset={reset}
@@ -144,7 +164,7 @@ export default function RoutesView() {
         {/* Right: map + results */}
         <div className="xl:col-span-2 space-y-6">
           <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm overflow-hidden">
-            <div className="h-[420px]">
+            <div className="h-[520px]">
               <RouteMap plan={plan} waypoints={waypoints} />
             </div>
           </div>

@@ -43,7 +43,7 @@ FEATURE_BOUNDS = {
     "speed_kph": (30.0, 85.0),
     "gradient_pct": (-6.0, 6.0),
     "temperature_c": (-15.0, 40.0),
-    "wind_mps": (0.0, 12.0),
+    "wind_mps": (-12.0, 12.0),  # signed headwind component (negative = tailwind)
 }
 
 

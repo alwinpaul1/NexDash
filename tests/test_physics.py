@@ -175,14 +175,15 @@ def test_plausible_kwh_per_km_for_midload_flat_segment() -> None:
     WHY: published eActros 600 real-world consumption is roughly 1.0-1.6 kWh/km
     at full GVW and motorway speed. This baseline is mid-load (11 t) at a
     moderate 70 km/h with no HVAC penalty, which sits at the low end of that
-    range, so we allow 0.9-1.6. Anchoring the absolute scale (not just relative
-    trends) catches gross unit-conversion errors (e.g. Joules vs kWh) that
-    monotonicity tests miss.
+    range. With the upgraded physics (rho(20 C) < the old 1.225 constant, and a
+    sub-1.0 speed factor below 80 km/h) this point lands ~0.94 kWh/km, so we
+    allow 0.85-1.6 — the 0.85 floor is the documented empty/downhill low end and
+    still catches gross unit-conversion errors (e.g. Joules vs kWh).
     """
     distance_km = BASE["distance_km"]
     total = segment_energy_kwh(**BASE)
     kwh_per_km = total / distance_km
-    assert 0.9 <= kwh_per_km <= 1.6, f"kWh/km out of band: {kwh_per_km:.3f}"
+    assert 0.85 <= kwh_per_km <= 1.6, f"kWh/km out of band: {kwh_per_km:.3f}"
 
 
 def test_plausible_kwh_per_km_for_fullload_motorway_segment() -> None:
@@ -226,6 +227,117 @@ def test_zero_distance_yields_zero_energy() -> None:
     bd = energy_breakdown(**{**BASE, "distance_km": 0.0})
     assert bd["total"] == 0.0
     assert all(v == 0.0 for v in bd.values())
+
+
+def test_air_density_pivot_and_cold_denser() -> None:
+    """Air density follows the ideal gas law: continuous with the old constant
+    at 15 C, and denser in the cold than the heat.
+
+    WHY: this is the new winter-drag channel. Pinning rho(15)=1.225 guards the
+    continuity with the previous constant and a Celsius-vs-Kelvin bug (which
+    would diverge near 0 C); rho(-10) > rho(35) encodes "cold air is denser".
+    """
+    from nexdash.physics import _air_density
+
+    assert _air_density(15.0) == pytest.approx(1.2250, abs=1e-3)
+    assert _air_density(-10.0) > _air_density(35.0)
+
+
+def test_cold_denser_air_raises_aero() -> None:
+    """Aerodynamic drag must be higher in the cold purely via air density.
+
+    WHY: rho rises as temperature falls (ideal gas law), so the aero component
+    scales up in winter. The ratio must match the density ratio exactly, proving
+    it is the density channel and not some other temperature term leaking in.
+    """
+    from nexdash.physics import _air_density
+
+    cold = energy_breakdown(**{**BASE, "temperature_c": -10.0})
+    warm = energy_breakdown(**{**BASE, "temperature_c": 20.0})
+    assert cold["aero"] > warm["aero"]
+    assert cold["aero"] / warm["aero"] == pytest.approx(
+        _air_density(-10.0) / _air_density(20.0), rel=1e-6
+    )
+
+
+def test_crr_rises_with_speed() -> None:
+    """Rolling resistance must rise modestly with speed (SAE J2452).
+
+    WHY: tyre rolling resistance is not speed-independent. Comparing equal-
+    distance segments (rolling energy depends on distance, not speed) isolates
+    the Crr(speed) effect from the quadratic aero term.
+    """
+    slow = energy_breakdown(**{**BASE, "speed_kph": 50.0})
+    fast = energy_breakdown(**{**BASE, "speed_kph": 90.0})
+    assert fast["rolling"] > slow["rolling"]
+
+
+def test_cold_raises_rolling_but_heat_does_not() -> None:
+    """Cold raises rolling resistance; heat does not lower it (cold-side ramp).
+
+    WHY: cold tyre-pressure loss and rubber stiffening raise Crr below ~20 C,
+    while above the reference the factor is clamped to 1.0 (we don't model a
+    warm-tyre RR reduction). This pins the asymmetric, cold-only ramp.
+    """
+    cold = energy_breakdown(**{**BASE, "temperature_c": -10.0})["rolling"]
+    warm = energy_breakdown(**{**BASE, "temperature_c": 20.0})["rolling"]
+    hot = energy_breakdown(**{**BASE, "temperature_c": 35.0})["rolling"]
+    assert cold > warm
+    assert hot == pytest.approx(warm, rel=1e-9)
+
+
+def test_cold_lowers_regen_recovery() -> None:
+    """A cold battery recovers less downhill energy than a warm one.
+
+    WHY: the BMS caps charge-acceptance current in the cold, so regen tapers —
+    a real temperature channel that is independent of HVAC. Same descent, two
+    temperatures: the cold case must credit back strictly less energy.
+    """
+    cold = energy_breakdown(**{**BASE, "temperature_c": -10.0, "gradient_pct": -7.0})
+    warm = energy_breakdown(**{**BASE, "temperature_c": 20.0, "gradient_pct": -7.0})
+    assert cold["regen"] < warm["regen"]
+
+
+def test_steep_descent_recovers_smaller_fraction_than_gentle() -> None:
+    """Very steep descents recover a smaller *fraction* of potential energy.
+
+    WHY: beyond the regen power cap, friction brakes dissipate the excess, so
+    the recovered fraction falls on steep grades. Normalising regen by the
+    gravitational potential energy isolates the fraction from the larger raw PE
+    of a steeper descent. Mild grades keep the full baseline fraction.
+    """
+    import math
+
+    mass_kg = TRUCK.kerb_mass_kg + BASE["payload_t"] * 1000.0
+    d_m = BASE["distance_km"] * 1000.0
+
+    def recovered_fraction(grade_pct):
+        bd = energy_breakdown(**{**BASE, "temperature_c": 20.0, "gradient_pct": grade_pct})
+        pe_kwh = abs(mass_kg * 9.81 * math.sin(math.atan(grade_pct / 100.0)) * d_m) / 3.6e6
+        return bd["regen"] / pe_kwh
+
+    gentle = recovered_fraction(-3.0)  # below the knee -> full baseline
+    steep = recovered_fraction(-9.0)  # past the knee -> tapered
+    assert steep < gentle
+
+
+def test_gentle_mild_descent_keeps_baseline_regen() -> None:
+    """A gentle descent in mild weather keeps the full baseline regen fraction.
+
+    WHY: the regen taper must touch ONLY the cold/steep tails. At -4 % / 20 C
+    (below the 5 % knee, at/above the 10 C temperature) the recovered fraction
+    must equal the unchanged base regen_eff, protecting the bulk of the
+    distribution and the published mixed-route average from drifting.
+    """
+    import math
+
+    bd = energy_breakdown(**{**BASE, "temperature_c": 20.0, "gradient_pct": -4.0})
+    mass_kg = TRUCK.kerb_mass_kg + BASE["payload_t"] * 1000.0
+    d_m = BASE["distance_km"] * 1000.0
+    pe_kwh = abs(mass_kg * 9.81 * math.sin(math.atan(-4.0 / 100.0)) * d_m) / 3.6e6
+    # regen_kwh = pe * regen_eff * drivetrain_eff (round-trip scaling).
+    expected = pe_kwh * TRUCK.regen_eff * TRUCK.drivetrain_eff
+    assert bd["regen"] == pytest.approx(expected, rel=1e-9)
 
 
 def test_default_truck_is_eactros() -> None:

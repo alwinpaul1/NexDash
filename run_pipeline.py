@@ -138,24 +138,31 @@ def _slice_table(section: dict[str, Any], dimension_label: str) -> str:
     return "\n".join(lines)
 
 
-def _worst_slice(section: dict[str, Any]) -> tuple[str, float] | None:
-    """Return the (bin_name, mape_pct) of the worst-performing slice, or None."""
-    worst: tuple[str, float] | None = None
+def _worst_slice(
+    section: dict[str, Any], by: str = "mae_kwh"
+) -> tuple[str, dict[str, Any]] | None:
+    """Return the (bin_name, stats) of the worst slice ranked by ``by``.
+
+    Ranks by **absolute MAE (kWh) by default, not MAPE**. A dispatcher is
+    stranded by absolute energy error; MAPE explodes on the near-zero-denominator
+    downhill slices, which previously crowned a *harmless* regime (`steep_down`,
+    tiny absolute error) as the headline failure instead of the dangerous
+    `steep_up` climbs that carry the largest real kWh miss.
+    """
+    worst: tuple[str, float, dict[str, Any]] | None = None
     for name, stats in section.items():
         if not isinstance(stats, dict):
             continue
-        mape = stats.get("mape_pct")
-        if mape is None:
-            continue
+        val = stats.get(by)
         try:
-            mape = float(mape)
+            val = float(val)
         except (TypeError, ValueError):
             continue
-        if mape != mape:  # NaN
+        if val != val:  # NaN
             continue
-        if worst is None or mape > worst[1]:
-            worst = (name, mape)
-    return worst
+        if worst is None or val > worst[1]:
+            worst = (name, val, stats)
+    return (worst[0], worst[2]) if worst else None
 
 
 def _figure_links(figure_paths: list[str]) -> str:
@@ -191,38 +198,58 @@ def _where_it_breaks(
         "behind each weak spot."
     )
 
+    def _mae(s: dict[str, Any]) -> float:
+        try:
+            return float(s.get("mae_kwh"))
+        except (TypeError, ValueError):
+            return float("nan")
+
+    def _mape(s: dict[str, Any]) -> float:
+        try:
+            return float(s.get("mape_pct"))
+        except (TypeError, ValueError):
+            return float("nan")
+
     if worst_temp:
+        name, st = worst_temp
         paragraphs.append(
-            f"- **Temperature.** The `{worst_temp[0]}` slice is the weakest by "
-            f"MAPE ({worst_temp[1]:.2f}%). Auxiliary/HVAC draw rises steeply at "
-            "both temperature extremes and is spread over travel time rather "
-            "than distance, so short, slow segments in cold or hot weather have "
-            "an outsized, harder-to-predict auxiliary share."
+            f"- **Temperature.** The `{name}` slice carries the largest absolute "
+            f"error (MAE {_mae(st):.2f} kWh; MAPE {_mape(st):.2f}%). Auxiliary/HVAC "
+            "draw rises at both temperature extremes and is spread over travel "
+            "time rather than distance, so short, slow segments in cold or hot "
+            "weather have an outsized, harder-to-predict auxiliary share."
         )
     if worst_grad:
+        name, st = worst_grad
         paragraphs.append(
-            f"- **Gradient.** The `{worst_grad[0]}` slice carries the largest "
-            f"relative error ({worst_grad[1]:.2f}%). Steep downhill segments "
-            "depend on regenerative recovery, which is capped by `regen_eff` and "
-            "behaves non-linearly; net energy there can approach zero, so even a "
-            "small absolute miss becomes a large *percentage* miss."
+            f"- **Gradient (the safety-critical one).** Ranked by absolute energy, "
+            f"the `{name}` slice is the weakest (MAE {_mae(st):.2f} kWh). Steep "
+            "*climbs* convert payload mass into potential energy fastest, so any "
+            "miss there is a large *absolute* kWh miss — exactly the regime that "
+            "strands a truck. Note the downhill slice can show a huge *percentage* "
+            "error, but its absolute error is tiny (regen drives net energy near "
+            "zero, so the denominator collapses); that is loud in MAPE yet "
+            "operationally harmless, which is why we headline MAE, not MAPE."
         )
     if worst_payload:
+        name, st = worst_payload
         paragraphs.append(
-            f"- **Payload.** The `{worst_payload[0]}` slice shows the highest "
-            f"MAPE ({worst_payload[1]:.2f}%). Payload scales rolling resistance "
-            "and gradient potential energy linearly; empty/very-light runs have "
-            "tiny denominators, inflating percentage error even when absolute "
-            "error stays low."
+            f"- **Payload.** The `{name}` slice shows the highest absolute error "
+            f"(MAE {_mae(st):.2f} kWh; MAPE {_mape(st):.2f}%). Payload scales "
+            "rolling resistance and gradient potential energy linearly, so heavy "
+            "loads both consume the most energy and leave the most room to be "
+            "wrong about it in absolute terms."
         )
 
     paragraphs.append(
-        "Two structural caveats apply. First, labels carry multiplicative "
-        "(~6%) plus additive sensor noise, which sets a hard floor on "
-        "achievable accuracy -- the model cannot beat the noise it was trained "
-        "on. Second, features are sampled independently, so rare *combinations* "
-        "(e.g. heavy payload + steep climb + extreme cold simultaneously) are "
-        "under-represented and should be treated as lower-confidence "
+        "Two structural caveats apply, and both are limits of the *synthetic data*, "
+        "not just the model. First, labels carry multiplicative (~6%) plus additive "
+        "sensor noise, which sets a hard floor on achievable accuracy -- the model "
+        "cannot beat the noise it was trained on. Second, features are sampled from "
+        "independent marginals except for a deliberate gradient/distance coupling "
+        "(long legs cannot sustain steep grades); rare *combinations* of the "
+        "remaining features (e.g. heavy payload + steep climb + extreme cold at "
+        "once) are still under-represented and should be treated as lower-confidence "
         "extrapolations until real telematics data is available."
     )
     return "\n\n".join(paragraphs)

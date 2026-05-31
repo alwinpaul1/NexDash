@@ -28,12 +28,14 @@ Honest approximations
 * **Flat gradient (fallback only).** Without geometry, ``gradient_pct`` is
   fixed at 0 for every chunk, so net climb/descent over the route is assumed to
   cancel out. With geometry, the real per-segment gradient is used.
-* **Wind handling.** The energy model takes a scalar ``wind_mps`` headwind
-  component, but Open-Meteo reports wind as a *magnitude + direction*. We feed
-  the wind **magnitude** straight in as ``wind_mps`` -- an approximation that
-  treats all wind as an effective headwind (it ignores the wind direction
-  relative to the truck's heading, so it is mildly conservative on average).
-  Without geometry a mild constant 3 m/s headwind is assumed throughout.
+* **Wind handling.** The energy model takes a scalar ``wind_mps`` *signed*
+  headwind component (positive = headwind, negative = tailwind). In geometry
+  mode :func:`nexdash.geodata.enrich_route` projects Open-Meteo's wind
+  (magnitude + direction) onto each segment's travel bearing --
+  ``wind_mps = speed * cos(windFromDir - travelBearing)`` -- so a head-on wind
+  adds drag and a following wind relieves it. The model is trained on the same
+  signed convention (see ``data_gen``). Without geometry a mild constant 3 m/s
+  headwind is assumed throughout.
 * **Constant average speed.** A single average speed is derived from
   ``distance_km / duration_h`` and applied to every chunk. Stop-and-go,
   motorway vs. urban mix, and traffic variation within the route are not
@@ -119,6 +121,8 @@ def plan_route(
     start_soc: float,
     min_soc: float,
     payload_kg: float,
+    reserve_pct: float = 10.0,
+    max_charge_kw: float = CHARGER_KW,
     departure: Optional[str] = None,
     temperature_c: float = 15.0,
     waypoints: Optional[list[dict[str, Any]]] = None,
@@ -239,14 +243,18 @@ def plan_route(
         projected_soc = soc - chunk_soc_drop
 
         # --- Charging check: would this chunk push us below the floor? ---
-        if projected_soc < min_soc:
+        # Safety reserve raises the trigger so we charge before reaching the
+        # bare min_soc, keeping a cushion mid-route.
+        charge_floor = min_soc + max(0.0, reserve_pct)
+        if projected_soc < charge_floor:
             # Close the running drive segment, then charge before continuing.
             if seg_open:
                 _close_drive_segment()
             arrive_soc = soc
             depart_soc = CHARGE_TARGET_SOC
             kwh_added = max(0.0, (depart_soc - arrive_soc) / 100.0 * battery_kwh)
-            charge_min = (kwh_added / CHARGER_KW) * 60.0 if CHARGER_KW > 0 else 0.0
+            charge_kw = max_charge_kw if max_charge_kw and max_charge_kw > 0 else CHARGER_KW
+            charge_min = (kwh_added / charge_kw) * 60.0
             cost_eur = kwh_added * PRICE_EUR_PER_KWH
 
             ch_start = clock

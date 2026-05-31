@@ -16,6 +16,19 @@
 }
 
 @layer components {
+  /* Keep the map attribution present (MapTiler/TomTom license) but tiny + faint
+     so it doesn't clutter the corner. */
+  .leaflet-control-attribution {
+    font-size: 9px !important;
+    line-height: 1.2 !important;
+    background: rgba(255, 255, 255, 0.55) !important;
+    color: #9aa0a6 !important;
+    padding: 0 4px !important;
+  }
+  .leaflet-control-attribution a {
+    color: #8a9097 !important;
+    text-decoration: none !important;
+  }
   .material-symbols-outlined {
     font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
     vertical-align: middle;
@@ -110,6 +123,142 @@
   }
   100% {
     transform: translate(-50%, -50%) scale(4.5);
+    opacity: 0;
+  }
+}
+
+/* Battery-level route tooltip — a clean card showing the SOC transition on the
+   segment under the cursor (eg "66% → 65%"). Overrides Leaflet's default skin. */
+.leaflet-tooltip.battery-tip {
+  background: #fff;
+  border: none;
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 10px 14px;
+  font-family: Inter, system-ui, sans-serif;
+  white-space: nowrap;
+}
+.leaflet-tooltip.battery-tip::before {
+  display: none; /* hide Leaflet's little arrow */
+}
+.battery-tip .bt-label {
+  display: block;
+  font-weight: 700;
+  font-size: 14px;
+  color: #1f2430;
+  margin-bottom: 4px;
+}
+.battery-tip .bt-value {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #3a4150;
+}
+.battery-tip .bt-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 9999px;
+  display: inline-block;
+}
+
+/* Compact horizontal map tooltip — single dark bar (charging stops, incidents). */
+.leaflet-tooltip.map-tip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #1f2430;
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  padding: 8px 14px;
+  font-family: Inter, system-ui, sans-serif;
+  white-space: nowrap;
+}
+.leaflet-tooltip.map-tip::before {
+  display: none;
+}
+.map-tip .mt-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+.map-tip .mt-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+.map-tip .mt-meta {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* Charging-stop tooltip — small 2-3 line dark card (name / power+connectors /
+   availability + kWh). Stacks vertically over the shared dark .map-tip skin. */
+.leaflet-tooltip.charge-tip {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 9px 13px;
+}
+.charge-tip .ct-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.charge-tip .ct-line {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.78);
+}
+.charge-tip .ct-sub {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: rgba(255, 255, 255, 0.6);
+}
+.charge-tip .ct-avail {
+  color: #7fe3a4;
+  font-weight: 600;
+}
+
+/* Route "runner" — a single truck badge that travels source -> destination on a
+   loop, with a pulsing halo, giving a live sense of motion along the route. */
+.route-runner {
+  position: relative;
+  width: 40px;
+  height: 40px;
+}
+.route-runner .rr-video {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 36px;
+  height: 36px;
+  border-radius: 9999px;
+  object-fit: cover;
+  background: #fff;
+  border: 2px solid #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+.route-runner .rr-halo {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 30px;
+  height: 30px;
+  border-radius: 9999px;
+  background: rgba(0, 209, 102, 0.4);
+  transform: translate(-50%, -50%);
+  animation: rr-pulse 1.6s ease-out infinite;
+}
+@keyframes rr-pulse {
+  0% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0.6;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(2.6);
     opacity: 0;
   }
 }

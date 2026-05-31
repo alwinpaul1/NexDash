@@ -141,9 +141,15 @@ def test_enrich_route_returns_segments_profile_and_conditions(monkeypatch):
         assert field in seg
         assert isinstance(seg[field], (int, float))
 
-    # Weather stub flowed through to the segments.
+    # Weather stub flowed through. Temperature passes straight through; wind is
+    # now projected onto each segment's travel bearing (a SIGNED headwind), so the
+    # per-segment value is the along-track component — bounded by the 6.5 m/s
+    # magnitude and actually changed by the projection (not the raw magnitude).
     assert all(s["temperatureC"] == pytest.approx(8.0, abs=0.2) for s in out["segments"])
-    assert all(s["windMps"] == pytest.approx(6.5, abs=0.2) for s in out["segments"])
+    assert all(abs(s["windMps"]) <= 6.5 + 1e-6 for s in out["segments"])
+    assert any(abs(s["windMps"] - 6.5) > 0.5 for s in out["segments"]), (
+        "wind should be projected onto travel bearing, not passed through as magnitude"
+    )
 
     # An uphill ramp -> positive gradients and real climb, ~zero descent.
     assert all(s["gradientPct"] > 0 for s in out["segments"])
@@ -221,11 +227,13 @@ def test_enrich_route_fail_soft_when_http_raises(monkeypatch):
     assert cond["avgTempC"] == pytest.approx(geodata.DEFAULT_TEMP_C)
     assert cond["avgWindMps"] == pytest.approx(geodata.DEFAULT_WIND_MPS)
 
-    # Segments, if produced, carry the fail-soft defaults (flat, default wx).
+    # Segments, if produced, carry the fail-soft defaults: flat gradient, default
+    # temperature, and a wind whose along-track component is bounded by the default
+    # magnitude (direction is unknown offline, so the projection may reduce it).
     for s in out["segments"]:
         assert s["gradientPct"] == pytest.approx(0.0, abs=1e-6)
         assert s["temperatureC"] == pytest.approx(geodata.DEFAULT_TEMP_C)
-        assert s["windMps"] == pytest.approx(geodata.DEFAULT_WIND_MPS)
+        assert abs(s["windMps"]) <= geodata.DEFAULT_WIND_MPS + 1e-6
 
 
 def test_enrich_route_empty_geometry_fail_soft():
@@ -235,3 +243,24 @@ def test_enrich_route_empty_geometry_fail_soft():
         assert out["segments"] == []
         assert out["elevationProfile"] == []
         assert out["conditions"]["avgTempC"] == pytest.approx(geodata.DEFAULT_TEMP_C)
+
+
+def test_bearing_due_north_and_east():
+    """Sanity-check the travel-bearing helper used for wind projection."""
+    assert geodata._bearing_deg((0.0, 0.0), (1.0, 0.0)) == pytest.approx(0.0, abs=1e-6)  # north
+    assert geodata._bearing_deg((0.0, 0.0), (0.0, 1.0)) == pytest.approx(90.0, abs=1e-3)  # east
+
+
+def test_wind_projection_sign_convention():
+    """Wind direction must project onto travel as a SIGNED headwind: a wind
+    blowing FROM dead ahead is a full +headwind, FROM behind a -tailwind, and a
+    crosswind ~0. This is the contract the energy model relies on (a tailwind
+    must be able to *reduce* predicted energy), so a regression here would
+    silently make every wind look like a headwind again.
+    """
+    # Travel due north (bearing ~0). Open-Meteo dir = bearing the wind blows FROM.
+    bearing = geodata._bearing_deg((0.0, 0.0), (1.0, 0.0))
+    headwind = lambda from_deg: 10.0 * math.cos(math.radians(from_deg - bearing))
+    assert headwind(0.0) == pytest.approx(10.0, abs=1e-6)    # from north = dead ahead
+    assert headwind(180.0) == pytest.approx(-10.0, abs=1e-6)  # from south = tailwind
+    assert headwind(90.0) == pytest.approx(0.0, abs=1e-6)     # from east = crosswind

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import LocationSearch from "./LocationSearch.jsx";
 import TruckCard from "./TruckCard.jsx";
 
@@ -48,43 +48,46 @@ function FieldLabel({ icon, children, hint }) {
 function DestinationRow({
   dest,
   index,
-  total,
   onUpdate,
   onRemove,
-  onMove,
+  onDragStartRow,
+  onDropRow,
 }) {
   const [open, setOpen] = useState(false);
-  const isFirst = index === 0;
-  const isLast = index === total - 1;
+  const [dragOver, setDragOver] = useState(false);
 
   return (
-    <div className="rounded-xl border border-outline-variant/60 bg-surface-low/60 overflow-hidden">
-      {/* Header row: order controls + number + search + remove */}
+    <div
+      className={`rounded-xl border bg-surface-low/60 transition-colors ${
+        dragOver ? "border-primary ring-1 ring-primary/40" : "border-outline-variant/60"
+      }`}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDragOver(true);
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(false);
+        onDropRow(index);
+      }}
+    >
+      {/* Header row: drag handle + number + search + options + remove */}
       <div className="flex items-center gap-2 px-2.5 py-2">
-        <div className="flex flex-col -my-1">
-          <button
-            type="button"
-            onClick={() => onMove(dest.id, -1)}
-            disabled={isFirst}
-            aria-label={`Move stop ${index + 1} up`}
-            className="flex items-center justify-center w-5 h-4 text-on-surface-variant hover:text-primary disabled:opacity-25 disabled:cursor-not-allowed transition-colors"
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: "16px" }}>
-              keyboard_arrow_up
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => onMove(dest.id, 1)}
-            disabled={isLast}
-            aria-label={`Move stop ${index + 1} down`}
-            className="flex items-center justify-center w-5 h-4 text-on-surface-variant hover:text-primary disabled:opacity-25 disabled:cursor-not-allowed transition-colors"
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: "16px" }}>
-              keyboard_arrow_down
-            </span>
-          </button>
-        </div>
+        <span
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.effectAllowed = "move";
+            onDragStartRow(index);
+          }}
+          aria-label={`Drag to reorder stop ${index + 1}`}
+          title="Drag to reorder"
+          className="flex items-center justify-center w-5 shrink-0 text-on-surface-variant hover:text-primary cursor-grab active:cursor-grabbing"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
+            drag_indicator
+          </span>
+        </span>
         <span className="flex items-center justify-center w-5 h-5 shrink-0 rounded-full bg-primary/15 text-primary text-[11px] font-semibold ring-1 ring-primary/30">
           {index + 1}
         </span>
@@ -172,16 +175,30 @@ export default function PlannerForm({
   onStartSoc,
   onMinSoc,
   onPayloadKg,
+  onReservePct,
+  onMaxDetourKm,
+  onMaxChargeKw,
   onSetOrigin,
   onAddDestination,
   onUpdateDestination,
   onRemoveDestination,
-  onMoveDestination,
+  onReorderDestination,
   onDeparture,
   onOptimize,
   onReset,
 }) {
   const [moreOpen, setMoreOpen] = useState(false);
+
+  // Drag-to-reorder destinations (grip handle is the drag source).
+  const dragFrom = useRef(null);
+  const handleDragStart = (i) => {
+    dragFrom.current = i;
+  };
+  const handleDrop = (i) => {
+    const from = dragFrom.current;
+    dragFrom.current = null;
+    if (from != null && from !== i) onReorderDestination?.(from, i);
+  };
 
   const hasOrigin = !!(planner.origin && planner.origin.lat != null);
   const validDestinations = planner.destinations.filter((d) => d.lat != null).length;
@@ -254,10 +271,10 @@ export default function PlannerForm({
                 key={d.id}
                 dest={d}
                 index={i}
-                total={planner.destinations.length}
                 onUpdate={onUpdateDestination}
                 onRemove={onRemoveDestination}
-                onMove={onMoveDestination}
+                onDragStartRow={handleDragStart}
+                onDropRow={handleDrop}
               />
             ))}
             {planner.destinations.length === 0 && (
@@ -310,10 +327,28 @@ export default function PlannerForm({
           {moreOpen && (
             <div className="px-3 pb-3 pt-1 space-y-3 border-t border-outline-variant/50">
               <div>
-                <FieldLabel icon="battery_alert" hint={`${planner.minSoc}%`}>
-                  Min SOC
+                <FieldLabel icon="target" hint={`${planner.minSoc}%`}>
+                  Arrive with at least
                 </FieldLabel>
                 <Slider value={planner.minSoc} min={0} max={50} onChange={onMinSoc} />
+              </div>
+              <div>
+                <FieldLabel icon="shield" hint={`${planner.reservePct}%`}>
+                  Safety Reserve
+                </FieldLabel>
+                <Slider value={planner.reservePct} min={0} max={25} onChange={onReservePct} />
+              </div>
+              <div>
+                <FieldLabel icon="alt_route" hint={`${planner.maxDetourKm} km`}>
+                  Max Charging Detour
+                </FieldLabel>
+                <Slider value={planner.maxDetourKm} min={5} max={100} step={5} onChange={onMaxDetourKm} />
+              </div>
+              <div>
+                <FieldLabel icon="bolt" hint={`${planner.maxChargeKw} kW`}>
+                  Max Charging Speed
+                </FieldLabel>
+                <Slider value={planner.maxChargeKw} min={100} max={400} step={10} onChange={onMaxChargeKw} />
               </div>
               <div>
                 <FieldLabel icon="scale" hint={`${planner.payloadKg} kg`}>
