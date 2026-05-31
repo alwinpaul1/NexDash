@@ -56,10 +56,20 @@ COLUMNS: list[str] = [
     "energy_kwh",
 ]
 
-#: Tiny positive floor for the energy label so that net-regen / noise can never
-#: push a recorded consumption to zero or below (a real meter never logs <=0 for
-#: a non-trivial moving segment).
-_ENERGY_FLOOR_KWH: float = 0.05
+#: Lower bound on the energy label (kWh). A real BEV energy meter CAN log a
+#: *net-negative* segment on a long steep descent (regen returns more charge than
+#: the segment spends), so we deliberately do NOT clamp at zero: clamping would
+#: erase the regenerative-braking signal, bias the steep-down failure slice by
+#: ~+10 kWh, and inject gradient-correlated structure into the label noise. We
+#: only reject numerically absurd values far below any plausible regen return.
+_ENERGY_FLOOR_KWH: float = -50.0
+
+#: Maximum implied net elevation change (m) for a single segment. The gradient is
+#: capped per row so ``distance * sin(atan(gradient/100))`` never exceeds this,
+#: keeping labels geographically plausible (German Autobahn tops out ~1000 m) and
+#: preventing the impossible multi-kilometre climbs a naive sampler produces on
+#: long legs.
+_MAX_NET_CLIMB_M: float = 1000.0
 
 
 def generate_dataset(
@@ -99,22 +109,24 @@ def generate_dataset(
     #
     # CRITICAL realism constraint: the *average* gradient a real leg can sustain
     # shrinks as the leg lengthens. A 3 km ramp can average +6 %, but a 110 km
-    # leg averaging +4.5 % would imply a ~5 km net climb — higher than any Alpine
-    # pass. Sampling gradient independently of distance (as an earlier version
-    # did) produced labels up to ~5x battery capacity and a misleading "model
-    # extrapolates wildly" failure mode that was really a data-distribution bug.
-    # We attenuate the sampled gradient by distance so net elevation change stays
-    # physically plausible: steep grades remain, but only on short segments.
-    # The base spread (2.8) and the 0.18 floor are tuned so that (a) no label
-    # exceeds the 600 kWh battery and (b) the steep-grade evaluation slices stay
-    # populated enough (~15 steep-up / ~11 steep-down test rows) to report a
-    # credible failure-mode metric rather than a 2-sample fluke.
-    grad_distance_scale = np.clip(15.0 / distance_km, 0.18, 1.0)
-    gradient_pct = np.clip(
-        rng.normal(loc=0.0, scale=2.8, size=n_samples) * grad_distance_scale,
-        -6.0,
-        6.0,
-    )
+    # leg averaging +4.5 % would imply a ~5 km net climb — higher than any
+    # German road reaches. We therefore sample a symmetric spread and then cap
+    # |gradient| per row so the implied net elevation change
+    # (``distance * sin(atan(gradient/100))``) never exceeds ``_MAX_NET_CLIMB_M``.
+    # Short legs keep the full +/-6 % spread (which populates the steep-grade
+    # failure-mode slices); long legs are forced near-flat, exactly as real
+    # inter-hub Autobahn runs are. This is the exact physical version of the
+    # earlier distance-attenuation heuristic and, unlike it, the net-climb bound
+    # holds for every seed and sample size — no phantom-mountain climbs. (Note: a
+    # rare long + heavy + cold + headwind leg can still legitimately need MORE than
+    # one charge of energy; that is a real "must charge mid-route" segment, not a
+    # bug, so labels are not clamped to the battery capacity.)
+    raw_gradient = np.clip(rng.normal(loc=0.0, scale=2.8, size=n_samples), -6.0, 6.0)
+    distance_m = distance_km * 1000.0
+    # Largest |grade| (%) whose net climb over this leg stays within the ceiling.
+    climb_ratio = np.minimum(1.0, _MAX_NET_CLIMB_M / distance_m)
+    grad_cap_pct = np.minimum(100.0 * np.tan(np.arcsin(climb_ratio)), 6.0)
+    gradient_pct = np.clip(raw_gradient, -grad_cap_pct, grad_cap_pct)
 
     # German ambient temperature across the year (-15..40 C).
     temperature_c = np.clip(rng.normal(loc=12.0, scale=11.0, size=n_samples), -15.0, 40.0)

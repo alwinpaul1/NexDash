@@ -7,9 +7,9 @@ mass drives both rolling resistance and the gradient (potential-energy) term, wh
 the cold raises HVAC/battery-heating load.
 
 This case is deliberately chosen because it lands **outside the model's trained
-envelope**. The data generator couples gradient to distance — a sustained +4.5%
-grade simply cannot persist over 110 km in real terrain (that would be a ~5 km net
-climb, higher than any Alpine pass), so no such segment appears in training. Asked to
+envelope**. The data generator caps each segment's net climb at ~1000 m — a sustained
++4.5% grade simply cannot persist over 110 km in real terrain (that would be a ~5 km net
+climb, higher than any German road), so no such segment appears in training. Asked to
 predict one anyway, the data-driven model **under-predicts badly** (it has never seen
 this combination and reverts toward the bulk of its training mass). On its own that is
 a dangerous, optimistic error.
@@ -59,37 +59,40 @@ The agent gathers concrete numbers before answering, calling `check_reachability
 
 ```json
 {
-  "energy_needed_kwh": 768.837,
+  "energy_needed_kwh": 782.189,
   "energy_available_kwh": 480.0,
   "usable_after_reserve_kwh": 420.0,
   "reaches": false,
-  "margin_kwh": -348.837,
+  "margin_kwh": -362.189,
   "remaining_soc_pct": 0.0,
   "remaining_range_km": 0.0,
   "confidence": "low",
-  "model_kwh": 300.319,
-  "physics_kwh": 768.837,
-  "confidence_note": "LOW CONFIDENCE: the data-driven model (300 kWh) and a first-principles physics estimate (769 kWh) disagree sharply, which means this segment is outside the envelope the model was trained on. The more conservative physics value is used for this decision; treat it as indicative only and keep a wide reserve."
+  "model_kwh": 256.642,
+  "physics_kwh": 782.189,
+  "confidence_note": "LOW CONFIDENCE: the data-driven model (257 kWh) and a first-principles physics estimate (782 kWh) disagree sharply, which means this segment is outside the envelope the model was trained on. The more conservative (higher) estimate of 782 kWh (physics) is used for this decision; treat it as indicative only and keep a wide reserve."
 }
 ```
 
 > **How to read this — and why the two numbers differ.** 80% SOC = 480 kWh raw, but
 > after the 10% reserve only **420 kWh** is usable. Two estimates are reported:
-> `model_kwh` (300 kWh) is the data-driven model, and `physics_kwh` (769 kWh) is the
-> first-principles cross-check. They disagree by more than 2×.
+> `model_kwh` (257 kWh) is the data-driven model, and `physics_kwh` (782 kWh) is the
+> first-principles cross-check. They disagree by 3×.
 >
 > That disagreement is the signal. A sustained +4.5% grade over 110 km is a corner the
-> data generator never produces (such a grade cannot hold over that distance in real
-> terrain), so the data-driven model is extrapolating and lands **optimistically low**
-> at 300 kWh. The physics term is dominated by lifting ~40 t of gross weight up a
-> 4.5% grade for 110 km — that alone is several hundred kWh — so 769 kWh is the
-> mechanistically defensible figure.
+> data generator never produces (it caps the per-segment net climb at ~1000 m, so such
+> a grade cannot hold over that distance), so the data-driven model is extrapolating and
+> lands **optimistically low** at 257 kWh. The physics term is dominated by lifting
+> ~40 t of gross weight up a 4.5% grade for 110 km — that alone is several hundred kWh —
+> so 782 kWh is the mechanistically defensible figure.
 >
 > Because the gap is far wider than the model's normal ±6 kWh band, the tool flags
-> **`confidence: "low"`**, uses the **conservative 769 kWh** for the verdict, and
-> explains why in the note. Both numbers, regardless of which you trust, sit well above
-> the 420 kWh usable budget — so the **no-go is firm**. This is the system catching its
-> own under-prediction rather than quietly shipping a dangerous "yes".
+> **`confidence: "low"`** and uses the **conservative 782 kWh** for the verdict. Note
+> the exact danger this defuses: the model alone says just **257 kWh — comfortably
+> *under* the 420 kWh usable budget**, so trusted blindly it would optimistically
+> green-light the trip. The physics estimate (782 kWh) blows past the budget, and
+> because the tool falls back to the conservative value when the two disagree this
+> sharply, the **no-go is firm**. This is the system catching its own under-prediction
+> rather than quietly shipping a dangerous "yes".
 
 ---
 
@@ -102,13 +105,16 @@ The agent gathers concrete numbers before answering, calling `check_reachability
 > usable. This leg sits outside what the model was trained on — a sustained +4.5% pull
 > over 110 km doesn't occur in normal terrain — so I don't fully trust the model's raw
 > number. To stay safe, the tool falls back to a first-principles physics estimate of
-> **~769 kWh** for lifting ~40 t of gross weight up that grade in –12 °C, and flags the
+> **~782 kWh** for lifting ~40 t of gross weight up that grade in –12 °C, and flags the
 > result as low confidence.
 >
-> **The decision is not close.** Even the model's own (optimistic) estimate is ~300 kWh,
-> and the conservative physics figure is far higher — both exceed your 420 kWh usable
-> budget. The truck would run into its reserve before the summit, not at the destination,
-> under any reasonable estimate, so the **"won't make it" conclusion is firm.**
+> **Why I'm confident in the "no" even though I distrust the model here.** The model's
+> own estimate is ~257 kWh — which is actually *below* your 420 kWh usable budget, so on
+> its own it would have said "yes". That's the trap: this leg is an out-of-envelope
+> extrapolation, and the model under-predicts it badly. The first-principles physics
+> estimate is ~782 kWh, far above the budget, and the tool falls back to that conservative
+> number when the two disagree this sharply — so the **"won't make it" conclusion is firm**,
+> and the truck would hit its reserve well before the summit.
 >
 > **Recommendation:** top up before you start, or split the leg / reduce payload. A short
 > fast charge at a depot or en-route charger before the grade turns this from a no-go into

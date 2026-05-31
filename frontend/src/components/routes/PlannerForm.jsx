@@ -2,8 +2,8 @@ import { useState, useRef } from "react";
 import LocationSearch from "./LocationSearch.jsx";
 import TruckCard from "./TruckCard.jsx";
 
-// The eActros 600's maximum payload (22 t). Payload / drop-off inputs are capped
-// here so the dispatcher can't set a load the truck physically can't carry.
+// The eActros 600's maximum payload (22 t). The payload slider is capped here so
+// the dispatcher can't set a load the truck physically can't carry.
 const MAX_PAYLOAD_KG = 22000;
 
 function nowLocalISO() {
@@ -47,8 +47,8 @@ function FieldLabel({ icon, children, hint }) {
   );
 }
 
-// A single numbered, removable, reorderable destination row that expands to
-// reveal per-stop delivery options (drop-off weight, unloading time, deliver-by).
+// A single numbered, removable, drag-to-reorder destination row (origin +
+// destinations), each backed by a LocationSearch geocode.
 function DestinationRow({
   dest,
   index,
@@ -57,7 +57,6 @@ function DestinationRow({
   onDragStartRow,
   onDropRow,
 }) {
-  const [open, setOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
 
   return (
@@ -106,19 +105,6 @@ function DestinationRow({
         </div>
         <button
           type="button"
-          onClick={() => setOpen((o) => !o)}
-          aria-label={`${open ? "Hide" : "Show"} options for stop ${index + 1}`}
-          aria-expanded={open}
-          className={`flex items-center justify-center w-6 h-6 shrink-0 rounded-lg transition-colors ${
-            open ? "text-primary bg-primary/10" : "text-on-surface-variant hover:text-on-surface hover:bg-surface"
-          }`}
-        >
-          <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
-            tune
-          </span>
-        </button>
-        <button
-          type="button"
           onClick={() => onRemove(dest.id)}
           aria-label={`Remove stop ${index + 1}`}
           className="flex items-center justify-center w-6 h-6 shrink-0 rounded-lg text-on-surface-variant hover:text-error hover:bg-error/10 transition-colors"
@@ -129,45 +115,6 @@ function DestinationRow({
         </button>
       </div>
 
-      {/* Expanded per-stop options */}
-      {open && (
-        <div className="px-3 pb-3 pt-1 space-y-3 border-t border-outline-variant/50 bg-surface-lowest/40">
-          <div>
-            <FieldLabel icon="package_2" hint={`${dest.dropWeightKg} kg`}>
-              Drop-off Weight
-            </FieldLabel>
-            <Slider
-              value={dest.dropWeightKg}
-              min={0}
-              max={MAX_PAYLOAD_KG}
-              step={250}
-              onChange={(v) => onUpdate(dest.id, { dropWeightKg: v })}
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <FieldLabel icon="timer">Unloading (min)</FieldLabel>
-              <input
-                type="number"
-                min={0}
-                step={5}
-                value={dest.unloadMin}
-                onChange={(e) => onUpdate(dest.id, { unloadMin: Number(e.target.value) })}
-                className="w-full px-3 py-2 rounded-xl bg-surface-low border border-outline-variant/60 text-sm text-on-surface outline-none focus:ring-2 focus:ring-primary/40 transition"
-              />
-            </div>
-            <div>
-              <FieldLabel icon="event_available">Deliver by</FieldLabel>
-              <input
-                type="datetime-local"
-                value={dest.deliverBy}
-                onChange={(e) => onUpdate(dest.id, { deliverBy: e.target.value })}
-                className="w-full px-2 py-2 rounded-xl bg-surface-low border border-outline-variant/60 text-sm text-on-surface outline-none focus:ring-2 focus:ring-primary/40 transition"
-              />
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

@@ -6,9 +6,11 @@ the Mercedes-Benz eActros 600. It always uses tools for any numeric claim and th
 explains the result in plain language, including the safety margin and a caveat.
 
 The leg here sits comfortably inside the model's trained envelope: a moderate
-distance, mid payload, gentle grade, and only mild cold. Every estimate the model
-makes is well-supported by training data, so the verdict comes back high-confidence
-and the data-driven and physics estimates agree almost exactly.
+distance, mid payload, gentle grade, and only mild cold. The verdict comes back
+**high-confidence** — and, candidly, this leg also shows that point-wise model
+error varies: the data-driven estimate and the first-principles physics cross-check
+differ by ~24 kWh (more than the 6 kWh headline MAE), yet the ~100 kWh margin makes
+the reach verdict robust either way.
 
 > The tool-result JSON below is copied verbatim from a live
 > `check_reachability` call with the exact inputs shown (no API key needed to
@@ -50,31 +52,35 @@ The agent decides it needs real numbers and calls `check_reachability`.
 
 ```json
 {
-  "energy_needed_kwh": 211.605,
+  "energy_needed_kwh": 196.754,
   "energy_available_kwh": 360.0,
   "usable_after_reserve_kwh": 300.0,
   "reaches": true,
-  "margin_kwh": 88.395,
-  "remaining_soc_pct": 24.73,
-  "remaining_range_km": 50.1,
+  "margin_kwh": 103.246,
+  "remaining_soc_pct": 27.21,
+  "remaining_range_km": 63.0,
   "confidence": "high",
-  "model_kwh": 211.605,
-  "physics_kwh": 212.273,
-  "confidence_note": "Estimate from a HistGradientBoosting energy model whose held-out mean absolute error is about +/-6 kWh (physics cross-check agrees within 1 kWh). Treat margins smaller than this band as uncertain and keep the safety reserve."
+  "model_kwh": 196.754,
+  "physics_kwh": 220.815,
+  "confidence_note": "Estimate from a HistGradientBoosting energy model whose held-out mean absolute error is about +/-6 kWh (physics cross-check agrees within 24 kWh). Treat margins smaller than this band as uncertain and keep the safety reserve."
 }
 ```
 
 > **How to read this:** battery is 600 kWh usable, so 60% SOC = 360 kWh available.
 > Holding back a 10% reserve (60 kWh) leaves 300 kWh usable. The model predicts the
-> trip needs ~212 kWh, leaving an **88 kWh margin** — the truck arrives with a
+> trip needs ~197 kWh, leaving a **103 kWh margin** — the truck arrives with a
 > comfortable buffer.
 >
-> **On the confidence band:** the note reports the model's *real* held-out MAE
-> (about ±6 kWh, read live from the model artifact, not a hardcoded guess). It also
-> runs a first-principles physics cross-check on every call: here the data-driven
-> model (211.6 kWh) and the physics estimate (212.3 kWh) agree within ~1 kWh, so the
-> verdict is flagged **high confidence**. The 88 kWh margin dwarfs the ~6 kWh error
-> band many times over, so this reach is not a knife-edge call.
+> **On the confidence band — and an honest note:** the note reports the model's
+> *real* held-out MAE (about ±6 kWh, read live from the artifact, not a hardcoded
+> guess). It also runs a first-principles physics cross-check on every call. Here the
+> data-driven model (197 kWh) and the physics estimate (221 kWh) differ by **~24 kWh**
+> — larger than the 6 kWh *average* test error, a reminder that point-wise error is
+> not uniform (see the report's failure-mode section). The gap is still inside the
+> "flag if they diverge" threshold, so the verdict stays **high confidence**. Crucially
+> the decision is robust to the disagreement: even on the *more pessimistic* physics
+> number (221 kWh), there is still a ~79 kWh margin, so this reach is not a knife-edge
+> call.
 
 ---
 
@@ -84,16 +90,13 @@ The agent decides it needs real numbers and calls `check_reachability`.
 >
 > At 60% SOC you have **360 kWh** on board. Keeping a 10% safety reserve, that's
 > **300 kWh usable**. The 120 km run at 80 km/h with 12 t of payload is predicted to
-> draw **~212 kWh**. The chilly 2 °C morning and light headwind nudge consumption up
-> a little, but the trip still leaves a **margin of ~88 kWh** above your usable
-> budget.
->
-> You should pull in at roughly **25% SOC**, with an estimated **~50 km** of remaining
+> draw **~197 kWh**, leaving a **margin of ~103 kWh** above your usable budget. You
+> should pull in at roughly **27% SOC**, with an estimated **~63 km** of remaining
 > range after arrival.
 >
-> **Caveat:** this is a model estimate, with a typical error of about ±6 kWh — and an
-> independent physics cross-check agrees with the model to within ~1 kWh here, so it's
-> a high-confidence result. That error band is tiny next to your 88 kWh margin, so
-> you're nowhere near the reserve. If the headwind stiffens or traffic forces a lot of
-> stop-start, real consumption could climb a few kWh — but the margin absorbs it
-> comfortably.
+> **Caveat:** this is a model estimate (typical error ±6 kWh). On this particular leg
+> a first-principles physics check comes out ~24 kWh *higher* than the model — point-
+> wise error varies more than the average — but even on that more cautious number you
+> keep a ~79 kWh margin, so you are nowhere near the reserve. If the headwind stiffens
+> or traffic forces a lot of stop-start, real consumption could climb further; the
+> margin absorbs it comfortably, and I'd re-check if conditions change materially.

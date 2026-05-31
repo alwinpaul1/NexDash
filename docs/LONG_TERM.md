@@ -74,8 +74,8 @@ Truck (FMS/CAN) ──► Telematics gateway ──► Streaming ingest (Kafka/K
   always re-derive labels when the labeling logic improves.
 - **Schema contract & validation:** each ingested batch passes schema + range checks
   (a Great Expectations / Pandera suite) mirroring the bounds already encoded in
-  `data_gen.py` (distance 1–350 km, payload 0–22 t, speed 30–90 kph, gradient ±6%
-  attenuated on long legs, temperature −15..40 °C, wind 0–12 m/s). Out-of-contract rows are quarantined, not
+  `data_gen.py` (distance 1–350 km, payload 0–22 t, speed 30–85 kph, gradient ±6%
+  capped per segment, temperature −15..40 °C, wind −12..12 m/s). Out-of-contract rows are quarantined, not
   silently dropped — quarantine volume is itself a monitored signal.
 
 ### 1.3 Segmentation and label derivation
@@ -274,7 +274,7 @@ Every artifact is content-addressed and joined by a single `model_version`:
 The richest long-term signal is what happens **after** a dispatcher acts on a range check.
 
 ### 6.1 Closing the loop
-1. The agent/dashboard issues a reachability verdict (predicted energy, margin, remaining
+1. The agent issues a reachability verdict (predicted energy, margin, remaining
    SOC/range) and **logs the prediction** with its `model_version`, inputs, and a request ID.
 2. The truck drives the route. Telematics returns **measured** segment energy and the actual
    arrival SOC.

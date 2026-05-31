@@ -36,7 +36,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from . import features
-from .config import DEFAULT_MODEL_PATH
+from .config import DEFAULT_MODEL_PATH, MAPE_FLOOR_KWH
 
 __all__ = [
     "EnergyModel",
@@ -88,8 +88,10 @@ def _build_baseline() -> Pipeline:
 def _regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
     """Compute MAE / RMSE / R^2 / MAPE for a prediction set.
 
-    MAPE is computed only over rows whose true energy is meaningfully positive
-    (>= 0.1 kWh) to avoid division blow-ups on near-zero net-regen segments.
+    MAPE uses the project-wide :data:`nexdash.config.MAPE_FLOOR_KWH` floor (the
+    same one :mod:`nexdash.evaluate` uses), so the comparison-table MAPE and the
+    report headline MAPE share one definition. ``mape_n`` reports how many rows
+    participated (the rest are excluded near-zero-denominator downhill rows).
     """
     y_true = np.asarray(y_true, dtype=float)
     y_pred = np.asarray(y_pred, dtype=float)
@@ -98,7 +100,7 @@ def _regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, flo
     rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
     r2 = float(r2_score(y_true, y_pred))
 
-    mask = np.abs(y_true) >= 0.1
+    mask = np.abs(y_true) >= MAPE_FLOOR_KWH
     if mask.any():
         mape = float(
             np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100.0
@@ -106,7 +108,13 @@ def _regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, flo
     else:
         mape = float("nan")
 
-    return {"mae_kwh": mae, "rmse_kwh": rmse, "r2": r2, "mape_pct": mape}
+    return {
+        "mae_kwh": mae,
+        "rmse_kwh": rmse,
+        "r2": r2,
+        "mape_pct": mape,
+        "mape_n": int(mask.sum()),
+    }
 
 
 class EnergyModel:
@@ -131,24 +139,40 @@ class EnergyModel:
     # ------------------------------------------------------------------ #
     # Training
     # ------------------------------------------------------------------ #
-    def train(self, df: pd.DataFrame, *, test_size: float = 0.2, seed: int = 42) -> dict[str, Any]:
-        """Fit the primary and baseline models on an internal train/test split.
+    def train(
+        self,
+        df: pd.DataFrame,
+        df_eval: pd.DataFrame | None = None,
+        *,
+        test_size: float = 0.2,
+        seed: int = 42,
+    ) -> dict[str, Any]:
+        """Fit the primary and baseline models and report held-out metrics.
 
-        Args:
-            df: Raw dataset containing the feature columns plus the target
-                column (:data:`nexdash.features.TARGET`).
-            test_size: Fraction of rows held out for metric reporting.
-            seed: Random seed for the split (determinism).
+        Two modes:
 
-        Returns:
-            The :attr:`metrics` dict (also stored on the instance).
+        * **Explicit hold-out** (``df_eval`` given): fit on ALL rows of ``df``
+            and report ``hgb``/``linear`` metrics on ``df_eval``. This is what
+            :mod:`run_pipeline` uses with its outer split, so the *served* model,
+            the comparison table, the stored artifact metrics, and the report
+            headline all describe ONE model on ONE test set (no hidden split).
+        * **Internal split** (``df_eval`` is ``None``): split ``df`` and report
+            metrics on the inner test fold. Convenient for quick/standalone fits.
+
+        Returns the :attr:`metrics` dict (also stored on the instance).
         """
         X, y = features.build_features(df)
         self.feature_columns = list(X.columns)
 
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=seed
-        )
+        if df_eval is not None:
+            X_eval, y_eval = features.build_features(df_eval)
+            X_eval = X_eval.reindex(columns=self.feature_columns)
+            X_train, y_train = X, y
+            X_test, y_test = X_eval, y_eval
+        else:
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=test_size, random_state=seed
+            )
 
         self.pipeline.fit(X_train, y_train)
         self.baseline.fit(X_train, y_train)
@@ -226,13 +250,18 @@ class EnergyModel:
 
 def train_model(
     df: pd.DataFrame,
+    df_eval: pd.DataFrame | None = None,
     save: bool = True,
     path: Union[str, Path] = DEFAULT_MODEL_PATH,
 ) -> EnergyModel:
     """Train an :class:`EnergyModel` on ``df`` and optionally persist it.
 
     Args:
-        df: Raw dataset (features + target column).
+        df: Raw training dataset (features + target column).
+        df_eval: Optional explicit hold-out set. When given, the model is fit on
+            ALL of ``df`` and metrics are reported on ``df_eval`` (consistent with
+            :mod:`run_pipeline`'s outer split). When ``None``, an internal split
+            of ``df`` is used for the reported metrics.
         save: If ``True``, save the fitted model to ``path``.
         path: Destination artifact path.
 
@@ -240,15 +269,16 @@ def train_model(
         The trained :class:`EnergyModel`.
     """
     model = EnergyModel()
-    model.train(df)
+    model.train(df, df_eval)
     if save:
         model.save(path)
     return model
 
 
-# Module-level cache of the default model, keyed by resolved path string. This
-# avoids re-reading the joblib artifact on every ``predict_energy`` call.
-_MODEL_CACHE: dict[str, EnergyModel] = {}
+# Module-level cache of the default model, keyed by (resolved path, mtime). The
+# mtime component means an in-process retrain that OVERWRITES the same path is
+# picked up automatically — a plain path key would serve the stale model.
+_MODEL_CACHE: dict[tuple[str, int], EnergyModel] = {}
 
 
 def predict_energy(
@@ -257,7 +287,8 @@ def predict_energy(
 ) -> float:
     """Predict energy (kWh) for a single raw feature dict using the saved model.
 
-    The model at ``model_path`` is loaded once and cached for subsequent calls.
+    The model is cached by ``(resolved path, file mtime)`` so repeated calls are
+    fast, yet a retrain to the same path is never served stale.
 
     Args:
         features: A single raw feature dict (e.g. ``{"distance_km": 50,
@@ -271,7 +302,8 @@ def predict_energy(
     Raises:
         FileNotFoundError: If the model artifact does not exist.
     """
-    key = str(Path(model_path).resolve())
+    resolved = Path(model_path).resolve()
+    key = (str(resolved), resolved.stat().st_mtime_ns)
     model = _MODEL_CACHE.get(key)
     if model is None:
         model = EnergyModel.load(model_path)

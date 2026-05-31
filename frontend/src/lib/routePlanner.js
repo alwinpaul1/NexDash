@@ -1,4 +1,4 @@
-// Route engine — frontend lib (light dashboard Routes page).
+// Route engine — frontend lib for the Routes planner console.
 //
 // optimizeRoute(planner) -> PlanResult
 //   1. Calls the TomTom Routing API (travelMode=truck) through origin +
@@ -159,7 +159,7 @@ async function fetchIncidents(geometry) {
   const fields = encodeURIComponent(
     "{incidents{type,geometry{type,coordinates},properties{id,iconCategory,magnitudeOfDelay,events{description,code},from,to,delay,roadNumbers}}}"
   );
-  const pad = 0.18; // ~20 km half-box keeps each query under the area limit
+  const pad = 0.18; // ~25 x 40 km box (~1000 km2), well under TomTom's 10000 km2 v5 limit
 
   const batches = await Promise.all(
     samples.map(async ([lat, lng]) => {

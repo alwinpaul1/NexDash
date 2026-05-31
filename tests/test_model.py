@@ -206,3 +206,26 @@ def test_predict_energy_helper_uses_saved_model(
     assert isinstance(helper_val, float)
     assert np.isfinite(helper_val)
     assert helper_val == pytest.approx(float(model.predict(row)[0]))
+
+
+def test_predict_cache_invalidated_on_retrain(tmp_path) -> None:
+    """predict_energy must NOT serve a stale model after a retrain to the same path.
+
+    WHY: the cache is keyed by (path, file mtime); overwriting the artifact in the
+    same process must be picked up. A plain path key would return the first model's
+    prediction forever, silently serving a stale model after a hot retrain.
+    """
+    import time
+
+    path = tmp_path / "m.joblib"
+    row = {col: float(v) for col, v in zip(FEATURE_COLUMNS, (80, 12, 75, 1.0, 5.0, 2.0))}
+
+    a = train_model(generate_dataset(n_samples=500, seed=1), save=True, path=path)
+    v1 = predict_energy(row, model_path=path)
+    assert v1 == pytest.approx(float(a.predict(row)[0]))
+
+    time.sleep(0.01)  # guarantee a distinct file mtime for the overwrite
+    b = train_model(generate_dataset(n_samples=500, seed=123), save=True, path=path)
+    v2 = predict_energy(row, model_path=path)
+    # The fresh model must drive the prediction (not the cached first model).
+    assert v2 == pytest.approx(float(b.predict(row)[0])), "stale model served after retrain"

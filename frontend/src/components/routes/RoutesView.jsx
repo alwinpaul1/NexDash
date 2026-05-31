@@ -19,9 +19,6 @@ function newDest() {
     label: "",
     lat: null,
     lng: null,
-    dropWeightKg: 0,
-    unloadMin: 30,
-    deliverBy: "",
   };
 }
 
@@ -70,19 +67,6 @@ export default function RoutesView() {
       setPlanner((p) => {
         const next = p.destinations.filter((d) => d.id !== id);
         return { ...p, destinations: next.length ? next : [newDest()] };
-      }),
-    []
-  );
-  const moveDestination = useCallback(
-    (id, dir) =>
-      setPlanner((p) => {
-        const idx = p.destinations.findIndex((d) => d.id === id);
-        if (idx < 0) return p;
-        const swap = idx + dir;
-        if (swap < 0 || swap >= p.destinations.length) return p;
-        const next = p.destinations.slice();
-        [next[idx], next[swap]] = [next[swap], next[idx]];
-        return { ...p, destinations: next };
       }),
     []
   );

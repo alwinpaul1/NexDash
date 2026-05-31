@@ -56,6 +56,7 @@ def test_missing_api_key_prints_guidance_and_no_agent(monkeypatch, capsys):
     to reach the API).
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
 
     # If the CLI tried to build/ask the agent we want a loud failure.
     def explode(*args: Any, **kwargs: Any):
@@ -67,9 +68,30 @@ def test_missing_api_key_prints_guidance_and_no_agent(monkeypatch, capsys):
 
     assert code != 0  # contract: non-zero exit on missing key
     err = capsys.readouterr().err
-    assert "ANTHROPIC_API_KEY" in err
-    # Actionable guidance: tell the user how to set the key.
-    assert "export ANTHROPIC_API_KEY" in err
+    # Actionable guidance: mention both providers and how to set a key.
+    assert "MINIMAX_API_KEY" in err
+    assert "export MINIMAX_API_KEY" in err
+
+
+def test_minimax_only_key_is_accepted(monkeypatch, capsys):
+    """A MiniMax-only setup (the documented DEFAULT) must run the CLI.
+
+    WHY: a regression where the CLI hard-checked ANTHROPIC_API_KEY refused the
+    documented MiniMax default and printed a misleading "missing key" error even
+    though the agent would have worked. The key pre-check must be provider-
+    agnostic.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("MINIMAX_API_KEY", "mm-test-not-real")
+
+    def fake_ask(self: DispatcherAgent, question: str) -> str:
+        return "Yes, it reaches."
+
+    monkeypatch.setattr(DispatcherAgent, "ask", fake_ask)
+
+    code = cli.main(["--once", "Does it reach?"])
+    assert code == 0
+    assert "Yes, it reaches." in capsys.readouterr().out
 
 
 def test_blank_api_key_is_treated_as_missing(monkeypatch, capsys):
@@ -79,6 +101,7 @@ def test_blank_api_key_is_treated_as_missing(monkeypatch, capsys):
     confusing downstream auth error from the SDK.
     """
     monkeypatch.setenv("ANTHROPIC_API_KEY", "   ")
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
     monkeypatch.setattr(
         cli, "DispatcherAgent",
         lambda *a, **k: pytest.fail("agent built with blank key"),
@@ -87,7 +110,7 @@ def test_blank_api_key_is_treated_as_missing(monkeypatch, capsys):
     code = cli.main(["--once", "anything"])
 
     assert code != 0
-    assert "ANTHROPIC_API_KEY" in capsys.readouterr().err
+    assert "MINIMAX_API_KEY" in capsys.readouterr().err
 
 
 def test_once_empty_question_returns_error(monkeypatch, capsys):

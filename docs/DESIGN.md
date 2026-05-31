@@ -58,8 +58,9 @@ underrepresented. Three options were on the table:
 3. **Physics-informed synthetic data + a learned regressor.** Chosen.
 
 The generator (`data_gen.py`) samples realistic, independent feature
-distributions across the full operating envelope (distance 1–120 km, payload
-0–22 t, speed 30–90 kph, gradient ±6 %, temperature −15–40 °C, wind 0–12 m/s),
+distributions across the full operating envelope (distance 1–350 km, payload
+0–22 t, speed 30–85 kph, gradient ±6 %, temperature −15–40 °C, wind −12..12 m/s
+— a signed headwind component, negative = tailwind),
 labels each sample with a **deterministic physics ground truth**
 (`physics.segment_energy_kwh`: speed- and temperature-dependent rolling
 resistance + temperature-dependent-air-density drag (with wind) + signed
@@ -68,7 +69,10 @@ aux load, all divided by `drivetrain_eff`), then injects **multiplicative
 Gaussian noise** (`noise_frac`, default 6 %) plus a small absolute sensor noise
 term. The noise stays **unstructured** (mean-zero, uncorrelated with the
 features): the temperature/speed/grade effects live in the physics channels, not
-the noise, so the winter penalty is never double-counted.
+the noise, so the winter penalty is never double-counted. Net-regen steep
+descents keep **genuine negative labels** (no zero-clamp), so the regen signal is
+preserved end-to-end and the steep-down slice is a real — not artificially
+flattering — failure mode.
 
 This gives us the best of both worlds:
 
@@ -221,23 +225,30 @@ Intellectual honesty is part of the design, so the limits are explicit:
   known one-sided bias.) The injected noise mimics *unstructured* scatter, not
   these *structured* gaps.
 - **Feature independence is a near-idealisation.** The generator samples most
-  inputs from independent marginals, with one **deliberate coupling**: average
-  gradient is attenuated as distance grows, because a sustained steep grade over
-  a long leg implies a physically impossible net climb (a +4.5% grade held over
-  110 km would be a ~5 km ascent, higher than any Alpine pass). Steep grades
-  therefore only occur on short segments, matching real terrain. Other
-  correlations real fleets exhibit (speed/route/load) are still absent, so
-  predictions on physically implausible combinations remain extrapolations the
-  dispatcher should treat with care — and the reachability layer's physics
-  cross-check is what flags them.
+  inputs from independent marginals, with one **deliberate coupling**: the
+  gradient is **capped per segment** so the implied net climb stays
+  geographically plausible (≤ ~1000 m), because a sustained steep grade over a
+  long leg implies a physically impossible net climb (an uncapped +4.5% grade
+  held over 110 km would be a ~5 km ascent, higher than any Alpine pass). This
+  **net-climb** cap holds for every seed and sample size — unlike the earlier
+  distance-attenuation heuristic, whose floor still admitted impossible climbs.
+  It bounds geography, **not** total energy: a rare long + heavy + cold + headwind
+  leg can still legitimately need more than one charge (a real "must charge
+  mid-route" segment), so labels are deliberately **not** clamped to the battery
+  capacity. Other correlations real fleets exhibit (speed/route/load)
+  are still absent, so predictions on physically implausible combinations remain
+  extrapolations the dispatcher should treat with care — and the reachability
+  layer's physics cross-check is what flags them.
 - **Regen is modelled as a tapered efficiency, not a fully dynamic limit.** The
   base `regen_eff` (0.60) is now bent down by temperature (`g_temp`, floor 0.45
-  at −15 °C) and grade (`g_grade`, floor 0.55 at −10%), so the model captures the
-  cold-BMS and steep-descent caps that a flat 60% missed. Two limits remain: the
-  grade taper is a **proxy** (the true motor-power knee depends on
+  at −15 °C) and grade (`g_grade`, floor 0.70 at −10%), so the model captures the
+  cold-BMS and steep-descent caps that a flat 60% missed. The 0.70 grade floor is
+  deliberately not lower: it keeps recovered energy **monotonically non-decreasing
+  in |grade|** (a steeper descent must never return less charge). Two limits
+  remain: the grade taper is a **proxy** (the true motor-power knee depends on
   `m·g·sin(θ)·v`, not grade alone), and there is **no state-of-charge channel**,
   so the model still over-credits downhill recovery near a full battery. The
-  0.45/0.55 floors are reasoned engineering bounds, not eActros-measured.
+  0.45/0.70 floors are reasoned engineering bounds, not eActros-measured.
 - **Calibration transfers, accuracy must be re-earned on real data.** The right
   productionisation path is to keep this architecture (engineered physics
   features + gradient boosting + linear baseline + per-regime failure report) and

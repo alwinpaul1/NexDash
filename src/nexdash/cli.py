@@ -19,7 +19,7 @@ import argparse
 import os
 import sys
 
-from nexdash.agent import DispatcherAgent
+from nexdash.agent import DEFAULT_CLAUDE_MODEL, DispatcherAgent
 
 # --------------------------------------------------------------------------- #
 # Terminal styling helpers
@@ -89,18 +89,21 @@ HELP_TEXT = (
     f"  {_cyan('exit')}  {_dim('quit (also: quit, q, Ctrl-D)')}\n"
 )
 
-_API_KEY_ENV = "ANTHROPIC_API_KEY"
+# The dispatcher picks its provider by whichever key is set (MiniMax preferred,
+# Anthropic fallback) — see nexdash.agent. The CLI must accept either.
+_API_KEY_ENVS = ("MINIMAX_API_KEY", "ANTHROPIC_API_KEY")
 
 MISSING_KEY_MESSAGE = (
-    f"{_red('✗ Missing ANTHROPIC_API_KEY')}\n\n"
-    "The dispatcher assistant talks to the Anthropic API and needs a key.\n\n"
-    f"{_bold('Set it for this shell:')}\n"
-    f"  {_cyan('export ANTHROPIC_API_KEY=sk-ant-...')}\n\n"
+    f"{_red('✗ No LLM API key set')}\n\n"
+    "The dispatcher assistant needs an LLM key (MiniMax preferred, Anthropic\n"
+    "fallback).\n\n"
+    f"{_bold('Set one for this shell:')}\n"
+    f"  {_cyan('export MINIMAX_API_KEY=...')}   {_dim('# default: MiniMax-M2.7')}\n"
+    f"  {_cyan('export ANTHROPIC_API_KEY=sk-ant-...')}   {_dim('# fallback')}\n\n"
     f"{_bold('Or add it to a .env file')} "
     f"{_dim('(see .env.example in the repo root):')}\n"
     f"  {_cyan('cp .env.example .env')}\n"
-    f"  {_dim('# then edit .env and fill in your key')}\n\n"
-    f"{_dim('Get a key at https://console.anthropic.com/settings/keys')}\n"
+    f"  {_dim('# then edit .env and fill in your key')}\n"
 )
 
 
@@ -109,8 +112,8 @@ MISSING_KEY_MESSAGE = (
 # --------------------------------------------------------------------------- #
 
 def _has_api_key() -> bool:
-    """Return True when an Anthropic API key is present and non-empty."""
-    return bool(os.environ.get(_API_KEY_ENV, "").strip())
+    """Return True when any supported LLM API key is present and non-empty."""
+    return any(os.environ.get(env, "").strip() for env in _API_KEY_ENVS)
 
 
 def _answer_once(agent: DispatcherAgent, question: str) -> int:
@@ -184,8 +187,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--model",
-        default="claude-opus-4-8",
-        help="Anthropic model id to use (default: claude-opus-4-8).",
+        default=DEFAULT_CLAUDE_MODEL,
+        help=(
+            f"Model id to use (default: {DEFAULT_CLAUDE_MODEL}). Left at the "
+            "default, the agent auto-selects the MiniMax provider when "
+            "MINIMAX_API_KEY is set, else Anthropic."
+        ),
     )
     return parser
 

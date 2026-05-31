@@ -15,11 +15,17 @@ expects (minus ``geometry``, which the frontend owns).
 Geometry-enriched mode
 ----------------------
 When the frontend also supplies the road ``geometry`` (the TomTom polyline),
-:func:`plan_route` enriches it via :func:`nexdash.geodata.enrich_route` and
-runs the SOC simulation **per enriched segment** with the *real* per-segment
-gradient, temperature and wind drawn from Open-Meteo. Large enriched segments
-are subdivided into <= ``CHUNK_KM`` sub-chunks so the SOC profile stays fine.
-The response then also carries ``elevationProfile`` + ``conditions`` and a
+:func:`plan_route` enriches it via :func:`nexdash.geodata.enrich_route` (real
+per-segment gradient, temperature and wind from Open-Meteo) and simulates SOC
+over it. The many short enriched segments are *aggregated* into ~``CHUNK_KM``
+windows that carry the distance-weighted-average gradient/temperature/wind, and
+the model is called once per window. This aggregation matters for honesty: the
+energy model over-predicts on very short (<~5 km) legs, and a real polyline is
+downsampled to ~2-10 km segments, so predicting per raw segment and summing
+would inflate total route energy with polyline *density* rather than physics
+(finer slicing -> higher kWh). Averaging is faithful for the dominant terms
+(avg gradient * window distance equals the window's net climb). The response
+then also carries ``elevationProfile`` + ``conditions`` and a
 ``summary.elevationGainM`` (total climb). When geometry is absent the planner
 falls back to the flat-assumption mode described below.
 
@@ -46,6 +52,11 @@ Honest approximations
 * **Charging model.** Recharge power is a flat ~350 kW MCS rate (no taper),
   energy priced at a flat 0.45 EUR/kWh. Real sessions taper above ~80% SOC and
   tariffs vary, so charge time/cost here are indicative, not contractual.
+* **Driver hours (EU 561).** Only the 4.5 h continuous-driving / 45 min break
+  rule is simulated. The ``driver.dailyH`` and ``driver.weeklyH`` fields are the
+  single trip's total driving time (no calendar day/week split and no 11 h daily
+  rest are modelled), so for a trip longer than one shift they read the same
+  value; ``eu561ok`` conservatively flags any total over the 9 h daily cap.
 * **Linear SOC within a chunk.** The SOC profile interpolates linearly across
   each chunk; the model only predicts the chunk endpoints.
 
@@ -221,32 +232,49 @@ def plan_route(
     enrichment = _enrich(geometry, departure, distance_km)
     chunks = _build_chunks(distance_km, enrichment, temperature_c)
 
-    for chunk_km, chunk_grad, chunk_temp, chunk_wind in chunks:
-        # Energy + time for this chunk (model-driven). The wind magnitude is
-        # used directly as the headwind component (see module docstring).
-        chunk_energy = float(
-            predict_energy(
-                {
-                    "distance_km": chunk_km,
-                    "payload_t": payload_t,
-                    "speed_kph": avg_speed_kph,
-                    "gradient_pct": chunk_grad,
-                    "temperature_c": chunk_temp,
-                    "wind_mps": chunk_wind,
-                },
-                model_path=model_path,
-            )
+    # Predict energy for every chunk up front (model-driven; the wind magnitude is
+    # used directly as the headwind component, see module docstring). Doing this
+    # before the walk lets the charging check look AHEAD at the energy still owed to
+    # the destination, so we only charge when genuinely required.
+    chunk_energies = [
+        max(
+            0.0,
+            float(
+                predict_energy(
+                    {
+                        "distance_km": chunk_km,
+                        "payload_t": payload_t,
+                        "speed_kph": avg_speed_kph,
+                        "gradient_pct": chunk_grad,
+                        "temperature_c": chunk_temp,
+                        "wind_mps": chunk_wind,
+                    },
+                    model_path=model_path,
+                )
+            ),
         )
-        chunk_energy = max(0.0, chunk_energy)
+        for chunk_km, chunk_grad, chunk_temp, chunk_wind in chunks
+    ]
+
+    for i, (chunk_km, chunk_grad, chunk_temp, chunk_wind) in enumerate(chunks):
+        chunk_energy = chunk_energies[i]
         chunk_drive_min = (chunk_km / avg_speed_kph) * 60.0
         chunk_soc_drop = (chunk_energy / battery_kwh) * 100.0
         projected_soc = soc - chunk_soc_drop
 
-        # --- Charging check: would this chunk push us below the floor? ---
-        # Safety reserve raises the trigger so we charge before reaching the
-        # bare min_soc, keeping a cushion mid-route.
+        # --- Charging check: is a charge genuinely required to finish the route? ---
+        # The reserve raises a SOFT trigger so that, WHEN a charge is needed, we take
+        # it early and keep a cushion mid-route. But we only actually charge if
+        # continuing without charging would drop below the HARD min_soc floor before
+        # the destination -- i.e. the remaining route is truly unreachable on the
+        # current charge. Without this look-ahead a short leg that merely dips into
+        # the reserve band (yet finishes well above min_soc) would trigger a spurious
+        # full recharge at the origin, contradicting check_reachability, which calls
+        # the very same trip reachable.
         charge_floor = min_soc + max(0.0, reserve_pct)
-        if projected_soc < charge_floor:
+        remaining_energy_kwh = sum(chunk_energies[i:])
+        soc_at_end_without_charge = soc - (remaining_energy_kwh / battery_kwh) * 100.0
+        if projected_soc < charge_floor and soc_at_end_without_charge < min_soc:
             # Close the running drive segment, then charge before continuing.
             if seg_open:
                 _close_drive_segment()
@@ -472,6 +500,30 @@ def _build_chunks(
     sampled_total = sum(max(0.0, float(s.get("distKm", 0.0))) for s in segs)
     scale = (distance_km / sampled_total) if sampled_total > 0 else 1.0
 
+    # Aggregate consecutive enriched segments into ~CHUNK_KM windows, each carrying
+    # the distance-weighted-average gradient/temperature/wind over the window, and
+    # predict ONCE per window (back in plan_route). This is the crux of geometry-mode
+    # accuracy: the model over-predicts on sub-~5 km legs (a positive small-distance
+    # bias), and a real routing polyline is downsampled to ~2-10 km segments, so
+    # predicting per raw segment and summing would inflate route energy with polyline
+    # DENSITY (finer slicing -> higher kWh) instead of with physics. Averaging is
+    # faithful: for the gradient/potential-energy term, avg_grade * window_dist equals
+    # the window's net climb, and the temperature/wind drag terms are near-linear over
+    # a 25 km span. The window distance still stays <= CHUNK_KM so the SOC profile and
+    # charge-stop placement remain fine-grained.
+    win_km = 0.0
+    win_grad_km = 0.0  # distance-weighted accumulators (value * km)
+    win_temp_km = 0.0
+    win_wind_km = 0.0
+
+    def _flush_window() -> None:
+        nonlocal win_km, win_grad_km, win_temp_km, win_wind_km
+        if win_km > 1e-6:
+            chunks.append(
+                (win_km, win_grad_km / win_km, win_temp_km / win_km, win_wind_km / win_km)
+            )
+        win_km = win_grad_km = win_temp_km = win_wind_km = 0.0
+
     for s in segs:
         seg_km = max(0.0, float(s.get("distKm", 0.0))) * scale
         if seg_km <= 1e-6:
@@ -481,9 +533,15 @@ def _build_chunks(
         wind = float(s.get("windMps", WIND_MPS))
         remaining = seg_km
         while remaining > 1e-6:
-            step = min(CHUNK_KM, remaining)
-            chunks.append((step, grad, temp, wind))
+            step = min(remaining, CHUNK_KM - win_km)
+            win_km += step
+            win_grad_km += grad * step
+            win_temp_km += temp * step
+            win_wind_km += wind * step
             remaining -= step
+            if win_km >= CHUNK_KM - 1e-9:
+                _flush_window()
+    _flush_window()
 
     if not chunks:  # Degenerate enrichment -> fall back to flat.
         return _build_chunks(distance_km, None, temperature_c)

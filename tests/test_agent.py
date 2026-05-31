@@ -249,3 +249,123 @@ def test_missing_api_key_raises_explicit_error(monkeypatch):
     with pytest.raises(MissingAPIKeyError):
         # Touching .client triggers lazy construction, which checks the key.
         _ = agent.client
+
+
+# --------------------------------------------------------------------------- #
+# Reasoning-strip, OpenAI<->Anthropic adapter, chat(), AgentError, MAX_TURNS
+# --------------------------------------------------------------------------- #
+def test_strip_reasoning_removes_think_blocks() -> None:
+    """<think>...</think> must be stripped from the user-facing reply.
+
+    WHY: MiniMax-M2 emits chain-of-thought in <think> tags; leaking it to the
+    dispatcher would be noisy and unprofessional. Closed and unclosed (truncated)
+    tags must both be removed, and a reply that is ONLY reasoning falls back to
+    the raw text rather than going blank.
+    """
+    from nexdash.agent import _extract_text, _strip_reasoning
+
+    assert _strip_reasoning("<think>weighing options</think>Yes, it reaches.") == "Yes, it reaches."
+    assert _strip_reasoning("prefix <think>mid</think> suffix") == "prefix  suffix".strip()
+    # Unclosed (token-truncated) reasoning AFTER an answer is dropped, keeping the answer.
+    assert _strip_reasoning("Reaches with margin. <think>but I should").strip() == "Reaches with margin."
+    # _extract_text applies the strip over text blocks.
+    blocks = [{"type": "text", "text": "<think>hmm</think>Final answer."}]
+    assert _extract_text(blocks) == "Final answer."
+
+
+def test_openai_anthropic_adapter_roundtrips_tool_call_ids() -> None:
+    """The adapter must preserve tool-call ids both directions.
+
+    WHY: OpenAI requires each assistant tool_call to be answered by a `tool`
+    message with the SAME tool_call_id; if the adapter dropped/renamed ids the
+    provider would reject the follow-up or mis-route the result.
+    """
+    from nexdash.agent import _to_anthropic_blocks, _to_openai_messages
+
+    convo = [
+        {"role": "user", "content": "How much energy?"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "checking"},
+                {"type": "tool_use", "id": "call_1", "name": "predict_energy", "input": {"distance_km": 80}},
+            ],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "42"}]},
+    ]
+    msgs = _to_openai_messages("SYS", convo)
+    assert msgs[0] == {"role": "system", "content": "SYS"}
+    assistant = next(m for m in msgs if m["role"] == "assistant")
+    assert assistant["tool_calls"][0]["id"] == "call_1"
+    assert assistant["tool_calls"][0]["function"]["name"] == "predict_energy"
+    tool_msg = next(m for m in msgs if m["role"] == "tool")
+    assert tool_msg["tool_call_id"] == "call_1" and tool_msg["content"] == "42"
+
+    # OpenAI response -> Anthropic blocks: ids/names/args survive.
+    blocks = _to_anthropic_blocks(
+        {
+            "content": "ok",
+            "tool_calls": [
+                {"id": "call_9", "function": {"name": "check_reachability", "arguments": '{"soc_pct": 60}'}}
+            ],
+        }
+    )
+    tool_use = next(b for b in blocks if b["type"] == "tool_use")
+    assert tool_use["id"] == "call_9"
+    assert tool_use["name"] == "check_reachability"
+    assert tool_use["input"] == {"soc_pct": 60}
+
+
+def test_chat_returns_reply_and_tool_names(monkeypatch) -> None:
+    """chat() runs the tool loop and returns {reply, tools} for the UI.
+
+    WHY: the web/chat layer relies on this exact shape — the reply text plus the
+    list of tools invoked this turn (to show which deterministic tools ran).
+    """
+    monkeypatch.setattr(nexdash_tools, "dispatch", lambda name, args: {"reaches": True})
+    tool_use = _ToolUseBlock(id="t1", name="check_reachability", input={"soc_pct": 60})
+    client = _FakeClient([_Response([tool_use]), _Response([_TextBlock("Yes, it reaches.")])])
+    agent = DispatcherAgent(client=client)
+
+    out = agent.chat([{"role": "user", "content": "Does it reach?"}])
+    assert out["reply"] == "Yes, it reaches."
+    assert out["tools"] == ["check_reachability"]
+
+
+def test_provider_429_raises_agent_error(monkeypatch) -> None:
+    """A rate-limited provider must raise the catchable AgentError, not crash.
+
+    WHY: /api/chat catches AgentError to degrade gracefully; a 429 from a busy
+    (e.g. free-tier) model must surface as that, not an opaque exception or a 500.
+    """
+    import httpx
+
+    from nexdash.agent import AgentError, _OpenAICompatMessages
+
+    class _Resp:
+        status_code = 429
+        text = "rate limited"
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp())
+    client = _OpenAICompatMessages("key", "https://example/v1/chat/completions")
+    with pytest.raises(AgentError):
+        client.create(model="m", max_tokens=64, system="s", tools=[], messages=[{"role": "user", "content": "hi"}])
+
+
+def test_max_turns_exhaustion_returns_fallback(monkeypatch) -> None:
+    """If the model never stops calling tools, ask() returns a safe fallback.
+
+    WHY: a pathological loop (model keeps requesting tools) must terminate after
+    MAX_TURNS with a clear message, not spin forever or raise.
+    """
+    from nexdash.agent import MAX_TURNS
+
+    monkeypatch.setattr(nexdash_tools, "dispatch", lambda name, args: {"ok": True})
+    # Every turn is a tool_use (never a final text answer).
+    responses = [
+        _Response([_ToolUseBlock(id=f"t{i}", name="predict_energy", input={})])
+        for i in range(MAX_TURNS)
+    ]
+    agent = DispatcherAgent(client=_FakeClient(responses))
+    answer = agent.ask("loop forever")
+    assert "unable to reach a final answer" in answer.lower()

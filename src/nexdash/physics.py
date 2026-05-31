@@ -113,7 +113,12 @@ _REGEN_T_COLD_C: float = -15.0  # regen floor reached at/below this temperature
 _REGEN_TEMP_FLOOR: float = 0.45  # cold multiplier floor on regen_base
 _REGEN_GRADE_KNEE_PCT: float = 5.0  # |descent| beyond which recovery tapers
 _REGEN_GRADE_MAX_PCT: float = 10.0  # |descent| at which the grade floor is hit
-_REGEN_GRADE_FLOOR: float = 0.55  # steep-descent multiplier floor on regen_base
+# Steeper descents recover a smaller *fraction* (regen power cap → friction), but
+# the floor is chosen so the recovered *total* energy stays monotonically
+# non-decreasing in |grade| — a steeper descent never returns LESS charge than a
+# gentler one. (With a lower floor the fraction taper out-ran the rising
+# potential energy between -8% and -10%, which is physically wrong.)
+_REGEN_GRADE_FLOOR: float = 0.70
 
 
 def _air_density(temperature_c: float) -> float:
@@ -222,9 +227,9 @@ def energy_breakdown(
         distance_km: Segment length (km). Must be > 0 for the result to be
             meaningful; non-positive distances yield all-zero components.
         payload_t: Cargo payload (tonnes); added to the kerb mass.
-        speed_kph: Average travel speed (km/h). Must be > 0; non-positive
-            speeds are treated as a tiny positive speed to avoid division by
-            zero while keeping the result finite.
+        speed_kph: Average travel speed (km/h). Must be > 0; a non-positive
+            speed raises ``ValueError`` (a stationary truck over a non-zero
+            distance is undefined).
         gradient_pct: Road grade in percent (rise/run * 100); negative is
             downhill.
         temperature_c: Ambient air temperature (C), drives the HVAC load.
@@ -251,7 +256,11 @@ def energy_breakdown(
             "regen": 0.0,
             "total": 0.0,
         }
-    speed_kph = max(speed_kph, 1e-6)
+    # A moving segment must have a positive speed: aux energy is power x (d/speed),
+    # so speed -> 0 diverges. Fail loud rather than returning an absurd number
+    # (a previous version clamped to 1e-6 and produced ~2e8 kWh).
+    if speed_kph <= 0.0:
+        raise ValueError(f"speed_kph must be > 0 for a moving segment; got {speed_kph}")
 
     # --- Unit conversions ------------------------------------------------- #
     distance_m = distance_km * 1000.0

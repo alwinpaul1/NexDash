@@ -119,7 +119,7 @@ function EmptyState({ onPick, disabled }) {
   );
 }
 
-export default function ChatPanel({ onClose }) {
+export default function ChatPanel() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
