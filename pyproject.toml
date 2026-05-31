@@ -19,6 +19,7 @@ dependencies = [
     "joblib",
     "matplotlib",
     "anthropic",
+    "httpx",
     "mcp",
     "fastapi",
     "uvicorn",
