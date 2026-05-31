@@ -534,6 +534,9 @@ export async function optimizeRoute(planner) {
       geometry,
       socProfile: sim.socProfile || [],
       segments,
+      // Per-destination arrivals (SOC/ETA/deliver-by) from the per-leg sim — must
+      // be forwarded or the "Delivery Stops" panel never renders.
+      stops: sim.stops || [],
       chargingStops,
       // Enriched real-world layers from the backend (Open-Meteo).
       elevationProfile: sim.elevationProfile || [],
