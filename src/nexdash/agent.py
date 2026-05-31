@@ -21,10 +21,16 @@ from typing import Any, Optional
 from .config import DEFAULT_MODEL_PATH
 from . import tools as nexdash_tools
 
-__all__ = ["DispatcherAgent", "SYSTEM_PROMPT", "MissingAPIKeyError"]
+__all__ = ["DispatcherAgent", "SYSTEM_PROMPT", "MissingAPIKeyError", "AgentError"]
 
 # Default Claude model id for the dispatcher (latest Opus).
 DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
+
+# When MINIMAX_API_KEY is set the agent runs on MiniMax's OpenAI-compatible API
+# instead of Anthropic. The key is read from the environment — never hard-code
+# it. NEXDASH_LLM_MODEL overrides the default model.
+DEFAULT_LLM_MODEL = os.environ.get("NEXDASH_LLM_MODEL", "MiniMax-M2.7")
+MINIMAX_API_URL = "https://api.minimax.io/v1/chat/completions"
 
 # Upper bound on tool-use round trips to guard against pathological loops.
 MAX_TURNS = 8
@@ -59,10 +65,18 @@ SYSTEM_PROMPT = (
 
 
 class MissingAPIKeyError(RuntimeError):
-    """Raised when a real Anthropic client is needed but no API key is set.
+    """Raised when a real LLM client is needed but no API key is set.
 
-    This is a catchable, explicit error so callers (e.g. the CLI) can present
-    a friendly message instead of an opaque SDK failure.
+    This is a catchable, explicit error so callers (e.g. the CLI / API) can
+    present a friendly message instead of an opaque SDK failure.
+    """
+
+
+class AgentError(RuntimeError):
+    """Raised for recoverable provider failures (rate limits, transient errors).
+
+    Catchable so callers can degrade gracefully (e.g. the API returns a friendly
+    message) instead of surfacing a 500.
     """
 
 
@@ -91,7 +105,7 @@ class DispatcherAgent:
         client: Optional[Any] = None,
         model: str = DEFAULT_CLAUDE_MODEL,
         *,
-        max_tokens: int = 1024,
+        max_tokens: int = 2048,
     ) -> None:
         self.model_path = str(model_path)
         self.model = model
@@ -116,27 +130,34 @@ class DispatcherAgent:
             self._client = self._make_real_client()
         return self._client
 
-    @staticmethod
-    def _make_real_client() -> Any:
-        """Construct a real ``anthropic.Anthropic`` client.
+    def _make_real_client(self) -> Any:
+        """Construct a real LLM client based on which API key is set.
 
-        This is the only place where a missing API key is surfaced, so tests
-        that inject a client never touch the network or require a key.
+        Prefers MiniMax (OpenAI-compatible) when ``MINIMAX_API_KEY`` is present —
+        switching the model to the MiniMax default unless the caller overrode it —
+        otherwise falls back to Anthropic. This is the only place a missing key is
+        surfaced, so tests that inject a client never touch the network or require
+        a key.
         """
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            raise MissingAPIKeyError(
-                "ANTHROPIC_API_KEY is not set. Export your Anthropic API key "
-                "to use the NexDash dispatcher, e.g. "
-                "`export ANTHROPIC_API_KEY=sk-...`."
-            )
-        try:
-            import anthropic  # noqa: WPS433 (local import keeps SDK optional for tests)
-        except ImportError as exc:  # pragma: no cover - import-time guard
-            raise ImportError(
-                "The 'anthropic' package is required to create a real client. "
-                "Install it with `pip install anthropic`."
-            ) from exc
-        return anthropic.Anthropic()
+        if os.environ.get("MINIMAX_API_KEY"):
+            if self.model == DEFAULT_CLAUDE_MODEL:  # caller didn't override
+                self.model = DEFAULT_LLM_MODEL
+            return _OpenAICompatClient(os.environ["MINIMAX_API_KEY"], MINIMAX_API_URL)
+
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            try:
+                import anthropic  # noqa: WPS433 (local import keeps SDK optional)
+            except ImportError as exc:  # pragma: no cover - import-time guard
+                raise ImportError(
+                    "The 'anthropic' package is required to create a real client. "
+                    "Install it with `pip install anthropic`."
+                ) from exc
+            return anthropic.Anthropic()
+
+        raise MissingAPIKeyError(
+            "No LLM API key set. Export MINIMAX_API_KEY (e.g. to use "
+            "MiniMax-M2.7) or ANTHROPIC_API_KEY, then restart the server."
+        )
 
     # ------------------------------------------------------------------ #
     # Core loop
@@ -317,14 +338,30 @@ def _get(block: Any, attr: str) -> Any:
     return getattr(block, attr, None)
 
 
+def _strip_reasoning(text: str) -> str:
+    """Remove ``<think>...</think>`` reasoning that models like MiniMax-M2 emit.
+
+    The reasoning is kept verbatim in the conversation history (for the model's
+    own continuity) but must not surface in the dispatcher-facing reply.
+    """
+    if not text:
+        return text
+    import re
+
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    cleaned = re.sub(r"<think>.*$", "", cleaned, flags=re.DOTALL)  # truncated/unclosed
+    cleaned = cleaned.strip()
+    return cleaned or text.strip()
+
+
 def _extract_text(blocks: list[Any]) -> str:
-    """Concatenate all text blocks from a model response."""
+    """Concatenate all text blocks from a model response (sans reasoning)."""
     parts = [
         _block_text(b)
         for b in blocks
         if _block_type(b) == "text"
     ]
-    return "".join(parts).strip()
+    return _strip_reasoning("".join(parts))
 
 
 def _serialize_content(blocks: list[Any]) -> list[dict[str, Any]]:
@@ -360,3 +397,155 @@ def _result_to_text(result: Any) -> str:
         return json.dumps(result, default=str)
     except (TypeError, ValueError):
         return str(result)
+
+
+# ---------------------------------------------------------------------- #
+# OpenAI-compatible client adapter (used for MiniMax)
+# ---------------------------------------------------------------------- #
+# Exposes the same ``client.messages.create(...)`` surface the Anthropic loop
+# above expects, translating Anthropic-style requests/responses to and from the
+# OpenAI chat-completions schema. This lets the dispatcher run on any
+# OpenAI-compatible endpoint (MiniMax-M2.7 here) with ZERO changes to the
+# tool-use loop or the tool layer.
+class _CompatResponse:
+    """Minimal stand-in for an Anthropic response: just a ``.content`` block list."""
+
+    def __init__(self, content: list[dict[str, Any]]) -> None:
+        self.content = content
+
+
+class _OpenAICompatMessages:
+    """Implements ``.create(...)`` against an OpenAI-compatible chat endpoint."""
+
+    def __init__(self, api_key: str, url: str) -> None:
+        self._key = api_key
+        self._url = url
+
+    def create(self, *, model, max_tokens, system, tools, messages, **_ignored):
+        import httpx
+
+        payload = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": _to_openai_messages(system, messages),
+            "tools": _to_openai_tools(tools),
+        }
+        headers = {
+            "Authorization": f"Bearer {self._key}",
+            "Content-Type": "application/json",
+        }
+        try:
+            resp = httpx.post(self._url, json=payload, headers=headers, timeout=90.0)
+        except Exception as exc:  # noqa: BLE001 - network failure -> recoverable
+            raise AgentError(f"Could not reach the model provider: {exc}") from exc
+
+        if resp.status_code == 429:
+            raise AgentError(
+                "The model is rate-limited right now (HTTP 429). Please retry in "
+                "a moment."
+            )
+        if resp.status_code != 200:
+            raise AgentError(f"Model provider error {resp.status_code}: {resp.text[:300]}")
+
+        choices = (resp.json() or {}).get("choices") or []
+        if not choices:
+            raise AgentError("Model provider returned no choices.")
+        return _CompatResponse(_to_anthropic_blocks(choices[0].get("message", {})))
+
+
+class _OpenAICompatClient:
+    """Anthropic-shaped facade over an OpenAI-compatible endpoint."""
+
+    def __init__(self, api_key: str, url: str) -> None:
+        self.messages = _OpenAICompatMessages(api_key, url)
+
+
+def _to_openai_tools(tool_specs: list[Any]) -> list[dict[str, Any]]:
+    """Anthropic tool specs ({name, description, input_schema}) -> OpenAI funcs."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": _get(s, "name"),
+                "description": _get(s, "description") or "",
+                "parameters": _get(s, "input_schema") or {},
+            },
+        }
+        for s in (tool_specs or [])
+    ]
+
+
+def _to_openai_messages(system: str, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Translate the Anthropic-style conversation into OpenAI chat messages.
+
+    Handles plain-string turns, assistant turns carrying text + tool_use blocks
+    (-> ``tool_calls``), and user turns carrying tool_result blocks (-> ``tool``
+    role messages keyed by the original tool-call id).
+    """
+    import json
+
+    out: list[dict[str, Any]] = [{"role": "system", "content": system}]
+    for m in messages or []:
+        role = m.get("role")
+        content = m.get("content")
+        if isinstance(content, str):
+            out.append({"role": role, "content": content})
+            continue
+
+        blocks = content or []
+        if role == "assistant":
+            text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+            tool_calls = [
+                {
+                    "id": b.get("id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": b.get("name", ""),
+                        "arguments": json.dumps(b.get("input") or {}),
+                    },
+                }
+                for b in blocks
+                if b.get("type") == "tool_use"
+            ]
+            msg: dict[str, Any] = {"role": "assistant", "content": text or None}
+            if tool_calls:
+                msg["tool_calls"] = tool_calls
+            out.append(msg)
+        else:  # user turn carrying tool_result (and/or text) blocks
+            for b in blocks:
+                if b.get("type") == "tool_result":
+                    out.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": b.get("tool_use_id", ""),
+                            "content": b.get("content", ""),
+                        }
+                    )
+                elif b.get("type") == "text":
+                    out.append({"role": "user", "content": b.get("text", "")})
+    return out
+
+
+def _to_anthropic_blocks(message: dict[str, Any]) -> list[dict[str, Any]]:
+    """Translate an OpenAI assistant message back into Anthropic content blocks."""
+    import json
+
+    blocks: list[dict[str, Any]] = []
+    content = message.get("content")
+    if content:
+        blocks.append({"type": "text", "text": content})
+    for tc in message.get("tool_calls") or []:
+        fn = tc.get("function", {}) or {}
+        try:
+            args = json.loads(fn.get("arguments") or "{}")
+        except (TypeError, ValueError):
+            args = {}
+        blocks.append(
+            {
+                "type": "tool_use",
+                "id": tc.get("id", ""),
+                "name": fn.get("name", ""),
+                "input": args if isinstance(args, dict) else {},
+            }
+        )
+    return blocks

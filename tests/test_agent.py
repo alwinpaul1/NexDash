@@ -239,9 +239,11 @@ def test_missing_api_key_raises_explicit_error(monkeypatch):
     """No injected client + no API key -> MissingAPIKeyError on first use.
 
     WHY: the CLI relies on this explicit, catchable error to print friendly
-    setup guidance instead of leaking a raw SDK exception.
+    setup guidance instead of leaking a raw SDK exception. With no provider key
+    of either kind set, construction must raise.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
     agent = DispatcherAgent()  # no client injected
 
     with pytest.raises(MissingAPIKeyError):

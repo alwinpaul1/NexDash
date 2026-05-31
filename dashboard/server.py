@@ -333,12 +333,19 @@ async def chat(req: ChatRequest) -> JSONResponse:
             content={
                 "reply": (
                     "⚠️ The dispatcher agent isn't connected yet — set "
-                    "ANTHROPIC_API_KEY on the server and restart to chat live. "
-                    "Meanwhile the Route Planner and range tools still work."
+                    "MINIMAX_API_KEY (or ANTHROPIC_API_KEY) on the server and "
+                    "restart to chat live. Meanwhile the Route Planner and range "
+                    "tools still work."
                 ),
                 "tools": [],
                 "degraded": True,
             }
+        )
+    except agent_module.AgentError as exc:
+        # Recoverable provider issue (e.g. a rate-limited free model): degrade
+        # gracefully with the explanation rather than a hard 500.
+        return JSONResponse(
+            content={"reply": f"⚠️ {exc}", "tools": [], "degraded": True}
         )
     except Exception as exc:  # pragma: no cover - surfaces unexpected failures
         logger.exception("Chat failed: %s", exc)
@@ -352,11 +359,33 @@ async def chat(req: ChatRequest) -> JSONResponse:
 app.mount("/", StaticFiles(directory=str(DASHBOARD_DIR), html=False), name="static")
 
 
+def _load_dotenv() -> None:
+    """Load KEY=VALUE pairs from a repo-root ``.env`` into the environment.
+
+    Minimal, dependency-free, and only invoked from ``main()`` (never at import
+    time), so it can't leak the (gitignored) ``.env`` keys into the test suite.
+    Existing environment variables always win.
+    """
+    import os
+    from pathlib import Path
+
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    if not env_path.exists():
+        return
+    for raw in env_path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+
+
 def main(host: str = "0.0.0.0", port: int = 8000) -> None:
     """Entry point for ``python dashboard/server.py``."""
 
     import uvicorn
 
+    _load_dotenv()
     uvicorn.run(app, host=host, port=port)
 
 

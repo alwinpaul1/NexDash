@@ -2,6 +2,10 @@ import { useState, useRef } from "react";
 import LocationSearch from "./LocationSearch.jsx";
 import TruckCard from "./TruckCard.jsx";
 
+// The eActros 600's maximum payload (22 t). Payload / drop-off inputs are capped
+// here so the dispatcher can't set a load the truck physically can't carry.
+const MAX_PAYLOAD_KG = 22000;
+
 function nowLocalISO() {
   const d = new Date();
   const off = d.getTimezoneOffset();
@@ -135,7 +139,7 @@ function DestinationRow({
             <Slider
               value={dest.dropWeightKg}
               min={0}
-              max={26000}
+              max={MAX_PAYLOAD_KG}
               step={250}
               onChange={(v) => onUpdate(dest.id, { dropWeightKg: v })}
             />
@@ -351,13 +355,13 @@ export default function PlannerForm({
                 <Slider value={planner.maxChargeKw} min={100} max={400} step={10} onChange={onMaxChargeKw} />
               </div>
               <div>
-                <FieldLabel icon="scale" hint={`${planner.payloadKg} kg`}>
+                <FieldLabel icon="scale" hint={`${planner.payloadKg} / ${MAX_PAYLOAD_KG} kg`}>
                   Payload
                 </FieldLabel>
                 <Slider
                   value={planner.payloadKg}
                   min={0}
-                  max={26000}
+                  max={MAX_PAYLOAD_KG}
                   step={250}
                   onChange={onPayloadKg}
                 />

@@ -4,6 +4,7 @@ scikit-learn
 joblib
 matplotlib
 anthropic
+httpx
 mcp
 fastapi
 uvicorn

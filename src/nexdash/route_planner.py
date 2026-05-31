@@ -363,6 +363,18 @@ def plan_route(
     )
 
     elevation_profile = enrichment["elevationProfile"] if enrichment else []
+    # The profile's distance axis is built from great-circle hops between the
+    # downsampled polyline points, so it underestimates the real road length
+    # (e.g. 559 vs the routing engine's 587 km). Rescale it to distance_km so the
+    # chart axis matches the Route Info "Total Distance" the dispatcher sees.
+    if elevation_profile and distance_km > 0:
+        prof_total = float(elevation_profile[-1].get("distKm", 0.0) or 0.0)
+        if prof_total > 0:
+            scale = distance_km / prof_total
+            elevation_profile = [
+                {**p, "distKm": round(float(p["distKm"]) * scale, 3)}
+                for p in elevation_profile
+            ]
     conditions = enrichment["conditions"] if enrichment else {}
     elevation_gain_m = float(conditions.get("climbM", 0.0)) if conditions else 0.0
 
