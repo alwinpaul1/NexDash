@@ -75,7 +75,7 @@ reference.
 The recalibrated generator should reproduce, for a **40 t combination on the
 flat at 80 km/h, 20 °C, no wind**, a battery-side warm anchor of
 **~1.265 kWh/km** (the pure-physics, no-route-regen figure, referenced at
-`rho(20 °C) = 1.204`), rising to **~1.55 kWh/km at −10 °C** on the same segment
+`rho(20 °C) = 1.204`), rising to **~1.47 kWh/km at −10 °C** on the same segment
 once the temperature-dependent air-density and cold-tyre channels engage (15 °C
 is the pivot at the old 1.225 density). On *real mixed routes* (which include
 descents that feed regen) the warm figure averages down toward the
@@ -93,9 +93,11 @@ temperature-dependent air density, the model yields a **warm anchor of
 anchor moved down ~0.025 kWh/km from the previous ~1.29). **15 °C remains the
 pivot**: `rho(15 °C) = 1.225` exactly, continuous with the old constant, so the
 calibration is unchanged at the reference temperature. The same 40 t / 80 km/h
-flat segment **in the cold rises to ~1.55 kWh/km at −10 °C** (denser air +
-cold-tyre stiffening), a ~+22% winter swing on this physics-only segment and the
-explicit-channel counterpart of the field-observed +25% winter penalty. Both
+flat segment **in the cold rises to ~1.47 kWh/km at −10 °C** (denser air +
+cold-tyre stiffening), a ~+16% winter swing on this physics-only segment and the
+explicit-channel counterpart of the field-observed +25% winter penalty. (A
+faster, lighter 22 t / 85 km/h flat run reaches **~1.55 kWh/km** in the cold,
+where the higher speed lifts the aero share.) Both
 figures sit inside the WLTP/spec-implied band at the warm end and the field
 "cold + unpaved" envelope (up to 1.40 measured, higher on the steady-state
 physics-only run) at the cold end. Empty-rig (18 t) flat at 80 km/h / 20 °C

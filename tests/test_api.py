@@ -1,8 +1,7 @@
-"""Integration tests for the FastAPI dashboard server (``dashboard/server.py``).
+"""Integration tests for the FastAPI server (``dashboard/server.py``).
 
-These exercise the HTTP surface end-to-end with FastAPI's ``TestClient``:
+These exercise the HTTP API surface end-to-end with FastAPI's ``TestClient``:
 
-* ``GET /`` must serve the single-page dashboard HTML.
 * ``POST /api/predict`` must run a real range check and return a
   :func:`nexdash.range.check_reachability` dict (notably with a boolean
   ``reaches`` field) once a trained model artifact is present.
@@ -11,8 +10,6 @@ These exercise the HTTP surface end-to-end with FastAPI's ``TestClient``:
 
 WHY these assertions matter (not just WHAT they check):
 
-* The dashboard is useless if ``/`` does not return the HTML shell, so we
-  assert on real markup, not just a 200.
 * ``reaches`` is the single most important field a dispatcher acts on; a
   response that omits it or returns a non-bool would silently break the UI's
   green/red verdict, so we assert its presence and type explicitly.
@@ -103,20 +100,6 @@ def client_without_model(tmp_path, monkeypatch):
         yield client
 
     model_module._MODEL_CACHE.clear()
-
-
-def test_get_root_serves_dashboard_html(client_with_model):
-    """GET / returns the dashboard HTML shell (status 200, real markup)."""
-    resp = client_with_model.get("/")
-    assert resp.status_code == 200
-    content_type = resp.headers.get("content-type", "")
-    assert "text/html" in content_type
-    body = resp.text.lower()
-    # Assert on substance, not just a 200: the page must be the real shell that
-    # pulls in the app.js wiring and identifies itself as NexDash.
-    assert "<html" in body
-    assert "app.js" in body
-    assert "nexdash" in body
 
 
 def test_health_reports_model_available(client_with_model):

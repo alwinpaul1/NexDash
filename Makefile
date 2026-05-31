@@ -5,7 +5,7 @@
 #   make data    generate the synthetic dataset
 #   make train   run the end-to-end training/evaluation pipeline
 #   make test    run the test suite
-#   make serve   launch the FastAPI dashboard
+#   make serve   launch the FastAPI API server
 #   make agent   start the interactive dispatcher REPL
 
 VENV ?= .venv

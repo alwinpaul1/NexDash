@@ -80,6 +80,13 @@ T_KELVIN_OFFSET: float = 273.15
 #: Standard gravitational acceleration (m/s^2).
 G: float = 9.81
 
+#: Minimum |actual energy| (kWh) for a row to participate in MAPE. Shared by the
+#: model's comparison metrics and the evaluation report so every MAPE figure in
+#: the project uses ONE definition (avoids a 9% headline vs 16% table mismatch).
+#: Set above 1 kWh to exclude near-zero net-regen downhill rows whose tiny
+#: denominators would make MAPE explode meaninglessly.
+MAPE_FLOOR_KWH: float = 1.0
+
 # --------------------------------------------------------------------------- #
 # Filesystem paths
 # --------------------------------------------------------------------------- #

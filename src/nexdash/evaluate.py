@@ -38,7 +38,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-from .config import REPORTS_DIR, TRUCK
+from .config import MAPE_FLOOR_KWH, REPORTS_DIR, TRUCK
 from .features import FEATURE_COLUMNS, TARGET
 
 # --------------------------------------------------------------------------- #
@@ -49,14 +49,15 @@ from .features import FEATURE_COLUMNS, TARGET
 #: intuitive "percentage of a full charge" figure.
 NOMINAL_TRIP_KM: float = 500.0
 
-#: Representative motorway conditions for the nominal trip (mid payload, steady
-#: 80 kph, flat road, mild weather). Used only to derive the nominal trip
-#: energy denominator for :data:`pct_range_error`.
-_NOMINAL_TRIP_KWH: float = 0.95 * TRUCK.battery_kwh  # ~full usable battery
+#: Energy denominator for :data:`pct_range_error`: the usable battery capacity, so
+#: the figure reads as "MAE as a fraction of one full charge". Uses
+#: ``TRUCK.battery_kwh`` so the report text, this divisor, ``run_pipeline`` and
+#: ``model_info`` all reference ONE value (no 600-vs-570 mismatch).
+_NOMINAL_TRIP_KWH: float = TRUCK.battery_kwh
 
-#: Minimum actual energy (kWh) for a row to participate in MAPE. Below this the
-#: percentage error is dominated by near-zero denominators (strong downhill).
-_MAPE_FLOOR_KWH: float = 1.0
+#: Minimum |actual energy| (kWh) for a row to participate in MAPE — shared with
+#: the model's comparison metrics so every MAPE in the report uses one floor.
+_MAPE_FLOOR_KWH: float = MAPE_FLOOR_KWH
 
 
 # --------------------------------------------------------------------------- #
@@ -101,8 +102,9 @@ def _core_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
     # squared=False is deprecated/removed in newer sklearn; sqrt is portable.
     rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
 
-    # MAPE only where the denominator is meaningful.
-    mask = np.abs(y_true) > _MAPE_FLOOR_KWH
+    # MAPE only where the denominator is meaningful (same floor/comparator the
+    # model's comparison metrics use, so the table and headline MAPE agree).
+    mask = np.abs(y_true) >= _MAPE_FLOOR_KWH
     if mask.any():
         mape = float(
             np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100.0

@@ -95,14 +95,55 @@ def test_no_missing_values(df: pd.DataFrame) -> None:
     assert np.isfinite(df.to_numpy()).all()
 
 
-def test_energy_strictly_positive(df: pd.DataFrame) -> None:
-    """A moving segment always records strictly positive consumed energy.
+def test_energy_mostly_positive_but_regen_allows_negative(df: pd.DataFrame) -> None:
+    """Most segments consume energy, but net-regen descents may be negative.
 
-    Noise + net-regen could in principle dip the label, but the generator
-    applies a positive floor; a non-positive label would mean a real meter
-    logged free or generated energy for a trip, which is nonsensical.
+    A real BEV energy meter logs *net-negative* consumption on a long steep
+    descent (regen returns more charge than the segment spends). The generator
+    must preserve that signal rather than clamping it away, so we assert (a) the
+    vast majority of segments are positive, and (b) the only negative labels are
+    genuine descents (gradient < 0). A generator that clamped all labels positive
+    would erase the regenerative-braking failure mode this dataset must teach.
     """
-    assert (df[TARGET_COLUMN] > 0).all()
+    target = df[TARGET_COLUMN]
+    # Overwhelmingly positive: only descents can go negative, and they are rare.
+    assert (target > 0).mean() > 0.9
+    # Every negative label must be a descent — never an uphill/flat segment.
+    negatives = df[target < 0]
+    assert (negatives["gradient_pct"] < 0).all(), "only descents may record net regen"
+    # Net regen is genuinely present (the signal we must not clamp away).
+    assert (target < 0).any(), "expected some net-regen (negative) descent labels"
+
+
+def test_implied_net_climb_is_physically_bounded() -> None:
+    """No segment may imply a geographically impossible net elevation change.
+
+    WHY: a long leg cannot sustain a steep average grade without implying an
+    impossible climb (e.g. +1% over 300 km = 3 km of ascent, higher than any
+    German road). The generator caps the per-segment gradient so the implied net
+    climb stays within a realistic ceiling. This is the generator's real, seed-
+    independent guarantee, so we check it across MANY random seeds.
+
+    We deliberately do NOT assert that labels stay under the battery capacity: a
+    rare long + heavy + cold + headwind leg can legitimately need more than one
+    charge — a real "must charge mid-route" segment, not a bug. We DO assert a
+    generous physical ceiling that still catches the old "phantom mountain"
+    explosion (labels once reached ~5x battery) without falsely banning real
+    extremes.
+    """
+    for seed in range(25):
+        d = generate_dataset(n_samples=2000, seed=seed)
+        net_climb_m = (
+            d["distance_km"] * 1000.0 * np.sin(np.arctan(d["gradient_pct"] / 100.0))
+        ).abs()
+        assert net_climb_m.max() <= 1010.0, (
+            f"seed {seed}: implied net climb {net_climb_m.max():.0f} m exceeds the cap"
+        )
+        # Physical sanity ceiling: above any real extreme (~800 kWh) but far below
+        # the old phantom-mountain bug (~3000 kWh). A breach signals a regression.
+        assert d["energy_kwh"].max() <= 900.0, (
+            f"seed {seed}: label {d['energy_kwh'].max():.0f} kWh is implausibly high"
+        )
 
 
 def test_energy_correlated_with_distance(df: pd.DataFrame) -> None:

@@ -203,3 +203,54 @@ def test_in_envelope_segment_is_high_confidence(model_path):
     assert result["margin_kwh"] == pytest.approx(
         result["usable_after_reserve_kwh"] - result["energy_needed_kwh"], abs=1e-2
     )
+
+
+def test_out_of_range_soc_and_reserve_are_clamped(model_path):
+    """SOC > 100 and a negative reserve must be clamped, not trusted.
+
+    WHY: a bad sensor reading (SOC 150) or an LLM-supplied negative reserve would
+    otherwise INFLATE the usable energy and produce an unsafely optimistic
+    "reaches" verdict. SOC clamps to 100 (available == full battery) and a
+    negative reserve clamps to 0 (usable never exceeds what's on board).
+    """
+    from nexdash.config import TRUCK
+
+    r = check_reachability(
+        soc_pct=150.0,
+        distance_km=50.0,
+        payload_t=10.0,
+        speed_kph=70.0,
+        gradient_pct=1.0,
+        temperature_c=10.0,
+        reserve_pct=-20.0,
+        model_path=model_path,
+    )
+    # SOC clamped to 100 -> available is exactly the usable battery, not 1.5x it.
+    assert r["energy_available_kwh"] == pytest.approx(TRUCK.battery_kwh)
+    # Negative reserve clamped to 0 -> usable == available (never more).
+    assert r["usable_after_reserve_kwh"] == pytest.approx(r["energy_available_kwh"])
+    assert r["usable_after_reserve_kwh"] <= TRUCK.battery_kwh + 1e-9
+
+
+def test_low_confidence_note_names_the_estimate_actually_used(model_path):
+    """When the model and physics diverge, the note must name the value USED.
+
+    WHY: a previous note always claimed "the conservative physics value is used",
+    which is false when the model value drove the decision. Here (an out-of-
+    envelope steep climb) physics is the conservative pick, so the note must say
+    so via an unambiguous '(physics)' tag matching ``energy_needed_kwh``.
+    """
+    r = check_reachability(
+        soc_pct=80.0,
+        distance_km=110.0,
+        payload_t=22.0,
+        speed_kph=70.0,
+        gradient_pct=4.5,
+        temperature_c=-12.0,
+        model_path=model_path,
+    )
+    assert r["confidence"] == "low"
+    expected_tag = "(physics)" if r["energy_needed_kwh"] == r["physics_kwh"] else "(the model)"
+    assert expected_tag in r["confidence_note"]
+    # The decision must use the conservative (higher) of the two estimates.
+    assert r["energy_needed_kwh"] == pytest.approx(max(r["model_kwh"], r["physics_kwh"]))

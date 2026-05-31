@@ -1,7 +1,8 @@
-"""FastAPI server for the NexDash EV Truck Range Intelligence dashboard.
+"""FastAPI server for the NexDash EV Truck Range Intelligence API.
 
-Serves the static dashboard UI and exposes a JSON range-check endpoint that
-delegates to :func:`nexdash.range.check_reachability`. The trained energy model
+Exposes JSON endpoints for range checking, route planning, the dispatcher chat
+agent, and model metrics — the range check delegates to
+:func:`nexdash.range.check_reachability`. The trained energy model
 is loaded once at application startup so requests stay fast; if the model
 artifact is missing the ``/api/predict`` endpoint returns a clear ``503`` JSON
 payload telling the operator to run ``run_pipeline.py`` first.
@@ -22,22 +23,17 @@ from typing import Any, Optional
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from nexdash.config import DEFAULT_MODEL_PATH
 from nexdash.model import EnergyModel
 from nexdash import range as range_module
 from nexdash import route_planner as route_planner_module
-from nexdash import fleet as fleet_module
+from nexdash import model_info as model_info_module
 from nexdash import agent as agent_module
 
-logger = logging.getLogger("nexdash.dashboard")
-
-# Directory that holds index.html / app.js and any other static assets.
-DASHBOARD_DIR = Path(__file__).resolve().parent
-INDEX_FILE = DASHBOARD_DIR / "index.html"
+logger = logging.getLogger("nexdash.api")
 
 
 class PredictRequest(BaseModel):
@@ -125,12 +121,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="NexDash EV Truck Range Intelligence",
-    description="Range-check API and dashboard for the Mercedes-Benz eActros 600 fleet.",
+    description="Range-check / route-plan API for the Mercedes-Benz eActros 600.",
     version="1.0.0",
     lifespan=lifespan,
 )
 
-# Open CORS so the dashboard (and external tools) can call the API freely.
+# Open CORS so the React console (and external tools) can call the API freely.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -144,17 +140,6 @@ _MODEL_MISSING_MESSAGE = (
     "`python run_pipeline.py` from the project root, then restart the server."
 )
 
-
-@app.get("/", include_in_schema=False)
-async def serve_index() -> FileResponse:
-    """Serve the single-page dashboard UI."""
-
-    if not INDEX_FILE.exists():  # pragma: no cover - misconfigured deployment
-        return JSONResponse(
-            status_code=500,
-            content={"error": f"index.html not found at {INDEX_FILE}"},
-        )
-    return FileResponse(INDEX_FILE)
 
 
 @app.get("/api/health", include_in_schema=True)
@@ -244,49 +229,18 @@ async def route_plan(req: RoutePlanRequest):
     return result
 
 
-@app.get("/api/fleet")
-async def fleet() -> JSONResponse:
-    """Return the deterministic mock fleet, scored through the real model.
-
-    Delegates to :func:`nexdash.fleet.fleet_status` (which lazy-loads the model)
-    and derives the status/at-risk counts the dispatcher console summarises. The
-    fleet helper is fully fail-soft: if the model artifact is missing the
-    per-truck model fields collapse to ``None`` (those trucks are not counted as
-    at-risk) but the roster still renders. Any unexpected failure returns a
-    clear ``500`` JSON payload rather than an opaque error.
-    """
-
-    try:
-        trucks = fleet_module.fleet_status(model_path=DEFAULT_MODEL_PATH)
-    except Exception as exc:  # pragma: no cover - surfaces unexpected failures
-        logger.exception("Fleet status failed: %s", exc)
-        return JSONResponse(
-            status_code=500,
-            content={"error": "fleet_status_failed", "detail": str(exc)},
-        )
-
-    counts = {
-        "inTransit": sum(1 for t in trucks if t["status"] == "in_transit"),
-        "available": sum(1 for t in trucks if t["status"] == "available"),
-        "charging": sum(1 for t in trucks if t["status"] == "charging"),
-        "maintenance": sum(1 for t in trucks if t["status"] == "maintenance"),
-        "atRisk": sum(1 for t in trucks if t.get("atRisk") is True),
-    }
-    return JSONResponse(content={"trucks": trucks, "counts": counts})
-
-
 @app.get("/api/model-info")
 async def model_info() -> JSONResponse:
     """Return the trained energy model's headline metrics for the console.
 
-    Delegates to :func:`nexdash.fleet.model_info`, which prefers the metrics
+    Delegates to :func:`nexdash.model_info.model_info`, which prefers the metrics
     stored on the model artifact and falls back to parsing the evaluation
     report. It is fail-soft (missing pieces become ``None``); only an
     unexpected failure produces a ``500``.
     """
 
     try:
-        info = fleet_module.model_info(model_path=DEFAULT_MODEL_PATH)
+        info = model_info_module.model_info(model_path=DEFAULT_MODEL_PATH)
     except Exception as exc:  # pragma: no cover - surfaces unexpected failures
         logger.exception("Model info failed: %s", exc)
         return JSONResponse(
@@ -352,12 +306,6 @@ async def chat(req: ChatRequest) -> JSONResponse:
         return JSONResponse(
             status_code=500, content={"error": "chat_failed", "detail": str(exc)}
         )
-
-
-# Mount the dashboard directory for static assets (app.js, css, images, ...).
-# Mounted last so explicit routes above take precedence over the static handler.
-app.mount("/", StaticFiles(directory=str(DASHBOARD_DIR), html=False), name="static")
-
 
 def _load_dotenv() -> None:
     """Load KEY=VALUE pairs from a repo-root ``.env`` into the environment.

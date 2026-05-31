@@ -218,6 +218,47 @@ def test_headwind_increases_energy() -> None:
     assert headwind > no_wind
 
 
+def test_tailwind_reduces_energy_below_no_wind() -> None:
+    """A tailwind (negative signed headwind) must cost LESS than calm air.
+
+    WHY: ``wind_mps`` is a *signed* headwind component — a following wind lowers
+    the relative air speed and therefore drag. The model is trained on the same
+    signed convention, so the ground truth must reward tailwinds; if it treated
+    ``|wind|`` as drag (a real past bug risk) a tailwind would wrongly cost more.
+    """
+    no_wind = segment_energy_kwh(**BASE, wind_mps=0.0)
+    tailwind = segment_energy_kwh(**BASE, wind_mps=-8.0)
+    assert tailwind < no_wind
+
+
+def test_non_positive_speed_raises() -> None:
+    """A zero/negative speed over a real distance must fail loud, not return junk.
+
+    WHY: aux energy is power x (distance/speed), so speed -> 0 diverges; a prior
+    version clamped to 1e-6 and returned ~2e8 kWh. An LLM-supplied speed of 0
+    should raise (and be caught at the tool boundary), never produce an absurd
+    number a dispatcher might act on.
+    """
+    for bad_speed in (0.0, -10.0):
+        with pytest.raises(ValueError):
+            segment_energy_kwh(**{**BASE, "speed_kph": bad_speed})
+
+
+def test_regen_recovery_monotonic_in_grade() -> None:
+    """Recovered downhill energy must be NON-DECREASING as the descent steepens.
+
+    WHY: a steeper descent has more potential energy available, so it can never
+    recover LESS total charge than a gentler one. The grade taper reduces the
+    *fraction* captured (regen power cap -> friction), but a prior floor let the
+    fraction taper out-run the rising potential energy between -8% and -10%,
+    making a steeper descent recover less — physically wrong.
+    """
+    grades = [0.0, -2.0, -4.0, -5.0, -6.0, -7.0, -8.0, -9.0, -10.0, -11.0, -12.0]
+    recovered = [energy_breakdown(**{**BASE, "gradient_pct": g})["regen"] for g in grades]
+    for a, b in zip(recovered, recovered[1:]):
+        assert b >= a - 1e-9, "recovered energy must not drop as the descent steepens"
+
+
 def test_zero_distance_yields_zero_energy() -> None:
     """A zero-length segment consumes no energy.
 

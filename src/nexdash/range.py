@@ -18,6 +18,7 @@ JSON-serializable (e.g. for the FastAPI dashboard endpoint and MCP tools).
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 
 from .config import DEFAULT_MODEL_PATH, TRUCK
 from .model import EnergyModel, predict_energy
@@ -30,13 +31,10 @@ from .physics import segment_energy_kwh
 TYPICAL_MODEL_MAE_KWH: float = 3.0
 
 
-@lru_cache(maxsize=4)
-def _held_out_mae_kwh(model_path: str) -> float:
-    """Return the HGB held-out MAE (kWh) stored on the model artifact.
-
-    Falls back to :data:`TYPICAL_MODEL_MAE_KWH` if the artifact or metric is
-    missing. Cached per path so the confidence note never re-loads the model.
-    """
+@lru_cache(maxsize=8)
+def _held_out_mae_cached(model_path: str, mtime_ns: int) -> float:
+    """Cached read of the HGB held-out MAE, keyed by path AND file mtime so a
+    retrain to the same path is never served stale (``mtime_ns`` busts the key)."""
     try:
         mae = float(EnergyModel.load(model_path).metrics.get("hgb", {}).get("mae_kwh"))
         if mae == mae and mae > 0:  # not NaN and positive
@@ -44,6 +42,18 @@ def _held_out_mae_kwh(model_path: str) -> float:
     except Exception:
         pass
     return TYPICAL_MODEL_MAE_KWH
+
+
+def _held_out_mae_kwh(model_path) -> float:
+    """Return the HGB held-out MAE (kWh) from the model artifact, fail-soft.
+
+    Falls back to :data:`TYPICAL_MODEL_MAE_KWH` if the artifact/metric is missing.
+    """
+    try:
+        resolved = Path(model_path).resolve()
+        return _held_out_mae_cached(str(resolved), resolved.stat().st_mtime_ns)
+    except OSError:
+        return TYPICAL_MODEL_MAE_KWH
 
 
 def check_reachability(
@@ -92,6 +102,13 @@ def check_reachability(
           approximate error band.
     """
     battery_kwh = TRUCK.battery_kwh
+
+    # Clamp operational inputs to physically valid ranges. A SOC > 100 or a
+    # negative reserve would otherwise INFLATE the usable energy and produce an
+    # unsafely optimistic "reaches" verdict, so we bound them rather than trust a
+    # bad sensor reading or an LLM-supplied out-of-range value.
+    soc_pct = min(100.0, max(0.0, float(soc_pct)))
+    reserve_pct = min(100.0, max(0.0, float(reserve_pct)))
 
     # Energy demand predicted by the trained model from raw features.
     features = {
@@ -151,13 +168,15 @@ def check_reachability(
         remaining_range_km = usable_remaining_kwh / kwh_per_km
 
     if diverges:
+        used_label = "physics" if energy_needed_kwh == physics_kwh else "the model"
         confidence_note = (
             "LOW CONFIDENCE: the data-driven model "
             f"({model_kwh:.0f} kWh) and a first-principles physics estimate "
             f"({physics_kwh:.0f} kWh) disagree sharply, which means this segment "
             "is outside the envelope the model was trained on. The more "
-            "conservative physics value is used for this decision; treat it as "
-            "indicative only and keep a wide reserve."
+            f"conservative (higher) estimate of {energy_needed_kwh:.0f} kWh "
+            f"({used_label}) is used for this decision; treat it as indicative "
+            "only and keep a wide reserve."
         )
     else:
         confidence_note = (

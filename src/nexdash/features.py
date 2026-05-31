@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from typing import Mapping, Sequence, Union
 
+import numpy as np
 import pandas as pd
 
 # --------------------------------------------------------------------------- #
@@ -82,12 +83,26 @@ def _add_engineered(df: pd.DataFrame) -> pd.DataFrame:
 
     Raises:
         KeyError: If any required raw feature column is missing.
+        ValueError: If any raw feature value is non-numeric or non-finite
+            (NaN/inf), which would otherwise propagate silently into the feature
+            matrix and yield a garbage prediction.
     """
     missing = [c for c in FEATURE_COLUMNS if c not in df.columns]
     if missing:
         raise KeyError(f"Missing required feature column(s): {missing}")
 
     out = df[FEATURE_COLUMNS].copy()
+
+    # Fail loud on non-numeric / non-finite inputs rather than producing a
+    # silently-wrong prediction (e.g. a NaN temperature or a string speed).
+    try:
+        numeric = out.astype(float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Non-numeric feature value(s): {exc}") from exc
+    if not np.isfinite(numeric.to_numpy()).all():
+        bad = [c for c in FEATURE_COLUMNS if not np.isfinite(numeric[c].to_numpy()).all()]
+        raise ValueError(f"Non-finite (NaN/inf) feature value(s) in: {bad}")
+    out = numeric
 
     # |slope|: both directions affect energy (climb costs, descent regens).
     out["abs_gradient"] = out["gradient_pct"].abs()

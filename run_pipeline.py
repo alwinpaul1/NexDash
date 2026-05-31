@@ -45,6 +45,7 @@ from nexdash import data_gen, evaluate
 from nexdash.config import (
     DEFAULT_DATASET_PATH,
     DEFAULT_MODEL_PATH,
+    MAPE_FLOOR_KWH,
     REPORTS_DIR,
     TRUCK,
 )
@@ -192,10 +193,17 @@ def _where_it_breaks(
     worst_payload = _worst_slice(failure.get("payload", {}))
 
     paragraphs.append(
-        "The model's average error is small, but it is **not uniform** across "
-        f"the operating envelope (overall MAPE ~ {headline_mape:.2f}%). The "
-        "failure-mode tables above expose where it degrades and the physics "
-        "behind each weak spot."
+        "**What these metrics do and don't prove.** Every figure here measures how "
+        "faithfully the ML model reproduces `nexdash.physics.segment_energy_kwh` -- "
+        "the *same* function that generated the labels. They bound model-vs-PHYSICS "
+        "error, **not** model-vs-REALITY error, which is unknown until real eActros "
+        "telematics arrive. A low MAE proves the model re-learned our physics, not "
+        "that the physics matches a real truck."
+    )
+    paragraphs.append(
+        "Within that caveat, the error is **not uniform** across the operating "
+        f"envelope (overall MAPE ~ {headline_mape:.2f}%). The failure-mode tables "
+        "above expose where it degrades and the physics behind each weak spot."
     )
 
     def _mae(s: dict[str, Any]) -> float:
@@ -210,14 +218,45 @@ def _where_it_breaks(
         except (TypeError, ValueError):
             return float("nan")
 
+    def _small_n(s: dict[str, Any]) -> str:
+        """Append an honest small-sample caveat when a slice is thin (n < 30)."""
+        try:
+            n = int(s.get("n", 0))
+        except (TypeError, ValueError):
+            n = 0
+        return (
+            f" (Only n={n} test segments — treat this slice as indicative, not "
+            "a precise measurement.)"
+            if 0 < n < 30
+            else ""
+        )
+
     if worst_temp:
         name, st = worst_temp
+        # Decouple the *cause* from the worst-MAE pick: the worst temperature slice
+        # is usually the high-volume middle of the range, which carries the most
+        # absolute error simply because it holds the most (and highest-energy) rows
+        # — not because of an extremes-physics effect. Only invoke the HVAC-extreme
+        # explanation when an actual extreme slice is the worst.
+        is_middle = "mild" in name.lower() or "0-30" in name or "0 -" in name
+        if is_middle:
+            cause = (
+                "this is the high-volume middle of the range holding the most rows "
+                "and the largest-energy segments, so it carries the most absolute "
+                "error by sheer mass; the cold and hot extremes show no MAE "
+                "inflation here, so the synthetic HVAC penalty is well-learned "
+                "rather than a failure mode."
+            )
+        else:
+            cause = (
+                "auxiliary/HVAC draw rises toward this temperature extreme and is "
+                "spread over travel time, so short, slow segments here carry an "
+                "outsized, harder-to-predict auxiliary share."
+            )
         paragraphs.append(
             f"- **Temperature.** The `{name}` slice carries the largest absolute "
-            f"error (MAE {_mae(st):.2f} kWh; MAPE {_mape(st):.2f}%). Auxiliary/HVAC "
-            "draw rises at both temperature extremes and is spread over travel "
-            "time rather than distance, so short, slow segments in cold or hot "
-            "weather have an outsized, harder-to-predict auxiliary share."
+            f"error (MAE {_mae(st):.2f} kWh; MAPE {_mape(st):.2f}%): {cause}"
+            f"{_small_n(st)}"
         )
     if worst_grad:
         name, st = worst_grad
@@ -229,7 +268,7 @@ def _where_it_breaks(
             "strands a truck. Note the downhill slice can show a huge *percentage* "
             "error, but its absolute error is tiny (regen drives net energy near "
             "zero, so the denominator collapses); that is loud in MAPE yet "
-            "operationally harmless, which is why we headline MAE, not MAPE."
+            f"operationally harmless, which is why we headline MAE, not MAPE.{_small_n(st)}"
         )
     if worst_payload:
         name, st = worst_payload
@@ -238,19 +277,21 @@ def _where_it_breaks(
             f"(MAE {_mae(st):.2f} kWh; MAPE {_mape(st):.2f}%). Payload scales "
             "rolling resistance and gradient potential energy linearly, so heavy "
             "loads both consume the most energy and leave the most room to be "
-            "wrong about it in absolute terms."
+            f"wrong about it in absolute terms.{_small_n(st)}"
         )
 
     paragraphs.append(
-        "Two structural caveats apply, and both are limits of the *synthetic data*, "
-        "not just the model. First, labels carry multiplicative (~6%) plus additive "
+        "Three structural caveats apply, all limits of the *synthetic data*, not "
+        "just the model. First, labels carry multiplicative (~6%) plus additive "
         "sensor noise, which sets a hard floor on achievable accuracy -- the model "
-        "cannot beat the noise it was trained on. Second, features are sampled from "
-        "independent marginals except for a deliberate gradient/distance coupling "
-        "(long legs cannot sustain steep grades); rare *combinations* of the "
-        "remaining features (e.g. heavy payload + steep climb + extreme cold at "
-        "once) are still under-represented and should be treated as lower-confidence "
-        "extrapolations until real telematics data is available."
+        "cannot beat the noise it was trained on. Second, the gradient is capped "
+        "per row so the implied net climb stays geographically plausible, and net-"
+        "regen descents are kept as genuine negative labels (no zero-clamp), so the "
+        "noise stays unstructured; rare *combinations* of features (e.g. heavy "
+        "payload + steep climb + extreme cold at once) are still under-represented "
+        "and should be treated as lower-confidence extrapolations. Third -- and most "
+        "importantly -- this is a circular evaluation against our own physics (see "
+        "above): real accuracy is unknown until telematics data arrives."
     )
     return "\n\n".join(paragraphs)
 
@@ -318,22 +359,30 @@ all learnable structure comes from the physics.
 Computed by `nexdash.evaluate.evaluate` on the {len(df_test):,} held-out
 segments the model never saw during training.
 
-- **MAE:** **{_fmt(headline_mae, 3)} kWh**
+- **MAE:** **{_fmt(headline_mae, 3)} kWh** per segment -- the typical absolute
+  miss on a single leg.
 - **RMSE:** {_fmt(held_out.get("rmse_kwh"), 3)} kWh
-- **MAPE:** {_fmt(headline_mape, 2)} %
+- **MAPE:** {_fmt(headline_mape, 2)} % (per-segment, over rows above the
+  {MAPE_FLOOR_KWH:.0f} kWh floor)
 - **R^2:** {_fmt(held_out.get("r2"), 4)}
-- **% range error:** **{_fmt(pct_range, 3)} %** -- MAE expressed against a
-  nominal full-trip energy of {NOMINAL_TRIP_KWH:.0f} kWh (the energy spent
-  across the truck's ~500 km real-world range, i.e. the usable battery). A
-  {_fmt(headline_mae, 2)} kWh average miss is therefore a {_fmt(pct_range, 2)}%
-  slice of a full charge -- comfortably inside a typical 10% reserve.
+- **% of a full charge:** **{_fmt(pct_range, 3)} %** -- the per-segment MAE
+  expressed against the {NOMINAL_TRIP_KWH:.0f} kWh usable battery; a fleet-intuitive
+  "fraction of one charge we might be off by per leg".
+
+**Read this honestly.** These are **per-SEGMENT** errors. A real route is many
+segments and the errors accumulate (roughly with the number of legs), so the
+**trip-level** error is several times larger than any single-segment figure and is
+**not** bounded by the {_fmt(pct_range, 2)} % number. Treat that percentage as a
+per-leg sanity scale, not a promise that a whole route lands inside a 10 % reserve.
 
 ## 3. Model vs. linear baseline
 
-Both estimators were fit on identical train rows and scored on the same
-internal held-out split (metrics stored on the model artifact). The
-HistGradientBoosting primary is reported alongside a LinearRegression baseline
-to quantify the value of the non-linear model over a transparent reference.
+Both estimators were fit on the same {len(df_train):,} training rows and scored on
+the same {len(df_test):,}-row held-out test set as the headline above (these metrics
+are stored on the model artifact, so the served model, this table, and the headline
+all describe one model on one test set -- there is no hidden inner split). The
+HistGradientBoosting primary is reported alongside a LinearRegression baseline to
+quantify the value of the non-linear model over a transparent reference.
 
 {_comparison_table(model_metrics)}
 
@@ -393,7 +442,11 @@ def run() -> dict[str, Any]:
     print(f"      {len(df_train):,} train / {len(df_test):,} test")
 
     print("[3/5] Training model (HGB primary + linear baseline) and saving ...")
-    model = train_model(df_train, save=True, path=DEFAULT_MODEL_PATH)
+    # Fit on ALL of df_train and report the comparison metrics on the SAME outer
+    # df_test the report headlines, so there is no hidden inner split: the served
+    # model, the artifact metrics (read by range.py / model_info), the comparison
+    # table, and the headline all describe one model on one test set.
+    model = train_model(df_train, df_eval=df_test, save=True, path=DEFAULT_MODEL_PATH)
     print(f"      saved model to {DEFAULT_MODEL_PATH}")
 
     print("[4/5] Evaluating on held-out test set ...")

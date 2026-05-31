@@ -1,4 +1,4 @@
-// Route engine — frontend lib (light dashboard Routes page).
+// Route engine — frontend lib for the Routes planner console.
 //
 // optimizeRoute(planner) -> PlanResult
 //   1. Calls the TomTom Routing API (travelMode=truck) through origin +

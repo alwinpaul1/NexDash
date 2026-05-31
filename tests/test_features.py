@@ -184,3 +184,27 @@ def test_build_features_and_transform_agree():
     X_train, _ = build_features(df)
     X_infer = transform(df.drop(columns=[TARGET]))
     pd.testing.assert_frame_equal(X_train, X_infer)
+
+
+def test_transform_rejects_non_finite_values() -> None:
+    """NaN/inf inputs must raise, never silently propagate into the feature matrix.
+
+    WHY: a NaN temperature (or a string speed from a mis-formed LLM tool call)
+    would otherwise flow through the engineered columns and yield a confident-
+    looking but garbage prediction. Failing loud lets the tool layer surface a
+    clear error instead.
+    """
+    nan_row = {**SAMPLE, "temperature_c": float("nan")}
+    with pytest.raises(ValueError):
+        transform(nan_row)
+
+    inf_row = {**SAMPLE, "speed_kph": float("inf")}
+    with pytest.raises(ValueError):
+        transform(inf_row)
+
+
+def test_transform_rejects_non_numeric_values() -> None:
+    """A non-numeric feature value must raise ValueError, not an opaque TypeError."""
+    bad_row = {**SAMPLE, "speed_kph": "fast"}
+    with pytest.raises(ValueError):
+        transform(bad_row)
