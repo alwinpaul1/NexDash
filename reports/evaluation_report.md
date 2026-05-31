@@ -1,6 +1,7 @@
 # NexDash Energy Model -- Evaluation Report
 
-_Generated 2026-05-31 17:39:36 by `run_pipeline.py` (seed = 42, deterministic)._
+_Generated 2026-05-31 22:36:09 by `run_pipeline.py` (seed = 42, deterministic)._
+_Model version: `b01e68ba8d83-0f7b3130` (content-addressed: training-data SHA + code SHA). See `models/<artifact>.provenance.json` and `models/registry/` for full lineage; compare versions with `python -m nexdash.promote <champion> <challenger>`._
 
 This report evaluates the energy-consumption model for the
 **Mercedes-Benz eActros 600** (~600 kWh usable battery, ~500 km

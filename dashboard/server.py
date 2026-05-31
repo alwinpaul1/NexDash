@@ -66,7 +66,8 @@ class RoutePlanRequest(BaseModel):
     minSoc: float = Field(15.0, description="SOC floor never to dip below (%).")
     payloadKg: float = Field(0.0, description="Cargo payload (kg).")
     reservePct: float = Field(10.0, description="Safety-reserve buffer above min SOC (%).")
-    maxChargeKw: float = Field(350.0, description="Max charging power (kW).")
+    maxChargeKw: float = Field(400.0, description="Max charging power (kW); eActros 600 CCS ~400 kW.")
+    chargeTargetSoc: float = Field(80.0, description="SOC (%) to recharge to at on-route stops.")
     departure: Optional[str] = Field(None, description="ISO local departure datetime.")
     temperatureC: float = Field(15.0, description="Ambient temperature (deg C).")
     geometry: Optional[list[list[float]]] = Field(
@@ -213,6 +214,7 @@ async def route_plan(req: RoutePlanRequest):
             payload_kg=req.payloadKg,
             reserve_pct=req.reservePct,
             max_charge_kw=req.maxChargeKw,
+            charge_target_soc=req.chargeTargetSoc,
             departure=req.departure,
             temperature_c=req.temperatureC,
             waypoints=req.waypoints,

@@ -26,6 +26,8 @@ ENV/
 # Generated artifacts (keep the directories via .gitkeep)
 data/*.csv
 models/*.joblib
+models/*.provenance.json
+models/registry/
 reports/figures/*.png
 
 # OS / editor

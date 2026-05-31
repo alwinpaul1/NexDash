@@ -49,9 +49,12 @@ Honest approximations
 * **Constant payload.** ``payload_t`` is held constant for the whole trip even
   though multi-drop routes shed cargo at each stop. This is conservative
   (over-estimates energy on later legs).
-* **Charging model.** Recharge power is a flat ~350 kW MCS rate (no taper),
-  energy priced at a flat 0.45 EUR/kWh. Real sessions taper above ~80% SOC and
-  tariffs vary, so charge time/cost here are indicative, not contractual.
+* **Charging model.** Inserted stops are DC fast-charge to a configurable target
+  (default ~80%), at a rated ~400 kW CCS (the eActros 600's current real capability;
+  MCS 1 MW is not yet shipping). Charge *time* follows a power-vs-SOC **taper**
+  (full power to ~80% SOC, derating into the tail; see ``_charge_minutes``), so the
+  slow ``80->100%`` region is no longer under-counted. Energy is priced at a flat
+  0.45 EUR/kWh; tariffs vary, so charge cost is indicative, not contractual.
 * **Driver hours (EU 561).** Only the 4.5 h continuous-driving / 45 min break
   rule is simulated. The ``driver.dailyH`` and ``driver.weeklyH`` fields are the
   single trip's total driving time (no calendar day/week split and no 11 h daily
@@ -81,11 +84,23 @@ from .model import predict_energy
 #: Distance of each simulation chunk (km). Smaller -> finer SOC profile.
 CHUNK_KM: float = 25.0
 
-#: Recharge target SOC (%) when a charging stop is inserted.
-CHARGE_TARGET_SOC: float = 95.0
+#: Recharge target SOC (%) when a charging stop is inserted. Defaults to 80%:
+#: on-route DC fast-charge stops top to ~80% because the power-vs-SOC taper makes
+#: the 80->100% tail slow and driver-time-expensive (see ``_charge_minutes``).
+CHARGE_TARGET_SOC: float = 80.0
 
-#: Megawatt Charging System power assumed for charge-time estimates (kW).
-CHARGER_KW: float = 350.0
+#: Rated DC fast-charge power assumed for charge-time estimates (kW). The
+#: Mercedes-Benz eActros 600 charges at up to ~400 kW on CCS today; MCS (1 MW)
+#: hardware is not yet shipping (electrive, 2026), so 400 kW CCS is the honest
+#: current-reality default rather than a fictitious "MCS" rate.
+CHARGER_KW: float = 400.0
+
+#: SOC (%) above which DC charging power begins to taper (CP->CV knee). Heavy-BEV
+#: packs hold near-peak power to ~80% then derate steeply to protect the cells.
+CHARGE_TAPER_KNEE_SOC: float = 80.0
+
+#: Charging power at 100% SOC as a fraction of the rated power (end of the taper).
+CHARGE_TAPER_FLOOR_FRAC: float = 0.2
 
 #: Flat energy tariff used for charging-cost estimates (EUR/kWh).
 PRICE_EUR_PER_KWH: float = 0.45
@@ -101,6 +116,52 @@ EU561_MAX_DRIVE_BEFORE_BREAK_MIN: float = 4.5 * 60.0  # 4h30 continuous driving
 EU561_BREAK_MIN: float = 45.0                          # mandatory break length
 EU561_DAILY_MAX_DRIVE_H: float = 9.0                   # standard daily driving
 EU561_WEEKLY_MAX_DRIVE_H: float = 56.0                 # max weekly driving
+
+
+def _charge_power_kw(soc_pct: float, rated_kw: float) -> float:
+    """Available DC charging power (kW) at a given SOC, with a CP->CV taper.
+
+    Full ``rated_kw`` up to :data:`CHARGE_TAPER_KNEE_SOC` (~80%), then a linear
+    derate to ``rated_kw * CHARGE_TAPER_FLOOR_FRAC`` at 100% SOC. A flat-power
+    model (no taper) materially understates session time because the slow
+    80->100% tail is the most tapered region.
+    """
+    if soc_pct <= CHARGE_TAPER_KNEE_SOC:
+        return rated_kw
+    if soc_pct >= 100.0:
+        return rated_kw * CHARGE_TAPER_FLOOR_FRAC
+    frac = (soc_pct - CHARGE_TAPER_KNEE_SOC) / (100.0 - CHARGE_TAPER_KNEE_SOC)
+    return rated_kw * (1.0 - (1.0 - CHARGE_TAPER_FLOOR_FRAC) * frac)
+
+
+def _charge_minutes(
+    arrive_soc: float,
+    target_soc: float,
+    rated_kw: float,
+    battery_kwh: float,
+    *,
+    step: float = 0.5,
+) -> float:
+    """Minutes to charge from ``arrive_soc`` to ``target_soc`` under the taper.
+
+    Numerically integrates ``(kWh added per SOC step) / power(SOC)`` across the
+    band using the midpoint power, so charging into the tapered tail correctly
+    costs more time per percent than charging from near-empty. Returns 0 for a
+    non-positive band or non-positive power.
+    """
+    if target_soc <= arrive_soc or rated_kw <= 0 or battery_kwh <= 0:
+        return 0.0
+    kwh_per_pct = battery_kwh / 100.0
+    minutes = 0.0
+    soc = float(arrive_soc)
+    while soc < target_soc - 1e-9:
+        s = min(step, target_soc - soc)
+        power = _charge_power_kw(soc + s / 2.0, rated_kw)
+        if power <= 0:
+            break
+        minutes += (kwh_per_pct * s) / power * 60.0
+        soc += s
+    return minutes
 
 
 def _parse_departure(departure: Optional[str]) -> datetime:
@@ -125,6 +186,64 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat(timespec="minutes")
 
 
+def _parse_iso_opt(value: Optional[str]) -> Optional[datetime]:
+    """Parse an optional ISO datetime to naive-local, or ``None`` (no fallback).
+
+    Unlike :func:`_parse_departure` this returns ``None`` on a missing/invalid
+    value rather than defaulting to "now", so a missing ``deliverBy`` reads as
+    "no deadline" (feasibility unknown) instead of a spurious past deadline.
+    """
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+    except (ValueError, TypeError):
+        return None
+
+
+def _build_stops(
+    waypoints: Optional[list[dict[str, Any]]], total_km: float
+) -> list[dict[str, Any]]:
+    """Resolve destination waypoints into per-stop legs along the route.
+
+    Returns one entry per *destination* (the origin, index 0, is excluded), each
+    with its cumulative distance from the origin (great-circle leg lengths scaled
+    so the final stop lands exactly at ``total_km``) plus any per-stop delivery
+    data the caller attached: ``dropWeightKg`` (cargo shed at the stop),
+    ``unloadMin`` (dwell), and ``deliverBy`` (ISO deadline). Returns ``[]`` when
+    there are fewer than two usable waypoints, so the planner falls back to a
+    single continuous leg with constant payload (unchanged legacy behaviour).
+    """
+    if not waypoints or total_km <= 0:
+        return []
+    pts = [w for w in waypoints if w.get("lat") is not None and w.get("lng") is not None]
+    if len(pts) < 2:
+        return []
+    coords = [(float(w["lat"]), float(w["lng"])) for w in pts]
+    legs = [_haversine_km(coords[i - 1], coords[i]) for i in range(1, len(coords))]
+    gc_total = sum(legs)
+    if gc_total <= 0:
+        return []
+    scale = total_km / gc_total
+
+    stops: list[dict[str, Any]] = []
+    cum = 0.0
+    for i in range(1, len(pts)):
+        cum += legs[i - 1] * scale
+        w = pts[i]
+        stops.append(
+            {
+                "label": w.get("label") or f"Stop {i}",
+                "cumKm": min(total_km, round(cum, 3)),
+                "dropWeightKg": max(0.0, float(w.get("dropWeightKg", 0) or 0)),
+                "unloadMin": max(0.0, float(w.get("unloadMin", 0) or 0)),
+                "deliverBy": w.get("deliverBy") or None,
+            }
+        )
+    stops[-1]["cumKm"] = total_km  # final destination sits exactly at route end
+    return stops
+
+
 def plan_route(
     *,
     distance_km: float,
@@ -134,6 +253,7 @@ def plan_route(
     payload_kg: float,
     reserve_pct: float = 10.0,
     max_charge_kw: float = CHARGER_KW,
+    charge_target_soc: float = CHARGE_TARGET_SOC,
     departure: Optional[str] = None,
     temperature_c: float = 15.0,
     waypoints: Optional[list[dict[str, Any]]] = None,
@@ -153,9 +273,15 @@ def plan_route(
             Used as the per-chunk temperature only in the flat fallback mode;
             when ``geometry`` is supplied, real per-segment temperatures from
             :func:`nexdash.geodata.enrich_route` are used instead.
-        waypoints: Optional ordered ``[{lat,lng,label?}]`` list, used only to
-            give inserted charging stops a sensible coordinate by interpolating
-            along the great-circle of the leg they fall on. Not required.
+        waypoints: Optional ordered ``[{lat,lng,label?}]`` list (origin first,
+            then destinations). Destinations may carry per-stop delivery data:
+            ``dropWeightKg`` (cargo shed at the stop -> the truck lightens and
+            later legs cost less energy), ``unloadMin`` (dwell folded into the
+            ETA for intermediate stops), and ``deliverBy`` (ISO deadline checked
+            for feasibility). With >=2 waypoints the simulation is split per leg
+            so the response carries per-stop arrival SOC + ETA; with fewer it
+            falls back to a single continuous leg at constant payload. Waypoints
+            also give inserted charging stops a sensible on-route coordinate.
         geometry: Optional ``[[lat, lng], ...]`` road polyline from the routing
             engine. When present the planner enriches it (elevation gradient +
             weather) and simulates SOC per enriched segment; when absent it
@@ -163,10 +289,12 @@ def plan_route(
         model_path: Path to the trained energy model artifact.
 
     Returns:
-        A dict with ``socProfile``, ``segments``, ``chargingStops`` and
+        A dict with ``socProfile``, ``segments``, ``chargingStops``, ``stops``
+        (per-destination arrival SOC / ETA / deliver-by feasibility) and
         ``summary`` keys, matching the frontend ``PlanResult`` contract (minus
-        ``geometry``, which the frontend supplies). When ``geometry`` is
-        supplied it additionally carries ``elevationProfile`` + ``conditions``
+        ``geometry``, which the frontend supplies). ``summary.assumptions`` is a
+        machine-readable list of the honest modelling caveats. When ``geometry``
+        is supplied it additionally carries ``elevationProfile`` + ``conditions``
         and ``summary.elevationGainM``.
     """
     battery_kwh = TRUCK.battery_kwh
@@ -196,7 +324,14 @@ def plan_route(
     total_drive_min = 0.0
     total_break_min = 0.0
     total_charge_min = 0.0
+    total_unload_min = 0.0
     n_breaks = 0
+
+    # Per-destination legs (for per-stop SOC/ETA, payload decay, deliver-by).
+    starting_payload_t = payload_t
+    stops_meta = _build_stops(waypoints, distance_km)
+    stops_out: list[dict[str, Any]] = []
+    next_stop_idx = 0
 
     # Open drive segment we accumulate chunks into until a break/charge/end.
     seg_open = distance_km > 0
@@ -232,6 +367,23 @@ def plan_route(
     enrichment = _enrich(geometry, departure, distance_km)
     chunks = _build_chunks(distance_km, enrichment, temperature_c)
 
+    # Payload carried during each chunk, accounting for per-stop drops: the truck
+    # lightens as it sheds cargo at each destination, so later legs cost less
+    # energy. A chunk uses the payload active at its START distance (drops happen
+    # AT a stop); with no per-stop data this stays the constant starting payload,
+    # exactly as before. Clamped at 0 if the drops sum to more than the start load.
+    chunk_start_km: list[float] = []
+    _acc = 0.0
+    for chunk_km, *_rest in chunks:
+        chunk_start_km.append(_acc)
+        _acc += chunk_km
+
+    def _payload_t_at(dist_km: float) -> float:
+        dropped_kg = sum(s["dropWeightKg"] for s in stops_meta if s["cumKm"] <= dist_km + 1e-6)
+        return max(0.0, starting_payload_t - dropped_kg / 1000.0)
+
+    chunk_payloads = [_payload_t_at(c0) for c0 in chunk_start_km]
+
     # Predict energy for every chunk up front (model-driven; the wind magnitude is
     # used directly as the headwind component, see module docstring). Doing this
     # before the walk lets the charging check look AHEAD at the energy still owed to
@@ -243,7 +395,7 @@ def plan_route(
                 predict_energy(
                     {
                         "distance_km": chunk_km,
-                        "payload_t": payload_t,
+                        "payload_t": chunk_payloads[i],
                         "speed_kph": avg_speed_kph,
                         "gradient_pct": chunk_grad,
                         "temperature_c": chunk_temp,
@@ -253,7 +405,7 @@ def plan_route(
                 )
             ),
         )
-        for chunk_km, chunk_grad, chunk_temp, chunk_wind in chunks
+        for i, (chunk_km, chunk_grad, chunk_temp, chunk_wind) in enumerate(chunks)
     ]
 
     for i, (chunk_km, chunk_grad, chunk_temp, chunk_wind) in enumerate(chunks):
@@ -279,10 +431,13 @@ def plan_route(
             if seg_open:
                 _close_drive_segment()
             arrive_soc = soc
-            depart_soc = CHARGE_TARGET_SOC
+            depart_soc = charge_target_soc
             kwh_added = max(0.0, (depart_soc - arrive_soc) / 100.0 * battery_kwh)
             charge_kw = max_charge_kw if max_charge_kw and max_charge_kw > 0 else CHARGER_KW
-            charge_min = (kwh_added / charge_kw) * 60.0
+            # Taper-aware charge time: the 80->target tail charges slower than a
+            # flat-rate model would (see _charge_minutes). Energy/cost are
+            # unaffected by the taper (it changes time, not kWh delivered).
+            charge_min = _charge_minutes(arrive_soc, depart_soc, charge_kw, battery_kwh)
             cost_eur = kwh_added * PRICE_EUR_PER_KWH
 
             ch_start = clock
@@ -293,7 +448,7 @@ def plan_route(
             if lat is None:
                 lat, lng = _interp_point(waypoints, cum_km, distance_km)
             station = {
-                "name": f"MCS Charging Hub {len(charging_stops) + 1}",
+                "name": f"DC Fast-Charge Hub {len(charging_stops) + 1}",
                 "lat": lat,
                 "lng": lng,
             }
@@ -371,6 +526,57 @@ def plan_route(
 
         soc_profile.append({"distKm": round(cum_km, 1), "soc": round(soc, 2)})
 
+        # --- Destination arrival(s) reached within this chunk. Record per-stop
+        # arrival SOC + ETA, check the deliver-by deadline, and add unload dwell
+        # for intermediate stops. (Payload decay is already baked into the
+        # precomputed chunk energies, so energy on later legs is already lower.)
+        while (
+            next_stop_idx < len(stops_meta)
+            and cum_km + 1e-6 >= stops_meta[next_stop_idx]["cumKm"]
+        ):
+            stop = stops_meta[next_stop_idx]
+            is_final = next_stop_idx == len(stops_meta) - 1
+            deadline = _parse_iso_opt(stop["deliverBy"])
+            on_time = None if deadline is None else bool(clock <= deadline)
+            stops_out.append(
+                {
+                    "index": next_stop_idx,
+                    "label": stop["label"],
+                    "distKm": round(stop["cumKm"], 1),
+                    "arriveSoc": round(soc, 1),
+                    "etaLabel": _hhmm(clock),
+                    "etaIso": _iso(clock),
+                    "dropWeightKg": round(stop["dropWeightKg"], 1),
+                    "payloadAfterT": round(_payload_t_at(cum_km), 2),
+                    "unloadMin": round(stop["unloadMin"]),
+                    "deliverBy": stop["deliverBy"],
+                    "onTime": on_time,
+                    "isFinal": is_final,
+                }
+            )
+            # Unload dwell advances the clock for intermediate stops; the final
+            # delivery's unload happens after arrival so it does not push the ETA.
+            if stop["unloadMin"] > 0 and not is_final:
+                if seg_open:
+                    _close_drive_segment()
+                u_start = clock
+                u_end = u_start + timedelta(minutes=stop["unloadMin"])
+                segments.append(
+                    {
+                        "type": "unload",
+                        "label": f"Unload — {stop['label']}",
+                        "startTime": _hhmm(u_start),
+                        "endTime": _hhmm(u_end),
+                        "durationMin": round(stop["unloadMin"]),
+                    }
+                )
+                total_unload_min += stop["unloadMin"]
+                clock = u_end
+                seg_open = True
+                seg_soc_start = soc
+                seg_start_clock = clock
+            next_stop_idx += 1
+
     # Flush the final open drive segment.
     if seg_open:
         _close_drive_segment()
@@ -379,7 +585,7 @@ def plan_route(
     arrival_dt = clock
     driving_h = total_drive_min / 60.0
     charging_min_total = total_charge_min
-    total_min = total_drive_min + total_break_min + total_charge_min
+    total_min = total_drive_min + total_break_min + total_charge_min + total_unload_min
     total_h = total_min / 60.0
 
     kwh_per_100 = (total_energy_kwh / distance_km * 100.0) if distance_km > 0 else 0.0
@@ -406,6 +612,39 @@ def plan_route(
     conditions = enrichment["conditions"] if enrichment else {}
     elevation_gain_m = float(conditions.get("climbM", 0.0)) if conditions else 0.0
 
+    # Machine-readable honest-limitations so the dispatcher/UI consuming this JSON
+    # can see the model's caveats, not just the docstring (the brief's #1 axis).
+    assumptions: list[str] = []
+    if stops_meta and any(s["dropWeightKg"] > 0 for s in stops_meta):
+        assumptions.append(
+            "Payload decays per stop (truck lightens after each drop), so later legs cost less energy."
+        )
+    else:
+        assumptions.append(
+            "Payload held constant for the whole trip — conservative (over-estimates later legs)."
+        )
+    if not enrichment:
+        assumptions.append("Flat-route fallback: gradient assumed 0 (no per-segment terrain).")
+    assumptions.append(
+        f"Charge time uses a power-vs-SOC taper to a {round(charge_target_soc)}% target "
+        f"at ~{round(max_charge_kw or CHARGER_KW)} kW CCS; the 80->100% tail is slower."
+    )
+    assumptions.append("Single average speed applied to every segment.")
+    assumptions.append(
+        "EU 561: only the 4.5 h / 45 min break is modelled — single-shift, no 11 h daily "
+        "rest or day/week split. drivingH/dailyH/weeklyH are the trip total."
+    )
+    late = [s for s in stops_out if s.get("onTime") is False]
+    if late:
+        assumptions.append(
+            f"{len(late)} stop(s) miss their deliver-by deadline on this plan."
+        )
+    total_drop_t = sum(s["dropWeightKg"] for s in stops_meta) / 1000.0
+    if total_drop_t > starting_payload_t + 1e-9:
+        assumptions.append(
+            "Drop weights exceed the starting payload; payload clamped at 0 on the affected legs."
+        )
+
     summary = {
         "distanceKm": round(distance_km, 1),
         "drivingTimeH": round(driving_h, 2),
@@ -420,23 +659,28 @@ def plan_route(
         "kwhPer100": round(kwh_per_100, 1),
         "chargingCostEur": round(charging_cost, 2),
         "chargingStops": len(charging_stops),
+        "unloadTimeMin": round(total_unload_min),
         "elevationGainM": round(elevation_gain_m, 1),
         "driver": {
             "drivingH": round(driving_h, 2),
             "breaks": n_breaks,
             "totalH": round(total_h, 2),
+            # Single-shift model: dailyH/weeklyH are the trip total (no day/week
+            # split or 11 h daily rest is simulated — see `assumptions`).
             "dailyH": round(driving_h, 2),
             "dailyMaxH": EU561_DAILY_MAX_DRIVE_H,
             "weeklyH": round(driving_h, 2),
             "weeklyMaxH": EU561_WEEKLY_MAX_DRIVE_H,
             "eu561ok": bool(eu561ok),
         },
+        "assumptions": assumptions,
     }
 
     result: dict[str, Any] = {
         "socProfile": soc_profile,
         "segments": segments,
         "chargingStops": charging_stops,
+        "stops": stops_out,
         "summary": summary,
     }
     # Surface the enriched physical context only when geometry was supplied.

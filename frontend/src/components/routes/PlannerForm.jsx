@@ -12,8 +12,10 @@ function nowLocalISO() {
   return new Date(d.getTime() - off * 60000).toISOString().slice(0, 16);
 }
 
-// Emerald range slider with a filled track that follows the value.
-function Slider({ value, min, max, step = 1, onChange }) {
+// Emerald range slider with a filled track that follows the value. Accepts an
+// accessible name + human-readable value text so screen readers announce e.g.
+// "Starting battery, 80 percent" instead of an unnamed slider reading "80".
+function Slider({ value, min, max, step = 1, onChange, ariaLabel, ariaValueText }) {
   const pct = max > min ? ((value - min) / (max - min)) * 100 : 0;
   return (
     <input
@@ -23,6 +25,8 @@ function Slider({ value, min, max, step = 1, onChange }) {
       step={step}
       value={value}
       onChange={(e) => onChange(Number(e.target.value))}
+      aria-label={ariaLabel}
+      aria-valuetext={ariaValueText ?? String(value)}
       className="route-slider w-full"
       style={{
         background: `linear-gradient(to right, #006d32 0%, #00d166 ${pct}%, #e5eeff ${pct}%, #e5eeff 100%)`,
@@ -47,17 +51,22 @@ function FieldLabel({ icon, children, hint }) {
   );
 }
 
-// A single numbered, removable, drag-to-reorder destination row (origin +
-// destinations), each backed by a LocationSearch geocode.
+// A single numbered, removable, drag-to-reorder destination row, backed by a
+// LocationSearch geocode and an expandable panel of per-stop delivery options
+// (drop-off weight, unloading dwell, deliver-by) that the backend per-leg
+// simulation actually consumes (payload decay, ETA dwell, deadline feasibility).
 function DestinationRow({
   dest,
   index,
+  count,
   onUpdate,
   onRemove,
   onDragStartRow,
   onDropRow,
+  onMove,
 }) {
   const [dragOver, setDragOver] = useState(false);
+  const [open, setOpen] = useState(false);
 
   return (
     <div
@@ -103,6 +112,42 @@ function DestinationRow({
             onClear={() => onUpdate(dest.id, { label: "", lat: null, lng: null })}
           />
         </div>
+        {/* Keyboard/single-pointer reorder alternative to drag (WCAG 2.5.7). */}
+        <button
+          type="button"
+          onClick={() => onMove?.(index, -1)}
+          disabled={index === 0}
+          aria-label={`Move stop ${index + 1} up`}
+          className="flex items-center justify-center w-6 h-6 shrink-0 rounded-lg text-on-surface-variant hover:text-primary hover:bg-surface disabled:opacity-30 disabled:pointer-events-none transition-colors"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
+            keyboard_arrow_up
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onMove?.(index, 1)}
+          disabled={index === (count ?? 1) - 1}
+          aria-label={`Move stop ${index + 1} down`}
+          className="flex items-center justify-center w-6 h-6 shrink-0 rounded-lg text-on-surface-variant hover:text-primary hover:bg-surface disabled:opacity-30 disabled:pointer-events-none transition-colors"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
+            keyboard_arrow_down
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-label={`${open ? "Hide" : "Show"} delivery options for stop ${index + 1}`}
+          aria-expanded={open}
+          className={`flex items-center justify-center w-6 h-6 shrink-0 rounded-lg transition-colors ${
+            open ? "text-primary bg-primary/10" : "text-on-surface-variant hover:text-on-surface hover:bg-surface"
+          }`}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
+            tune
+          </span>
+        </button>
         <button
           type="button"
           onClick={() => onRemove(dest.id)}
@@ -115,6 +160,49 @@ function DestinationRow({
         </button>
       </div>
 
+      {/* Per-stop delivery options — these feed the backend per-leg simulation. */}
+      {open && (
+        <div className="px-3 pb-3 pt-1 space-y-3 border-t border-outline-variant/50 bg-surface-lowest/40">
+          <div>
+            <FieldLabel icon="package_2" hint={`drop ${(dest.dropWeightKg / 1000).toFixed(1)} t`}>
+              Drop-off Weight
+            </FieldLabel>
+            <Slider
+              value={dest.dropWeightKg}
+              min={0}
+              max={MAX_PAYLOAD_KG}
+              step={250}
+              ariaLabel={`Drop-off weight at stop ${index + 1}`}
+              ariaValueText={`${(dest.dropWeightKg / 1000).toFixed(1)} tonnes dropped`}
+              onChange={(v) => onUpdate(dest.id, { dropWeightKg: v })}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <FieldLabel icon="timer">Unloading (min)</FieldLabel>
+              <input
+                type="number"
+                min={0}
+                step={5}
+                value={dest.unloadMin}
+                aria-label={`Unloading minutes at stop ${index + 1}`}
+                onChange={(e) => onUpdate(dest.id, { unloadMin: Number(e.target.value) })}
+                className="w-full px-3 py-2 rounded-xl bg-surface-low border border-outline-variant/60 text-sm text-on-surface outline-none focus:ring-2 focus:ring-primary/40 transition"
+              />
+            </div>
+            <div>
+              <FieldLabel icon="event_available">Deliver by</FieldLabel>
+              <input
+                type="datetime-local"
+                value={dest.deliverBy}
+                aria-label={`Deliver-by deadline for stop ${index + 1}`}
+                onChange={(e) => onUpdate(dest.id, { deliverBy: e.target.value })}
+                className="w-full px-2 py-2 rounded-xl bg-surface-low border border-outline-variant/60 text-sm text-on-surface outline-none focus:ring-2 focus:ring-primary/40 transition"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -158,12 +246,6 @@ export default function PlannerForm({
 
   return (
     <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm overflow-hidden">
-      <style>{`
-        .route-slider { -webkit-appearance: none; appearance: none; height: 6px; border-radius: 9999px; outline: none; cursor: pointer; }
-        .route-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; border-radius: 9999px; background: #006d32; border: 2px solid #fff; box-shadow: 0 0 0 2px rgba(0,109,50,0.3); cursor: pointer; }
-        .route-slider::-moz-range-thumb { width: 16px; height: 16px; border-radius: 9999px; background: #006d32; border: 2px solid #fff; box-shadow: 0 0 0 2px rgba(0,109,50,0.3); cursor: pointer; }
-      `}</style>
-
       <div className="px-5 py-4 bg-gradient-to-r from-primary to-accent text-on-primary">
         <div className="flex items-center gap-2">
           <span className="material-symbols-outlined">route</span>
@@ -181,7 +263,8 @@ export default function PlannerForm({
           <FieldLabel icon="battery_charging_full" hint={`${planner.startSoc}%`}>
             Starting Battery
           </FieldLabel>
-          <Slider value={planner.startSoc} min={0} max={100} onChange={onStartSoc} />
+          <Slider value={planner.startSoc} min={0} max={100} onChange={onStartSoc}
+            ariaLabel="Starting battery" ariaValueText={`${planner.startSoc} percent`} />
         </div>
 
         {/* Origin */}
@@ -222,10 +305,12 @@ export default function PlannerForm({
                 key={d.id}
                 dest={d}
                 index={i}
+                count={planner.destinations.length}
                 onUpdate={onUpdateDestination}
                 onRemove={onRemoveDestination}
                 onDragStartRow={handleDragStart}
                 onDropRow={handleDrop}
+                onMove={(idx, dir) => onReorderDestination?.(idx, idx + dir)}
               />
             ))}
             {planner.destinations.length === 0 && (
@@ -281,19 +366,22 @@ export default function PlannerForm({
                 <FieldLabel icon="target" hint={`${planner.minSoc}%`}>
                   Arrive with at least
                 </FieldLabel>
-                <Slider value={planner.minSoc} min={0} max={50} onChange={onMinSoc} />
+                <Slider value={planner.minSoc} min={0} max={50} onChange={onMinSoc}
+                  ariaLabel="Minimum SOC floor" ariaValueText={`${planner.minSoc} percent`} />
               </div>
               <div>
                 <FieldLabel icon="shield" hint={`${planner.reservePct}%`}>
                   Safety Reserve
                 </FieldLabel>
-                <Slider value={planner.reservePct} min={0} max={25} onChange={onReservePct} />
+                <Slider value={planner.reservePct} min={0} max={25} onChange={onReservePct}
+                  ariaLabel="Safety reserve" ariaValueText={`${planner.reservePct} percent`} />
               </div>
               <div>
                 <FieldLabel icon="alt_route" hint={`${planner.maxDetourKm} km`}>
                   Max Charging Detour
                 </FieldLabel>
-                <Slider value={planner.maxDetourKm} min={5} max={100} step={5} onChange={onMaxDetourKm} />
+                <Slider value={planner.maxDetourKm} min={5} max={100} step={5} onChange={onMaxDetourKm}
+                  ariaLabel="Maximum charging detour" ariaValueText={`${planner.maxDetourKm} kilometres`} />
               </div>
               <div>
                 <FieldLabel icon="bolt" hint={`${planner.maxChargeKw} kW`}>

@@ -283,12 +283,24 @@ function RouteRunner({ geometry }) {
       zIndexOffset: 650,
     }).addTo(map);
 
+    // Respect the OS "reduce motion" setting (WCAG 2.2.2): pause the looping
+    // video and leave a static truck marker rather than animating it along the
+    // route. CSS can't stop <video loop>, so this is handled here in JS.
+    const reduceMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
     // Some browsers don't autoplay a freshly-injected <video>; nudge it and slow
     // the clip down so the truck reads as a calm cruise rather than a blur.
     const video = marker.getElement()?.querySelector("video");
     if (video) {
-      video.playbackRate = 0.5;
-      video.play().catch(() => {});
+      if (reduceMotion) {
+        video.removeAttribute("loop");
+        video.pause();
+      } else {
+        video.playbackRate = 0.5;
+        video.play().catch(() => {});
+      }
     }
 
     // Slow, smooth lap: scale with route length, clamped to 16-32 s.
@@ -314,10 +326,13 @@ function RouteRunner({ geometry }) {
       marker.setLatLng(posAt(t * total));
       raf = requestAnimationFrame(tick);
     };
-    raf = requestAnimationFrame(tick);
+    // Only drive the moving truck when motion is allowed; otherwise it stays put.
+    if (!reduceMotion) {
+      raf = requestAnimationFrame(tick);
+    }
 
     return () => {
-      cancelAnimationFrame(raf);
+      if (raf) cancelAnimationFrame(raf);
       map.removeLayer(marker);
     };
   }, [map, geometry]);
@@ -614,7 +629,7 @@ export default function RouteMap({ plan, waypoints = [] }) {
 
         {/* Planned stops — origin + destinations. */}
         {layers.stops && origin && Number.isFinite(origin.lat) && (
-          <Marker position={[origin.lat, origin.lng]} icon={pinIcon("origin")}>
+          <Marker position={[origin.lat, origin.lng]} icon={pinIcon("origin")} title={`Origin: ${origin.label || ""}`}>
             <Tooltip direction="top" offset={[0, -46]}>
               <span style={{ fontWeight: 600 }}>Origin</span>
               <br />
@@ -626,7 +641,7 @@ export default function RouteMap({ plan, waypoints = [] }) {
         {layers.stops &&
           dests.map((d, i) =>
             Number.isFinite(d.lat) ? (
-              <Marker key={`dest-${i}`} position={[d.lat, d.lng]} icon={pinIcon("dest")}>
+              <Marker key={`dest-${i}`} position={[d.lat, d.lng]} icon={pinIcon("dest")} title={`Destination ${i + 1}: ${d.label || ""}`}>
                 <Tooltip direction="top" offset={[0, -46]}>
                   <span style={{ fontWeight: 600 }}>Destination {i + 1}</span>
                   <br />
@@ -639,7 +654,7 @@ export default function RouteMap({ plan, waypoints = [] }) {
         {/* Charging stations. */}
         {layers.charging &&
           stops.map((s, i) => (
-            <Marker key={`charge-${i}`} position={[s.lat, s.lng]} icon={chargeIcon(i + 1)}>
+            <Marker key={`charge-${i}`} position={[s.lat, s.lng]} icon={chargeIcon(i + 1)} title={`Charging stop ${i + 1}: ${s.name || ""}`}>
               <Tooltip direction="top" offset={[0, -14]} className="map-tip charge-tip">
                 <span className="ct-head">
                   <span className="material-symbols-outlined mt-icon" style={{ color: "#f5a623" }}>
@@ -682,6 +697,7 @@ export default function RouteMap({ plan, waypoints = [] }) {
               position={[inc.lat, inc.lng]}
               icon={incidentIcon(inc)}
               zIndexOffset={500}
+              title="Traffic incident on route"
             >
               <Tooltip direction="top" offset={[0, -14]} className="map-tip">
                 <span

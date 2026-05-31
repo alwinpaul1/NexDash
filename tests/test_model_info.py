@@ -38,10 +38,13 @@ def test_model_info_numeric_metrics(model_path):
         "mape_pct",
         "r2",
         "pct_range_error",
+        "model_version",
     }
     for key in ("mae_kwh", "rmse_kwh", "mape_pct", "r2", "pct_range_error"):
         assert isinstance(info[key], float), f"{key} must be numeric"
         assert info[key] >= 0.0
+    # model_version is provenance metadata: a string when a sidecar exists, else None.
+    assert info["model_version"] is None or isinstance(info["model_version"], str)
 
     # pct_range_error is MAE as a fraction of a full charge -- must be consistent.
     from nexdash.config import TRUCK
@@ -85,4 +88,5 @@ def test_model_info_fails_soft_to_nulls(tmp_path, monkeypatch):
         "mape_pct": None,
         "r2": None,
         "pct_range_error": None,
+        "model_version": None,
     }

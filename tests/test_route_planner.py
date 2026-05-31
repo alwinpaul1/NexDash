@@ -24,7 +24,34 @@ from __future__ import annotations
 import pytest
 
 from nexdash import route_planner
-from nexdash.config import DEFAULT_MODEL_PATH
+from nexdash.config import DEFAULT_MODEL_PATH, TRUCK
+
+
+# --------------------------------------------------------------------------- #
+# Charging power-vs-SOC taper
+# --------------------------------------------------------------------------- #
+def test_charge_taper_costs_more_per_percent_in_the_tail():
+    """A percent of charge in the tapered tail must take longer than below the knee.
+
+    WHY: heavy-BEV DC charging holds near-peak power only to ~80% SOC then
+    derates steeply; a flat-power model that ignores this materially understates
+    session time for a top-to-95% stop. The taper helper must reflect that the
+    94->95% percent is slower than the 40->41% percent, and that below the knee
+    there is no taper (equals the flat rate).
+    """
+    rated, batt = 400.0, TRUCK.battery_kwh
+    below_knee = route_planner._charge_minutes(40.0, 41.0, rated, batt)
+    in_tail = route_planner._charge_minutes(94.0, 95.0, rated, batt)
+    assert in_tail > below_knee, "tail percent must be slower than below-knee percent"
+
+    # Below the knee there is no taper: it equals the flat-rate time.
+    flat_below = (batt / 100.0) / rated * 60.0  # minutes for 1% at full power
+    assert below_knee == pytest.approx(flat_below, rel=1e-6)
+
+    # Charging into the tail (80->100) must exceed the naive flat estimate.
+    taper_tail = route_planner._charge_minutes(80.0, 100.0, rated, batt)
+    flat_tail = (batt * 0.20) / rated * 60.0
+    assert taper_tail > flat_tail * 1.3
 
 
 # A trivial 4-vertex polyline; its real coordinates are irrelevant because we
@@ -308,3 +335,85 @@ def test_short_reachable_trip_inserts_no_charge():
     assert all(s["type"] != "charge" for s in result["segments"])
     # Arrives above the hard floor (the reserve cushion may be dipped into).
     assert result["summary"]["arrivalSoc"] >= 10.0
+
+
+# --------------------------------------------------------------------------- #
+# Per-leg simulation + per-stop wiring (payload decay / unload / deliver-by)
+# --------------------------------------------------------------------------- #
+# Berlin -> Leipzig -> Munich-ish; coords only set the leg-distance fractions.
+_ORIGIN = {"lat": 52.52, "lng": 13.40, "label": "Berlin"}
+_MID = {"lat": 51.34, "lng": 12.37, "label": "Leipzig"}
+_FINAL = {"lat": 48.14, "lng": 11.58, "label": "Munich"}
+
+
+def _multistop_plan(mid_extra=None, final_extra=None, **overrides):
+    mid = {**_MID, **(mid_extra or {})}
+    final = {**_FINAL, **(final_extra or {})}
+    kwargs = dict(
+        distance_km=500.0,
+        duration_s=500.0 / 70.0 * 3600.0,
+        start_soc=100.0,
+        min_soc=0.0,          # disable charging so we isolate the leg effects
+        payload_kg=20000.0,
+        departure="2026-05-30T08:00",
+        model_path=DEFAULT_MODEL_PATH,
+    )
+    kwargs.update(overrides)
+    return route_planner.plan_route(waypoints=[_ORIGIN, mid, final], **kwargs)
+
+
+def test_payload_decay_makes_constant_payload_the_conservative_estimate():
+    """Dropping cargo at a stop must lower later-leg energy vs holding it.
+
+    WHY (encodes the honesty claim): the planner held payload constant for the
+    whole trip, which it documents as 'conservative — over-estimates later legs'.
+    Wiring per-stop drops must make that literally true: the same route with a
+    10 t drop at the mid-stop must consume strictly LESS energy than with no drop,
+    so constant-payload is the upper bound it claims to be.
+    """
+    decayed = _multistop_plan(mid_extra={"dropWeightKg": 10000})
+    constant = _multistop_plan(mid_extra={"dropWeightKg": 0})
+    assert decayed["summary"]["energyKwh"] < constant["summary"]["energyKwh"]
+    # The mid-stop must report the reduced post-drop payload.
+    mid_stop = decayed["stops"][0]
+    assert mid_stop["payloadAfterT"] == pytest.approx(10.0, abs=0.01)
+
+
+def test_per_stop_arrival_soc_and_eta_reported():
+    """Each destination must carry its own arrival SOC + ETA; SOC falls along route."""
+    plan = _multistop_plan()
+    stops = plan["stops"]
+    assert len(stops) == 2  # two destinations (origin excluded)
+    assert all("etaIso" in s and "arriveSoc" in s for s in stops)
+    # No charging here, so arrival SOC must be non-increasing leg over leg.
+    assert stops[0]["arriveSoc"] >= stops[1]["arriveSoc"]
+    assert stops[-1]["isFinal"] is True and stops[0]["isFinal"] is False
+
+
+def test_deliver_by_feasibility_flag():
+    """A deliver-by deadline must drive an on-time flag (True / False / None)."""
+    impossible = _multistop_plan(final_extra={"deliverBy": "2026-05-30T08:30"})
+    assert impossible["stops"][-1]["onTime"] is False  # 30 min for ~500 km: no
+    generous = _multistop_plan(final_extra={"deliverBy": "2026-05-31T20:00"})
+    assert generous["stops"][-1]["onTime"] is True
+    none_set = _multistop_plan()
+    assert none_set["stops"][-1]["onTime"] is None  # no deadline -> unknown
+
+
+def test_unload_dwell_extends_eta_and_appears_in_timeline():
+    """Unload time at an intermediate stop must push the ETA and show in segments."""
+    no_dwell = _multistop_plan(mid_extra={"unloadMin": 0})
+    dwell = _multistop_plan(mid_extra={"unloadMin": 60})
+    assert dwell["summary"]["totalTimeH"] > no_dwell["summary"]["totalTimeH"]
+    assert dwell["summary"]["unloadTimeMin"] == 60
+    assert any(seg["type"] == "unload" for seg in dwell["segments"])
+
+
+def test_summary_carries_machine_readable_assumptions():
+    """The response must expose honest-limitations as a machine-readable list."""
+    plan = _multistop_plan(mid_extra={"dropWeightKg": 8000})
+    assumptions = plan["summary"]["assumptions"]
+    assert isinstance(assumptions, list) and assumptions
+    blob = " ".join(assumptions).lower()
+    assert "eu 561" in blob and "taper" in blob
+    assert any("payload decays" in a.lower() for a in assumptions)

@@ -27,8 +27,9 @@ def model_info(model_path=DEFAULT_MODEL_PATH) -> dict:
     represents.
 
     Returns:
-        ``{mae_kwh, rmse_kwh, mape_pct, r2, pct_range_error}`` with float values
-        where known and ``None`` where they could not be resolved.
+        ``{mae_kwh, rmse_kwh, mape_pct, r2, pct_range_error, model_version}`` with
+        float values where known and ``None`` where they could not be resolved.
+        ``model_version`` is the content-addressed lineage string (or ``None``).
     """
     info: dict[str, Optional[float]] = {
         "mae_kwh": None,
@@ -36,7 +37,19 @@ def model_info(model_path=DEFAULT_MODEL_PATH) -> dict:
         "mape_pct": None,
         "r2": None,
         "pct_range_error": None,
+        "model_version": None,
     }
+
+    # Content-addressed lineage (training-data SHA + code SHA), fail-soft: read
+    # from the provenance sidecar written by run_pipeline / nexdash.registry.
+    try:
+        from . import registry
+
+        sidecar = registry.read_sidecar(model_path)
+        if sidecar:
+            info["model_version"] = sidecar.get("model_version")
+    except Exception:
+        pass
 
     metrics = _metrics_from_artifact(model_path)
     if metrics is not None:

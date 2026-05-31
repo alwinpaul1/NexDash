@@ -41,7 +41,7 @@ from typing import Any
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
-from nexdash import data_gen, evaluate
+from nexdash import data_gen, evaluate, registry
 from nexdash.config import (
     DEFAULT_DATASET_PATH,
     DEFAULT_MODEL_PATH,
@@ -304,6 +304,7 @@ def _build_report(
     held_out: dict[str, Any],
     failure: dict[str, Any],
     figure_paths: list[str],
+    model_version: str = "unknown",
 ) -> str:
     """Assemble the full Markdown evaluation report from real computed numbers."""
     now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -331,6 +332,7 @@ def _build_report(
     report = f"""# NexDash Energy Model -- Evaluation Report
 
 _Generated {now} by `run_pipeline.py` (seed = {SEED}, deterministic)._
+_Model version: `{model_version}` (content-addressed: training-data SHA + code SHA). See `models/<artifact>.provenance.json` and `models/registry/` for full lineage; compare versions with `python -m nexdash.promote <champion> <challenger>`._
 
 This report evaluates the energy-consumption model for the
 **{TRUCK.name}** (~{TRUCK.battery_kwh:.0f} kWh usable battery, ~500 km
@@ -465,6 +467,17 @@ def run() -> dict[str, Any]:
         f"{len(figure_paths)} figure(s)"
     )
 
+    # Record provenance for long-term lineage / promotion / rollback. The
+    # joblib artifact is left byte-identical; provenance is a JSON sidecar plus a
+    # content-addressed registry entry (see nexdash.registry).
+    provenance = registry.build_provenance(
+        DEFAULT_DATASET_PATH, model.metrics, seed=SEED, failure_modes=failure
+    )
+    sidecar_path = registry.write_sidecar(DEFAULT_MODEL_PATH, provenance)
+    registry.register(provenance)
+    model_version = provenance["model_version"]
+    print(f"      registered model version {model_version} (sidecar: {sidecar_path.name})")
+
     print(f"[5/5] Writing report to {REPORT_PATH} ...")
     report_md = _build_report(
         df=df,
@@ -474,6 +487,7 @@ def run() -> dict[str, Any]:
         held_out=held_out,
         failure=failure,
         figure_paths=figure_paths,
+        model_version=model_version,
     )
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     REPORT_PATH.write_text(report_md, encoding="utf-8")

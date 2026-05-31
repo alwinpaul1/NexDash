@@ -23,6 +23,7 @@ No network is ever touched: every HTTP call is intercepted at ``_get_json``.
 from __future__ import annotations
 
 import math
+from datetime import timedelta
 
 import pytest
 
@@ -243,6 +244,93 @@ def test_enrich_route_empty_geometry_fail_soft():
         assert out["segments"] == []
         assert out["elevationProfile"] == []
         assert out["conditions"]["avgTempC"] == pytest.approx(geodata.DEFAULT_TEMP_C)
+
+
+# --------------------------------------------------------------------------- #
+# Honest weather provenance (out-of-window dates, degraded flags, retry)
+# --------------------------------------------------------------------------- #
+def test_out_of_window_departure_degrades_not_silently_current(monkeypatch):
+    """A far-future departure must NOT be enriched with today's live weather.
+
+    WHY (honest evaluation, the #1 criterion): the forecast endpoint rejects
+    dates outside ~[today-92d, today+15d] with {"error": true}. The old code
+    then fell through to the live ``current=`` reading and presented it as the
+    departure-time weather — silently wrong. Now an out-of-window date degrades
+    to documented defaults and flags ``weatherDegraded`` / ``weatherSource =
+    'default'`` instead of leaking a bogus value.
+    """
+    def fake_get_json(url):
+        if url.startswith(geodata._ELEV_API):
+            n = url.split("latitude=")[1].split("&")[0].count(",") + 1
+            return {"elevation": [0.0] * n}
+        if "current=" in url:
+            return {"current": {"temperature_2m": 99.0, "wind_speed_10m": 1.0, "wind_direction_10m": 0.0}}
+        # Forecast/historical hourly request for an out-of-range date.
+        return {"error": True, "reason": "Parameter 'start_date' is out of allowed range"}
+
+    monkeypatch.setattr(geodata, "_get_json", fake_get_json)
+    far = (geodata.datetime.now(geodata.timezone.utc) + timedelta(days=60)).strftime("%Y-%m-%dT09:00")
+    out = geodata.enrich_route(DENSE_GEOMETRY, departure_iso=far)
+
+    assert out["conditions"]["weatherDegraded"] is True
+    assert out["conditions"]["weatherSource"] == "default"
+    # The bogus 99 C "current" weather must NOT have leaked into the segments.
+    assert all(s["temperatureC"] == pytest.approx(geodata.DEFAULT_TEMP_C) for s in out["segments"])
+
+
+def test_enrich_route_flags_degraded_when_network_down(monkeypatch):
+    """A network outage must set both degraded flags, not look like real data."""
+    monkeypatch.setattr(geodata, "_get_json", lambda url: None)
+    out = geodata.enrich_route(DENSE_GEOMETRY, departure_iso="2026-05-30T09:00")
+    cond = out["conditions"]
+    assert cond["weatherDegraded"] is True
+    assert cond["elevationDegraded"] is True
+    assert cond["weatherSource"] == "default"
+    assert cond["weatherSamples"] >= 1  # disclosed sampling count
+
+
+def test_recent_past_departure_uses_historical_forecast_endpoint(monkeypatch):
+    """A departure older than the forecast window must hit the Historical API.
+
+    WHY: the standard forecast endpoint only covers ~92 days back; a trip
+    analysed for last quarter must route to ``historical-forecast-api`` rather
+    than silently degrade. We assert the endpoint selection, not a value.
+    """
+    seen = []
+
+    def fake_get_json(url):
+        seen.append(url)
+        return None  # value irrelevant; we only check which host was called
+
+    monkeypatch.setattr(geodata, "_get_json", fake_get_json)
+    dep = geodata._parse_departure(
+        (geodata.datetime.now(geodata.timezone.utc) - timedelta(days=200)).strftime("%Y-%m-%dT09:00")
+    )
+    geodata._weather_at(52.0, 13.0, dep)
+    assert any(u.startswith(geodata._HIST_FORECAST_API) for u in seen)
+
+
+def test_get_json_retries_transient_but_not_permanent(monkeypatch):
+    """_get_json retries 5xx/429 with backoff, but never retries a 4xx."""
+    import urllib.error
+
+    monkeypatch.setattr(geodata.time, "sleep", lambda *_a, **_k: None)  # no real waiting
+
+    transient = {"n": 0}
+    def raise_503(*_a, **_k):
+        transient["n"] += 1
+        raise urllib.error.HTTPError("u", 503, "busy", {}, None)
+    monkeypatch.setattr(geodata.urllib.request, "urlopen", raise_503)
+    assert geodata._get_json("https://x") is None
+    assert transient["n"] == geodata._HTTP_RETRIES + 1  # retried to exhaustion
+
+    permanent = {"n": 0}
+    def raise_400(*_a, **_k):
+        permanent["n"] += 1
+        raise urllib.error.HTTPError("u", 400, "bad request", {}, None)
+    monkeypatch.setattr(geodata.urllib.request, "urlopen", raise_400)
+    assert geodata._get_json("https://x") is None
+    assert permanent["n"] == 1  # permanent error: no retry
 
 
 def test_bearing_due_north_and_east():

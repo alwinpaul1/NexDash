@@ -15,6 +15,51 @@
 
 const TOMTOM_KEY = import.meta.env.VITE_TOMTOM_API_KEY;
 
+// Single source of truth for the routed vehicle, so what TomTom routes matches
+// the eActros 600 the backend simulates (kerb ~18 t + 22 t payload = 40 t GCW,
+// 5-axle artic). Keeping these here, rather than as scattered magic numbers,
+// avoids the routed vehicle silently diverging from the simulated one.
+const TRUCK_SPEC = {
+  weightKg: 40000,
+  axleWeightKg: 11500,
+  numberOfAxles: 5,
+  lengthM: 16.5,
+  widthM: 2.55,
+  heightM: 4.0,
+  maxSpeedKph: 89,
+};
+
+// Resilient fetch for TomTom calls: a per-request timeout (AbortController) plus
+// a bounded retry with exponential backoff on 429 / 5xx — TomTom's Search and
+// Routing QPS cap is 5, and a multi-stop replan can burst past it, after which a
+// bare fetch would silently drop stations/incidents. Permanent 4xx are NOT
+// retried. Returns the Response; callers keep their own `if (!res.ok)` handling.
+async function tomtomFetch(url, { timeoutMs = 8000, retries = 2 } = {}) {
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { signal: ctrl.signal });
+      clearTimeout(timer);
+      if ((res.status === 429 || res.status >= 500) && attempt < retries) {
+        await new Promise((r) => setTimeout(r, 400 * 2 ** attempt));
+        continue;
+      }
+      return res;
+    } catch (err) {
+      clearTimeout(timer);
+      lastErr = err;
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, 400 * 2 ** attempt));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
 // Backend base URL. In dev the Vite proxy / same-origin usually works; allow an
 // explicit override via VITE_API_BASE if the API runs elsewhere.
 const API_BASE = import.meta.env.VITE_API_BASE || "";
@@ -33,7 +78,7 @@ export async function geocode(query) {
     const url =
       `https://api.tomtom.com/search/2/geocode/${encodeURIComponent(q)}.json` +
       `?key=${TOMTOM_KEY}&limit=6&countrySet=${COUNTRY_SET}`;
-    const res = await fetch(url);
+    const res = await tomtomFetch(url);
     if (!res.ok) return [];
     const data = await res.json();
     // Build clean "name + region" results (e.g. "Berlin" / "Berlin, Germany")
@@ -74,7 +119,15 @@ function collectWaypoints(planner) {
   }
   for (const d of planner?.destinations || []) {
     if (d?.lat != null && d?.lng != null) {
-      pts.push({ label: d.label || "Destination", lat: d.lat, lng: d.lng });
+      pts.push({
+        label: d.label || "Destination",
+        lat: d.lat,
+        lng: d.lng,
+        // Per-stop delivery data wired through to the backend per-leg simulation.
+        dropWeightKg: d.dropWeightKg || 0,
+        unloadMin: d.unloadMin || 0,
+        deliverBy: d.deliverBy || "",
+      });
     }
   }
   return pts;
@@ -93,15 +146,16 @@ async function tomtomRoute(waypoints) {
     `&travelMode=truck` +
     `&routeType=fastest` +
     `&traffic=true` +
-    `&vehicleMaxSpeed=89` +
-    `&vehicleWeight=40000` +
-    `&vehicleAxleWeight=11500` +
-    `&vehicleLength=16.5` +
-    `&vehicleWidth=2.55` +
-    `&vehicleHeight=4` +
+    `&vehicleMaxSpeed=${TRUCK_SPEC.maxSpeedKph}` +
+    `&vehicleWeight=${TRUCK_SPEC.weightKg}` +
+    `&vehicleAxleWeight=${TRUCK_SPEC.axleWeightKg}` +
+    `&vehicleNumberOfAxles=${TRUCK_SPEC.numberOfAxles}` +
+    `&vehicleLength=${TRUCK_SPEC.lengthM}` +
+    `&vehicleWidth=${TRUCK_SPEC.widthM}` +
+    `&vehicleHeight=${TRUCK_SPEC.heightM}` +
     `&vehicleCommercial=true`;
 
-  const res = await fetch(url);
+  const res = await tomtomFetch(url);
   if (!res.ok) throw new Error(`TomTom routing ${res.status}`);
   const data = await res.json();
   const route = data.routes?.[0];
@@ -172,7 +226,7 @@ async function fetchIncidents(geometry) {
         `?key=${TOMTOM_KEY}&bbox=${bbox}&fields=${fields}&language=en-GB` +
         `&timeValidityFilter=present&categoryFilter=1,6,7,8,9,14`;
       try {
-        const res = await fetch(url);
+        const res = await tomtomFetch(url);
         if (!res.ok) return [];
         const data = await res.json();
         return data.incidents || [];
@@ -248,7 +302,16 @@ async function fetchIncidents(geometry) {
 
 async function backendPlan({ waypoints, geometry, distanceKm, durationS, planner }) {
   const body = {
-    waypoints: waypoints.map((w) => ({ lat: w.lat, lng: w.lng, label: w.label })),
+    // Carry per-stop delivery data so the backend can run the per-leg simulation
+    // (payload decay after each drop, unload dwell in the ETA, deliver-by check).
+    waypoints: waypoints.map((w) => ({
+      lat: w.lat,
+      lng: w.lng,
+      label: w.label,
+      dropWeightKg: w.dropWeightKg || 0,
+      unloadMin: w.unloadMin || 0,
+      deliverBy: w.deliverBy || "",
+    })),
     // Full road polyline so the backend can enrich every segment with real
     // elevation / gradient / temperature / wind from Open-Meteo.
     geometry: Array.isArray(geometry) ? geometry : [],
@@ -258,7 +321,7 @@ async function backendPlan({ waypoints, geometry, distanceKm, durationS, planner
     minSoc: planner?.minSoc ?? 15,
     payloadKg: planner?.payloadKg ?? 0,
     reservePct: planner?.reservePct ?? 10,
-    maxChargeKw: planner?.maxChargeKw ?? 350,
+    maxChargeKw: planner?.maxChargeKw ?? 400,
     departure: planner?.departure || null,
     temperatureC: planner?.temperatureC ?? 15,
   };
@@ -306,7 +369,7 @@ async function fetchAvailability(availabilityId) {
     const url =
       `https://api.tomtom.com/search/2/chargingAvailability.json` +
       `?key=${TOMTOM_KEY}&chargingAvailability=${encodeURIComponent(availabilityId)}`;
-    const res = await fetch(url);
+    const res = await tomtomFetch(url);
     if (!res.ok) return null;
     const data = await res.json();
     let available = 0;
@@ -355,7 +418,7 @@ async function enrichStations(stops, radiusKm = 30) {
           let u = base;
           if (minPowerKW) u += `&minPowerKW=${minPowerKW}`;
           if (connectorSet) u += `&connectorSet=${connectorSet}`;
-          const res = await fetch(u);
+          const res = await tomtomFetch(u);
           if (!res.ok) return null;
           const data = await res.json();
           return (data.results || [])[0] || null;

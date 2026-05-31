@@ -19,6 +19,11 @@ function newDest() {
     label: "",
     lat: null,
     lng: null,
+    // Per-stop delivery data — wired through to the backend per-leg simulation
+    // (payload decay after this drop, unload dwell in the ETA, deliver-by check).
+    dropWeightKg: 0,
+    unloadMin: 30,
+    deliverBy: "",
   };
 }
 
@@ -114,6 +119,19 @@ export default function RoutesView() {
 
   return (
     <div className="p-6 space-y-6">
+      {/* Screen-reader status: persistent (always mounted) live regions so AT
+          announces the plan lifecycle, which is otherwise conveyed only visually. */}
+      <div className="sr-only" role="status" aria-live="polite">
+        {status === "computing"
+          ? "Computing route…"
+          : status === "done" && plan?.summary
+            ? `Route ready. Arrival ${plan.summary.etaLabel ?? ""}, arrival battery ${Math.round(plan.summary.arrivalSoc ?? 0)} percent, ${plan.summary.chargingStops ?? 0} charging stops.`
+            : ""}
+      </div>
+      <div className="sr-only" role="alert" aria-live="assertive">
+        {status === "error" ? error || "Could not plan the route." : ""}
+      </div>
+
       <div>
         <h1 className="font-headline font-bold text-2xl text-on-surface">Route Planning</h1>
         <p className="text-sm text-on-surface-variant">
