@@ -24,11 +24,13 @@ from .config import DEFAULT_MODEL_PATH, TRUCK
 from .model import EnergyModel, predict_energy
 from .physics import segment_energy_kwh
 
-#: Fallback error band (kWh) used only when the trained artifact's held-out MAE
-#: cannot be read (e.g. no model on disk). The live confidence note prefers the
-#: model's *actual* held-out MAE — see :func:`_held_out_mae_kwh` — so the quoted
-#: band reflects real measured error instead of an optimistic guess.
-TYPICAL_MODEL_MAE_KWH: float = 3.0
+#: Coarse CONSERVATIVE fallback error band (kWh), used only when the trained
+#: artifact's held-out MAE cannot be read (e.g. a degenerate/missing metric). The
+#: live confidence note prefers the model's *actual* held-out MAE — see
+#: :func:`_held_out_mae_kwh`. Pinned at/above the trained model's measured held-out
+#: MAE (~6 kWh) so the fallback never UNDER-states error (the over-confident
+#: direction); it is a deliberately rough default, not a measured value.
+TYPICAL_MODEL_MAE_KWH: float = 6.0
 
 
 @lru_cache(maxsize=8)

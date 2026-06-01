@@ -135,8 +135,11 @@ export default function TripTimeline({ segments = [] }) {
         const isLast = i === segments.length - 1;
         let marker;
         let body;
-        if (seg.type === "rest") {
-          marker = <Marker icon="hotel" tint="#f59e0b" />;
+        if (seg.type === "rest" || seg.type === "daily_rest") {
+          marker = <Marker icon={seg.type === "daily_rest" ? "bedtime" : "hotel"} tint="#f59e0b" />;
+          body = <RestCard seg={seg} />;
+        } else if (seg.type === "unload") {
+          marker = <Marker icon="package_2" tint="#0059bb" />;
           body = <RestCard seg={seg} />;
         } else if (seg.type === "charge") {
           marker = <Marker icon="ev_station" tint="#006d32" />;

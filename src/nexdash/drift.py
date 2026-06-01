@@ -5,9 +5,12 @@ deliverable the brief asks for. Given a new batch of operating data (e.g. a
 month of real telematics) and the training reference, it answers three questions:
 
 * **Did the inputs move?** Per-feature Population Stability Index (PSI) on fixed
-  quantile bins taken from the training reference, plus a two-sample
-  Kolmogorov-Smirnov test. PSI uses the industry-standard tiers: < 0.1 stable,
-  0.1-0.25 watch, > 0.25 significant drift.
+  quantile bins taken from the training reference. **PSI alone drives the tier and
+  the rollup verdict** (industry-standard tiers: < 0.1 stable, 0.1-0.25 watch,
+  > 0.25 significant drift). A two-sample Kolmogorov-Smirnov p-value is also
+  reported per feature as a *supplementary diagnostic only* — it does NOT escalate
+  the verdict (two-sample KS p-values collapse toward 0 at large n even on
+  operationally trivial shifts, so wiring it into the tier would over-alert).
 * **Is the relationship still holding?** When the new batch carries the true
   energy labels, a realized-residual monitor compares live MAE / mean bias
   against the model's training-time error — the only signal grounded in truth,

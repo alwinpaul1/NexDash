@@ -20,10 +20,10 @@ Design notes / honesty caveats
   segments can produce tiny or slightly negative energy_kwh values, so MAPE is
   computed only over rows whose actual energy exceeds a small floor; the count
   of excluded rows is reported transparently as ``mape_n``.
-* ``pct_range_error`` expresses the MAE as a percentage of the energy required
-  for a *nominal full-range trip* (~500 km at typical motorway load). This puts
-  the error on an intuitive "how much of a charge could we be wrong by" scale;
-  it is **not** a per-trip percentage error (that is MAPE).
+* ``pct_range_error`` expresses the MAE as a percentage of the usable battery
+  capacity — one full ~600 kWh charge (which is also the eActros's ~500 km
+  nominal range). This puts the error on an intuitive "how much of a charge could
+  we be wrong by" scale; it is **not** a per-trip percentage error (that is MAPE).
 * A single average metric is necessarily optimistic for the hard cases. The
   failure-mode report exists precisely because a fleet dispatcher cares far
   more about the cold/steep/heavy tail than about the easy mid-range mean.
@@ -44,10 +44,6 @@ from .features import FEATURE_COLUMNS, TARGET
 # --------------------------------------------------------------------------- #
 # Constants
 # --------------------------------------------------------------------------- #
-
-#: Nominal full-range trip distance (km) used to scale MAE into a fleet-
-#: intuitive "percentage of a full charge" figure.
-NOMINAL_TRIP_KM: float = 500.0
 
 #: Energy denominator for :data:`pct_range_error`: the usable battery capacity, so
 #: the figure reads as "MAE as a fraction of one full charge". Uses
@@ -151,9 +147,9 @@ def evaluate(model: Any, df_test: pd.DataFrame) -> dict[str, float]:
         * ``mape_pct`` -- mean absolute percentage error over rows above the
           MAPE floor. *Does not tell us* anything about near-zero downhill
           segments, which are excluded.
-        * ``pct_range_error`` -- MAE as a percentage of a nominal full-range
-          (~500 km) trip's energy; a fleet-intuitive "fraction of a charge we
-          might be off by". Documented as nominal-trip based, **not** per-trip.
+        * ``pct_range_error`` -- MAE as a percentage of the usable battery
+          capacity (one full charge); a fleet-intuitive "fraction of a charge we
+          might be off by". Battery-capacity based, **not** a per-trip percentage.
         * ``r2`` -- coefficient of determination; fraction of target variance
           explained. *Does not tell us* the magnitude of error in kWh.
         * ``n`` -- number of test rows scored.
@@ -394,5 +390,4 @@ __all__ = [
     "failure_mode_report",
     "calibration_report",
     "make_plots",
-    "NOMINAL_TRIP_KM",
 ]

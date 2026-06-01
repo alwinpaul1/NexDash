@@ -18,12 +18,6 @@ import remarkGfm from "remark-gfm";
  * comes back 200 and renders as a normal assistant message.
  */
 
-const EXAMPLE_PROMPTS = [
-  "Truck at 60% SOC with 12 t — does it reach München in this weather?",
-  "How much energy for a 240 km leg at 18 tonnes in the cold?",
-  "At 45% charge, can I make Berlin→Leipzig fully loaded?",
-];
-
 /** Choose an icon for a tool chip based on the tool's name. */
 function toolIcon(name) {
   const n = String(name).toLowerCase();
@@ -87,7 +81,7 @@ function MessageBubble({ message }) {
   );
 }
 
-function EmptyState({ onPick, disabled }) {
+function EmptyState() {
   return (
     <div className="flex flex-col gap-4 py-2">
       <div className="flex items-start gap-2 text-sm text-on-surface-variant">
@@ -96,24 +90,8 @@ function EmptyState({ onPick, disabled }) {
         </span>
         <p>
           Ask in plain language about range, energy use, or whether a truck will make
-          its next stop. Try one of these:
+          its next stop.
         </p>
-      </div>
-      <div className="flex flex-col gap-2">
-        {EXAMPLE_PROMPTS.map((prompt) => (
-          <button
-            key={prompt}
-            type="button"
-            disabled={disabled}
-            onClick={() => onPick(prompt)}
-            className="text-left text-sm px-3.5 py-2.5 rounded-xl bg-surface-low text-on-surface border border-outline-variant/50 hover:border-primary/50 hover:bg-primary/5 transition focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:opacity-60"
-          >
-            <span className="material-symbols-outlined align-middle mr-1.5 text-primary" style={{ fontSize: "16px" }}>
-              auto_awesome
-            </span>
-            {prompt}
-          </button>
-        ))}
       </div>
     </div>
   );

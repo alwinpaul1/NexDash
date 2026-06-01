@@ -154,6 +154,12 @@ def mine_failure_modes(
                 "lift": round(lift, 2),
                 "lift_ci_low": round(float(np.quantile(boot, 0.025)), 2),
                 "lift_ci_high": round(float(np.quantile(boot, 0.975)), 2),
+                # The tree CHOSE this leaf to maximise error, so this within-leaf
+                # bootstrap CI is selection-biased (optimistic) — NOT a
+                # selection-corrected interval. The flag travels with the record so
+                # any consumer (report/UI) discloses it rather than over-trusting
+                # the lower bound. (Mirrors promote.py's `indicative` pattern.)
+                "selection_biased_ci": True,
             }
         )
 
