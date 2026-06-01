@@ -64,12 +64,12 @@ The React console is optional — everything in Part 1/2 (model, evaluation, age
 
 ### API keys
 
-**LLM (agent/CLI).** The dispatcher runs on **MiniMax** via its OpenAI-compatible API, model **`MiniMax-M2.7`**. Put the key in a `.env` at the repo root (gitignored; loaded automatically by `dashboard/server.py`), or export it:
+**LLM (agent/CLI).** The dispatcher runs on **MiniMax** via its OpenAI-compatible API, model **`MiniMax-M3`**. Put the key in a `.env` at the repo root (gitignored; loaded automatically by `dashboard/server.py`), or export it:
 
 ```bash
-export MINIMAX_API_KEY=...            # default model: MiniMax-M2.7
+export MINIMAX_API_KEY=...            # default model: MiniMax-M3
 # optional: pick a different model
-export NEXDASH_LLM_MODEL=MiniMax-M2.7
+export NEXDASH_LLM_MODEL=MiniMax-M3
 ```
 
 The provider is selected by which key is present: `MINIMAX_API_KEY` → MiniMax (OpenAI-compatible adapter); otherwise `ANTHROPIC_API_KEY` → Anthropic Claude (`claude-opus-4-8`). A thin adapter translates the OpenAI tool-calling schema to/from the Anthropic-style loop, so the tool layer and tests are provider-agnostic. The physics, dataset, model and evaluation all work **entirely offline** — only the LLM agent/CLI need a key; without one, `/api/chat` degrades to a friendly message rather than failing.
@@ -256,7 +256,7 @@ The candid framing stands: "no weaknesses" is impossible. We fixed the big four 
 The dispatcher experience is an **LLM tool-use loop**, not free-form generation over numbers.
 
 - **Tools (`nexdash.tools`).** Two tool schemas — `predict_energy` and `check_reachability` — with thin, JSON-serializable wrappers and a `dispatch(name, args)` router. The model is *forbidden in the system prompt from inventing numbers*; it must call a tool.
-- **Agent (`nexdash.agent.DispatcherAgent`).** `ask(question)` sends the question plus `TOOL_SPECS` to the configured LLM (MiniMax-M2.7 by default, or Anthropic Claude), executes any tool calls via `dispatch`, feeds the result back, and loops until the model returns plain-language text. A thin OpenAI⇄Anthropic adapter lets the same loop drive either provider; MiniMax is a reasoning model, so its `<think>…</think>` is stripped from the user-facing reply (kept in history for continuity). The system prompt frames it as a fleet dispatcher that always states the **margin** and a **caveat**. The client is injectable, so tests run fully mocked with no network.
+- **Agent (`nexdash.agent.DispatcherAgent`).** `ask(question)` sends the question plus `TOOL_SPECS` to the configured LLM (MiniMax-M3 by default, or Anthropic Claude), executes any tool calls via `dispatch`, feeds the result back, and loops until the model returns plain-language text. A thin OpenAI⇄Anthropic adapter lets the same loop drive either provider; MiniMax is a reasoning model, so its `<think>…</think>` is stripped from the user-facing reply (kept in history for continuity). The system prompt frames it as a fleet dispatcher that always states the **margin** and a **caveat**. The client is injectable, so tests run fully mocked with no network.
 - **MCP (`nexdash.mcp_server`).** The exact same two tools are registered on a `FastMCP` server named `nexdash`, delegating to `nexdash.tools` so there is no logic drift — any MCP-capable host gets NexDash's reasoning without importing Python.
 - **CLI (`nexdash.cli`).** A friendly REPL (or `--once`) over the agent, with a clear message and exit code if no LLM key (`MINIMAX_API_KEY` / `ANTHROPIC_API_KEY`) is set.
 - **HTTP + chat UI (bonus).** `POST /api/chat` wires `DispatcherAgent.chat` over the same loop, returning the reply plus which tools were used, and degrades gracefully (no crash) when no key is set or the provider is rate-limited. The React console in `frontend/` exposes this as a floating **chat widget** (`ChatWidget` / `ChatPanel`) that **renders the agent's Markdown** (tables, lists, caveat) — the brief's "chat UI is a plus."

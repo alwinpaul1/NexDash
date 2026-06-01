@@ -98,7 +98,7 @@ MISSING_KEY_MESSAGE = (
     "The dispatcher assistant needs an LLM key (MiniMax preferred, Anthropic\n"
     "fallback).\n\n"
     f"{_bold('Set one for this shell:')}\n"
-    f"  {_cyan('export MINIMAX_API_KEY=...')}   {_dim('# default: MiniMax-M2.7')}\n"
+    f"  {_cyan('export MINIMAX_API_KEY=...')}   {_dim('# default: MiniMax-M3')}\n"
     f"  {_cyan('export ANTHROPIC_API_KEY=sk-ant-...')}   {_dim('# fallback')}\n\n"
     f"{_bold('Or add it to a .env file')} "
     f"{_dim('(see .env.example in the repo root):')}\n"

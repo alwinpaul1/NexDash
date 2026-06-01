@@ -29,7 +29,7 @@ DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
 # When MINIMAX_API_KEY is set the agent runs on MiniMax's OpenAI-compatible API
 # instead of Anthropic. The key is read from the environment — never hard-code
 # it. NEXDASH_LLM_MODEL overrides the default model.
-DEFAULT_LLM_MODEL = os.environ.get("NEXDASH_LLM_MODEL", "MiniMax-M2.7")
+DEFAULT_LLM_MODEL = os.environ.get("NEXDASH_LLM_MODEL", "MiniMax-M3")
 MINIMAX_API_URL = "https://api.minimax.io/v1/chat/completions"
 
 # Upper bound on tool-use round trips to guard against pathological loops.
@@ -156,7 +156,7 @@ class DispatcherAgent:
 
         raise MissingAPIKeyError(
             "No LLM API key set. Export MINIMAX_API_KEY (e.g. to use "
-            "MiniMax-M2.7) or ANTHROPIC_API_KEY, then restart the server."
+            "MiniMax-M3) or ANTHROPIC_API_KEY, then restart the server."
         )
 
     # ------------------------------------------------------------------ #
@@ -339,7 +339,7 @@ def _get(block: Any, attr: str) -> Any:
 
 
 def _strip_reasoning(text: str) -> str:
-    """Remove ``<think>...</think>`` reasoning that models like MiniMax-M2 emit.
+    """Remove ``<think>...</think>`` reasoning that models like MiniMax-M3 emit.
 
     The reasoning is kept verbatim in the conversation history (for the model's
     own continuity) but must not surface in the dispatcher-facing reply.
@@ -405,7 +405,7 @@ def _result_to_text(result: Any) -> str:
 # Exposes the same ``client.messages.create(...)`` surface the Anthropic loop
 # above expects, translating Anthropic-style requests/responses to and from the
 # OpenAI chat-completions schema. This lets the dispatcher run on any
-# OpenAI-compatible endpoint (MiniMax-M2.7 here) with ZERO changes to the
+# OpenAI-compatible endpoint (MiniMax-M3 here) with ZERO changes to the
 # tool-use loop or the tool layer.
 class _CompatResponse:
     """Minimal stand-in for an Anthropic response: just a ``.content`` block list."""
