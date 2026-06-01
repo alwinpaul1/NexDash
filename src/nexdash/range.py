@@ -112,6 +112,14 @@ def check_reachability(
     soc_pct = min(100.0, max(0.0, float(soc_pct)))
     reserve_pct = min(100.0, max(0.0, float(reserve_pct)))
 
+    # A moving segment needs a positive speed. Reject it early with a clear message
+    # so this path fails consistently with the physics layer (segment_energy_kwh
+    # also rejects speed<=0) instead of crashing deep inside it — and so the model's
+    # optimistic speed=0 extrapolation is never quietly used. A non-positive speed is
+    # invalid input, NOT "unreachable" (a false NO-GO would be its own dishonest verdict).
+    if speed_kph <= 0:
+        raise ValueError(f"speed_kph must be > 0 for a moving segment; got {speed_kph}")
+
     # Energy demand predicted by the trained model from raw features.
     features = {
         "distance_km": distance_km,

@@ -572,3 +572,26 @@ def test_assumptions_do_not_leak_internal_field_names(monkeypatch):
     blob = " ".join(result["summary"]["assumptions"])
     for leaked in ("drivingH", "dailyH", "weeklyH"):
         assert leaked not in blob, f"internal field name {leaked!r} leaked into assumptions"
+
+
+def test_check_reachability_rejects_nonpositive_speed():
+    """#18 (fail-loud): a moving segment needs speed>0. check_reachability must raise
+    a clear ValueError on speed<=0 — not crash deep in the physics layer and not let
+    predict_energy silently extrapolate a stationary segment."""
+    from nexdash.range import check_reachability
+
+    with pytest.raises(ValueError, match="speed_kph"):
+        check_reachability(
+            soc_pct=80, distance_km=50, payload_t=10, speed_kph=0,
+            gradient_pct=0, temperature_c=20,
+        )
+
+
+def test_adaptive_target_soc_uncertainty_cushion_raises_depart():
+    """#13: the forecast-uncertainty cushion must push the depart SOC strictly above
+    the no-cushion target, so a charge does not aim to arrive exactly at the floor on
+    the model's own (possibly optimistic) energy number."""
+    kw = dict(arrive_soc=15.0, battery_kwh=600.0, charge_floor=20.0, soft_ceiling_soc=80.0)
+    base = route_planner._adaptive_target_soc(0.30 * 600.0, **kw)
+    cushioned = route_planner._adaptive_target_soc(0.30 * 600.0, uncertainty_kwh=30.0, **kw)
+    assert cushioned > base

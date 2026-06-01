@@ -226,6 +226,7 @@ def _adaptive_target_soc(
     *,
     charge_floor: float,
     soft_ceiling_soc: float,
+    uncertainty_kwh: float = 0.0,
     headroom: float = CHARGE_HEADROOM_PCT,
 ) -> float:
     """Lowest depart SOC that secures the rest of the route, capped at 100%.
@@ -235,11 +236,16 @@ def _adaptive_target_soc(
     (saving the slow 80->100% tail), or, when it removes a second stop, dipping
     INTO the tail on demand. If a single charge cannot finish the route, top to
     the soft ceiling and let the on-demand trigger insert another stop later.
-    Deterministic and model-free: it reuses the already-computed remaining energy.
+
+    ``uncertainty_kwh`` is a forecast-error cushion (the caller passes
+    ``mae_band * sqrt(n_remaining_chunks)`` — the sqrt-of-n scaling for roughly
+    independent per-chunk errors) added to the energy still owed, so the target
+    absorbs sub-divergence-band model optimism instead of arriving exactly at the
+    floor on the model's own (possibly optimistic) number. Deterministic.
     """
     if battery_kwh <= 0:
         return min(100.0, max(soft_ceiling_soc, arrive_soc))
-    drop_to_dest_pct = (remaining_energy_kwh / battery_kwh) * 100.0
+    drop_to_dest_pct = ((remaining_energy_kwh + max(0.0, uncertainty_kwh)) / battery_kwh) * 100.0
     need_depart = charge_floor + drop_to_dest_pct + headroom
     depart = need_depart if need_depart <= 100.0 else max(soft_ceiling_soc, charge_floor)
     return min(100.0, max(depart, arrive_soc + 0.5))
@@ -581,12 +587,19 @@ def plan_route(
             # dipping into the slow 80->100% tail only when it secures the trip in
             # one stop, otherwise topping to the soft ceiling and charging again
             # later. `charge_target_soc` becomes that soft ceiling, not a hard cap.
+            # Forecast-uncertainty cushion: the adaptive target follows the model's
+            # own energy number, which can be optimistic within the divergence band.
+            # Add mae_band * sqrt(n_remaining_chunks) (sqrt-of-n for roughly
+            # independent per-chunk errors) so the depart SOC absorbs that drift
+            # rather than arriving exactly at the floor on an optimistic estimate.
+            n_remaining = max(1, len(chunk_energies) - i)
             depart_soc = _adaptive_target_soc(
                 remaining_energy_kwh,
                 arrive_soc=arrive_soc,
                 battery_kwh=battery_kwh,
                 charge_floor=charge_floor,
                 soft_ceiling_soc=charge_target_soc,
+                uncertainty_kwh=mae_band * math.sqrt(n_remaining),
             )
             kwh_added = max(0.0, (depart_soc - arrive_soc) / 100.0 * battery_kwh)
             charge_kw = max_charge_kw if max_charge_kw and max_charge_kw > 0 else CHARGER_KW
