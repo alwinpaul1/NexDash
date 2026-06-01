@@ -1,7 +1,7 @@
 # NexDash Energy Model -- Evaluation Report
 
-_Generated 2026-05-31 22:36:09 by `run_pipeline.py` (seed = 42, deterministic)._
-_Model version: `b01e68ba8d83-0f7b3130` (content-addressed: training-data SHA + code SHA). See `models/<artifact>.provenance.json` and `models/registry/` for full lineage; compare versions with `python -m nexdash.promote <champion> <challenger>`._
+_Generated 2026-06-01 05:46:32 by `run_pipeline.py` (seed = 42, deterministic)._
+_Model version: `b01e68ba8d83-f37d9fa0` (content-addressed: training-data SHA + code SHA). See `models/<artifact>.provenance.json` and `models/registry/` for full lineage; compare versions with `python -m nexdash.promote <champion> <challenger>`._
 
 This report evaluates the energy-consumption model for the
 **Mercedes-Benz eActros 600** (~600 kWh usable battery, ~500 km
@@ -105,7 +105,34 @@ become large relative ones.
 | mid (7-15t) | 5.379 | 15.42 | 432 |
 | heavy (>15t) | 7.249 | 14.97 | 378 |
 
-## 5. Diagnostic figures
+## 5. Calibration & discovered failure modes
+
+Split-conformal prediction-interval coverage, calibrated on 600 held-out rows and audited on a disjoint 600 rows. **PASS** = the nominal level falls inside the bootstrap CI of realized coverage; **FAIL** = the band is mis-calibrated (the honest signal). Expected Calibration Error: **0.0117**.
+
+| Nominal | Empirical | Width (kWh) | Coverage 95% CI | Status |
+| --- | --- | --- | --- | --- |
+| 80% | 79.5% | 8.96 | [76.2%, 82.7%] | PASS |
+| 90% | 90.8% | 15.75 | [88.3%, 93.0%] | PASS |
+| 95% | 97.2% | 22.03 | [95.8%, 98.5%] | CONSERVATIVE |
+
+Per-gradient-regime 90% coverage (Mondrian / group-conditional bands — steep regimes honestly get their own width):
+
+| Regime | Empirical | Width (kWh) | n | Note |
+| --- | --- | --- | --- | --- |
+| flat | 90.4% | 15.57 | 581 |  |
+| steep_down | 100.0% | 15.75 | 9 | indicative (sparse) |
+| steep_up | 90.0% | 15.75 | 10 | indicative (sparse) |
+
+**Auto-discovered failure modes.** A shallow decision tree on the held-out absolute error searches the feature space for the worst error pockets the hand-picked slices above never enumerated. Each is gated by a support floor (n >= 30) and a bootstrapped lift CI, so only statistically-real pockets are reported (not 3-row flukes).
+
+| Discovered condition | n | Pocket MAE | Lift vs global | Lift 95% CI |
+| --- | --- | --- | --- | --- |
+| `distance_km>157.6` | 44 | 18.05 kWh | 3.02x | [2.37, 3.75] |
+| `113.2<distance_km<=157.6 AND wind_mps>-1.4` | 54 | 12.53 kWh | 2.1x | [1.7, 2.53] |
+
+_Honest scope: coverage is measured against the **synthetic held-out labels** (our own noisy physics), i.e. coverage-of-physics, not coverage-of-reality — the same circular-evaluation caveat as the headline metrics. A FAIL or a high-lift pocket is disclosed, never hidden._
+
+## 6. Diagnostic figures
 
 ### Predicted Vs Actual
 
@@ -119,7 +146,7 @@ become large relative ones.
 
 ![Error By Payload](figures/error_by_payload.png)
 
-## 6. Where it breaks, and why
+## 7. Where it breaks, and why
 
 **What these metrics do and don't prove.** Every figure here measures how faithfully the ML model reproduces `nexdash.physics.segment_energy_kwh` -- the *same* function that generated the labels. They bound model-vs-PHYSICS error, **not** model-vs-REALITY error, which is unknown until real eActros telematics arrive. A low MAE proves the model re-learned our physics, not that the physics matches a real truck.
 

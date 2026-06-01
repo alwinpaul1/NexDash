@@ -76,6 +76,8 @@ from typing import Any, Optional, Union
 from . import geodata
 from .config import DEFAULT_MODEL_PATH, TRUCK
 from .model import predict_energy
+from .physics import segment_energy_kwh
+from .range import _held_out_mae_kwh
 
 # --------------------------------------------------------------------------- #
 # Planner constants (approximations documented in the module docstring)
@@ -388,25 +390,45 @@ def plan_route(
     # used directly as the headwind component, see module docstring). Doing this
     # before the walk lets the charging check look AHEAD at the energy still owed to
     # the destination, so we only charge when genuinely required.
-    chunk_energies = [
-        max(
-            0.0,
-            float(
-                predict_energy(
-                    {
-                        "distance_km": chunk_km,
-                        "payload_t": chunk_payloads[i],
-                        "speed_kph": avg_speed_kph,
-                        "gradient_pct": chunk_grad,
-                        "temperature_c": chunk_temp,
-                        "wind_mps": chunk_wind,
-                    },
-                    model_path=model_path,
-                )
-            ),
+    #
+    # PHYSICS CROSS-CHECK (mirrors range.check_reachability's directional guard):
+    # the data-driven model can *under*-predict on out-of-envelope terrain (e.g. a
+    # sustained steep grade that never occurs in training) — the dangerous,
+    # optimistic direction that would silently delay a charge and strand the truck.
+    # So for each chunk we also compute a first-principles segment_energy_kwh; when
+    # the model sits below physics by more than the divergence band, we use the
+    # conservative (higher) physics value for the SOC walk + charge trigger and
+    # flag the chunk out-of-envelope. The band matches range.py: max(3*MAE, 15%).
+    mae_band = _held_out_mae_kwh(str(model_path))
+    chunk_energies: list[float] = []
+    n_low_confidence = 0
+    for i, (chunk_km, chunk_grad, chunk_temp, chunk_wind) in enumerate(chunks):
+        feats = {
+            "distance_km": chunk_km,
+            "payload_t": chunk_payloads[i],
+            "speed_kph": avg_speed_kph,
+            "gradient_pct": chunk_grad,
+            "temperature_c": chunk_temp,
+            "wind_mps": chunk_wind,
+        }
+        model_kwh = max(0.0, float(predict_energy(feats, model_path=model_path)))
+        physics_kwh = float(
+            segment_energy_kwh(
+                distance_km=chunk_km,
+                payload_t=chunk_payloads[i],
+                speed_kph=avg_speed_kph,
+                gradient_pct=chunk_grad,
+                temperature_c=chunk_temp,
+                wind_mps=chunk_wind,
+                truck=TRUCK,
+            )
         )
-        for i, (chunk_km, chunk_grad, chunk_temp, chunk_wind) in enumerate(chunks)
-    ]
+        diverges = (physics_kwh - model_kwh) > max(3.0 * mae_band, 0.15 * abs(physics_kwh))
+        if diverges:
+            n_low_confidence += 1
+            chunk_energies.append(max(model_kwh, physics_kwh))
+        else:
+            chunk_energies.append(model_kwh)
 
     for i, (chunk_km, chunk_grad, chunk_temp, chunk_wind) in enumerate(chunks):
         chunk_energy = chunk_energies[i]
@@ -634,6 +656,14 @@ def plan_route(
         "EU 561: only the 4.5 h / 45 min break is modelled — single-shift, no 11 h daily "
         "rest or day/week split. drivingH/dailyH/weeklyH are the trip total."
     )
+    if n_low_confidence > 0:
+        assumptions.append(
+            f"LOW CONFIDENCE on {n_low_confidence} segment(s): the data-driven model "
+            "and a first-principles physics estimate disagree sharply (terrain outside "
+            "the model's training envelope). The conservative (higher) physics value "
+            "was used for the SOC/charging decision on those segments — treat the plan "
+            "as indicative there and keep a wide reserve."
+        )
     late = [s for s in stops_out if s.get("onTime") is False]
     if late:
         assumptions.append(

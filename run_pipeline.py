@@ -296,6 +296,84 @@ def _where_it_breaks(
     return "\n\n".join(paragraphs)
 
 
+def _calibration_section(calib: dict[str, Any]) -> str:
+    """Render the 'Calibration & discovered failure modes' Markdown section.
+
+    ``calib`` is the output of :func:`nexdash.evaluate.calibration_report`
+    (``{"calibration": {...}, "failure_modes": [...]}``). Fails soft to a short
+    note if the structure is empty (tiny test set).
+    """
+    cal = (calib or {}).get("calibration", {})
+    pockets = (calib or {}).get("failure_modes", [])
+    levels = cal.get("levels", [])
+    if not levels:
+        return "_Calibration audit unavailable (held-out set too small)._"
+
+    lines = [
+        f"Split-conformal prediction-interval coverage, calibrated on "
+        f"{cal.get('n_cal', 0):,} held-out rows and audited on a disjoint "
+        f"{cal.get('n_eval', 0):,} rows. **PASS** = the nominal level falls inside "
+        f"the bootstrap CI of realized coverage; **FAIL** = the band is "
+        f"mis-calibrated (the honest signal). Expected Calibration Error: "
+        f"**{_fmt(cal.get('ece'), 4)}**.",
+        "",
+        "| Nominal | Empirical | Width (kWh) | Coverage 95% CI | Status |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for r in levels:
+        lines.append(
+            f"| {r['nominal'] * 100:.0f}% | {r['empirical'] * 100:.1f}% "
+            f"| {_fmt(r['width_kwh'], 2)} "
+            f"| [{r['ci_low'] * 100:.1f}%, {r['ci_high'] * 100:.1f}%] | {r['status']} |"
+        )
+
+    slices = cal.get("slices", {})
+    if slices:
+        lines.append("")
+        lines.append(
+            "Per-gradient-regime 90% coverage (Mondrian / group-conditional bands — "
+            "steep regimes honestly get their own width):"
+        )
+        lines.append("")
+        lines.append("| Regime | Empirical | Width (kWh) | n | Note |")
+        lines.append("| --- | --- | --- | --- | --- |")
+        for name, s in slices.items():
+            note = "indicative (sparse)" if s.get("indicative") else ""
+            lines.append(
+                f"| {name} | {s['empirical'] * 100:.1f}% | {_fmt(s['width_kwh'], 2)} "
+                f"| {s['n_eval']} | {note} |"
+            )
+
+    lines.append("")
+    lines.append(
+        "**Auto-discovered failure modes.** A shallow decision tree on the held-out "
+        "absolute error searches the feature space for the worst error pockets the "
+        "hand-picked slices above never enumerated. Each is gated by a support floor "
+        "(n >= 30) and a bootstrapped lift CI, so only statistically-real pockets are "
+        "reported (not 3-row flukes)."
+    )
+    lines.append("")
+    if pockets:
+        lines.append("| Discovered condition | n | Pocket MAE | Lift vs global | Lift 95% CI |")
+        lines.append("| --- | --- | --- | --- | --- |")
+        for p in pockets:
+            lines.append(
+                f"| `{p['conditions']}` | {p['n']} | {_fmt(p['mae'], 2)} kWh "
+                f"| {p['lift']}x | [{p['lift_ci_low']}, {p['lift_ci_high']}] |"
+            )
+    else:
+        lines.append("_No pocket cleared the support + lift bars — error is evenly spread._")
+
+    lines.append("")
+    lines.append(
+        "_Honest scope: coverage is measured against the **synthetic held-out "
+        "labels** (our own noisy physics), i.e. coverage-of-physics, not "
+        "coverage-of-reality — the same circular-evaluation caveat as the headline "
+        "metrics. A FAIL or a high-lift pocket is disclosed, never hidden._"
+    )
+    return "\n".join(lines)
+
+
 def _build_report(
     df: pd.DataFrame,
     df_train: pd.DataFrame,
@@ -305,6 +383,7 @@ def _build_report(
     failure: dict[str, Any],
     figure_paths: list[str],
     model_version: str = "unknown",
+    calibration: dict[str, Any] | None = None,
 ) -> str:
     """Assemble the full Markdown evaluation report from real computed numbers."""
     now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -411,11 +490,15 @@ become large relative ones.
 
 {_slice_table(failure.get("payload", {}), "Payload bin")}
 
-## 5. Diagnostic figures
+## 5. Calibration & discovered failure modes
+
+{_calibration_section(calibration)}
+
+## 6. Diagnostic figures
 
 {_figure_links(figure_paths)}
 
-## 6. Where it breaks, and why
+## 7. Where it breaks, and why
 
 {_where_it_breaks(failure, headline_mape)}
 """
@@ -459,6 +542,7 @@ def run() -> dict[str, Any]:
     print("[4/5] Evaluating on held-out test set ...")
     held_out = evaluate.evaluate(model, df_test)
     failure = evaluate.failure_mode_report(model, df_test)
+    calibration = evaluate.calibration_report(model, df_test)
     figure_paths = evaluate.make_plots(model, df_test)
     print(
         f"      MAE={held_out.get('mae_kwh'):.3f} kWh, "
@@ -488,6 +572,7 @@ def run() -> dict[str, Any]:
         failure=failure,
         figure_paths=figure_paths,
         model_version=model_version,
+        calibration=calibration,
     )
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     REPORT_PATH.write_text(report_md, encoding="utf-8")

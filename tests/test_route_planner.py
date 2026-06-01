@@ -417,3 +417,43 @@ def test_summary_carries_machine_readable_assumptions():
     blob = " ".join(assumptions).lower()
     assert "eu 561" in blob and "taper" in blob
     assert any("payload decays" in a.lower() for a in assumptions)
+
+
+# --------------------------------------------------------------------------- #
+# Physics cross-check: out-of-envelope terrain must be flagged, not trusted
+# --------------------------------------------------------------------------- #
+def test_out_of_envelope_grade_is_flagged_low_confidence(monkeypatch):
+    """A sustained steep/cold grade must trip the planner's physics cross-check.
+
+    WHY (the dangerous direction): the data-driven model under-predicts energy on
+    terrain outside its training envelope (a sustained 6% grade never occurs in
+    the gradient-capped training data). Trusting that optimistic number would
+    delay a charge and risk stranding the truck. The planner must mirror
+    range.check_reachability: when physics exceeds the model beyond the divergence
+    band, use the conservative value AND surface a LOW CONFIDENCE assumption.
+    A normal flat route must NOT be flagged (no false alarms).
+    """
+    monkeypatch.setattr(
+        route_planner.geodata, "enrich_route",
+        lambda geometry, departure_iso=None: _fake_enrichment(
+            gradient_pct=6.0, n_segments=6, dist_km_each=25.0, temp=-15.0, wind=9.0
+        ),
+    )
+    steep = route_planner.plan_route(
+        distance_km=150.0, duration_s=150.0 / 70.0 * 3600.0, start_soc=100.0,
+        min_soc=10.0, payload_kg=22000.0, temperature_c=-15.0,
+        geometry=GEOMETRY, model_path=DEFAULT_MODEL_PATH,
+    )
+    assert any("low confidence" in a.lower() for a in steep["summary"]["assumptions"]), \
+        steep["summary"]["assumptions"]
+
+    monkeypatch.setattr(
+        route_planner.geodata, "enrich_route",
+        lambda geometry, departure_iso=None: _fake_enrichment(gradient_pct=0.0, n_segments=6),
+    )
+    flat = route_planner.plan_route(
+        distance_km=150.0, duration_s=150.0 / 70.0 * 3600.0, start_soc=100.0,
+        min_soc=10.0, payload_kg=11000.0, temperature_c=15.0,
+        geometry=GEOMETRY, model_path=DEFAULT_MODEL_PATH,
+    )
+    assert not any("low confidence" in a.lower() for a in flat["summary"]["assumptions"])
