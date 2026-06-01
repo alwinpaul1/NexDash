@@ -24,11 +24,13 @@ from .config import DEFAULT_MODEL_PATH, TRUCK
 from .model import EnergyModel, predict_energy
 from .physics import segment_energy_kwh
 
-#: Fallback error band (kWh) used only when the trained artifact's held-out MAE
-#: cannot be read (e.g. no model on disk). The live confidence note prefers the
-#: model's *actual* held-out MAE — see :func:`_held_out_mae_kwh` — so the quoted
-#: band reflects real measured error instead of an optimistic guess.
-TYPICAL_MODEL_MAE_KWH: float = 3.0
+#: Coarse CONSERVATIVE fallback error band (kWh), used only when the trained
+#: artifact's held-out MAE cannot be read (e.g. a degenerate/missing metric). The
+#: live confidence note prefers the model's *actual* held-out MAE — see
+#: :func:`_held_out_mae_kwh`. Pinned at/above the trained model's measured held-out
+#: MAE (~6 kWh) so the fallback never UNDER-states error (the over-confident
+#: direction); it is a deliberately rough default, not a measured value.
+TYPICAL_MODEL_MAE_KWH: float = 6.0
 
 
 @lru_cache(maxsize=8)
@@ -109,6 +111,14 @@ def check_reachability(
     # bad sensor reading or an LLM-supplied out-of-range value.
     soc_pct = min(100.0, max(0.0, float(soc_pct)))
     reserve_pct = min(100.0, max(0.0, float(reserve_pct)))
+
+    # A moving segment needs a positive speed. Reject it early with a clear message
+    # so this path fails consistently with the physics layer (segment_energy_kwh
+    # also rejects speed<=0) instead of crashing deep inside it — and so the model's
+    # optimistic speed=0 extrapolation is never quietly used. A non-positive speed is
+    # invalid input, NOT "unreachable" (a false NO-GO would be its own dishonest verdict).
+    if speed_kph <= 0:
+        raise ValueError(f"speed_kph must be > 0 for a moving segment; got {speed_kph}")
 
     # Energy demand predicted by the trained model from raw features.
     features = {

@@ -62,6 +62,12 @@ def conformal_halfwidth(cal_abs_residuals: Sequence[float], level: float) -> flo
     r = r[np.isfinite(r)]
     if r.size == 0:
         return float("inf")  # no calibration data -> uninformative (covers all)
+    if math.ceil((r.size + 1) * level) > r.size:
+        # No finite-sample conformal quantile exists at this (n, level): the required
+        # rank ceil((n+1)*level) exceeds n, so no band can guarantee >= level. The
+        # honest answer is an uninformative (+inf) band, NOT the max residual — which
+        # would silently under-cover (e.g. n=10 @ 0.95 covers only n/(n+1) ~ 91%).
+        return float("inf")
     q = _finite_sample_quantile(r.size, level)
     return float(np.quantile(r, q, method="higher"))
 
@@ -114,16 +120,20 @@ def calibrate_and_audit(
     set each band's half-width — and a disjoint *evaluation* half, on which the
     realized coverage is measured. For each nominal ``level`` we report empirical
     coverage, mean interval width (sharpness), a bootstrap CI on the coverage, and
-    a PASS/FAIL status (FAIL when the nominal level sits outside the CI, i.e. the
-    band is mis-calibrated). ``ece`` is the mean ``|empirical - nominal|`` across
-    levels.
+    a one-sided PASS / FAIL / CONSERVATIVE status (FAIL only when realized coverage
+    is significantly BELOW nominal — the over-confident direction). This is a
+    single-fold indicator: realized coverage fluctuates around nominal, so an
+    isolated FAIL at small n can be sampling noise (~5-10% of honest folds) — read
+    it as a flag to investigate, not proof of mis-calibration. ``ece`` is the mean
+    ``|empirical - nominal|`` across levels.
 
     When ``groups`` is given (one label per row, e.g. a gradient regime), a
     **Mondrian / group-conditional** audit at ``mondrian_level`` computes a
-    *separate* half-width per group from that group's own calibration residuals —
-    so cold/steep regimes honestly get wider bands — and reports per-group
-    realized coverage. Groups with too few calibration rows fall back to the
-    global half-width and are flagged ``indicative``.
+    *separate* half-width per group from that group's own calibration residuals,
+    so a well-supported regime gets its own (often wider) band. The rare steep
+    regimes usually have too few calibration rows, so they fall back to the global
+    half-width and are flagged ``indicative`` — they are reported, NOT actually
+    re-widened (honest about what the sparse tail can support).
 
     All inputs are arrays; this module is decoupled from the model. Deterministic.
     """

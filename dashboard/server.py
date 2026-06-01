@@ -60,14 +60,14 @@ class RoutePlanRequest(BaseModel):
         default_factory=list,
         description="Ordered [{lat,lng,label?}] origin + destinations.",
     )
-    distanceKm: float = Field(..., description="Total route distance (km).")
-    durationS: float = Field(..., description="Total driving time (seconds).")
-    startSoc: float = Field(100.0, description="Starting state of charge (%).")
-    minSoc: float = Field(15.0, description="SOC floor never to dip below (%).")
-    payloadKg: float = Field(0.0, description="Cargo payload (kg).")
-    reservePct: float = Field(10.0, description="Safety-reserve buffer above min SOC (%).")
-    maxChargeKw: float = Field(400.0, description="Max charging power (kW); eActros 600 CCS ~400 kW.")
-    chargeTargetSoc: float = Field(80.0, description="SOC (%) to recharge to at on-route stops.")
+    distanceKm: float = Field(..., ge=0, description="Total route distance (km).")
+    durationS: float = Field(..., ge=0, description="Total driving time (seconds).")
+    startSoc: float = Field(100.0, ge=0, le=100, description="Starting state of charge (%).")
+    minSoc: float = Field(15.0, ge=0, le=100, description="SOC floor never to dip below (%).")
+    payloadKg: float = Field(0.0, ge=0, description="Cargo payload (kg).")
+    reservePct: float = Field(10.0, ge=0, le=100, description="Safety-reserve buffer above min SOC (%).")
+    maxChargeKw: float = Field(400.0, gt=0, description="Max charging power (kW); eActros 600 CCS ~400 kW.")
+    chargeTargetSoc: float = Field(80.0, ge=0, le=100, description="SOC (%) to recharge to at on-route stops.")
     departure: Optional[str] = Field(None, description="ISO local departure datetime.")
     temperatureC: float = Field(15.0, description="Ambient temperature (deg C).")
     geometry: Optional[list[list[float]]] = Field(

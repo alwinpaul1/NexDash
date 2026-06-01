@@ -681,7 +681,12 @@ function localFallback({ planner, geometry, distanceKm, durationS }) {
         dailyMaxH: 9,
         weeklyH: round2(drivingH),
         weeklyMaxH: 56,
-        eu561ok: drivingH <= 9,
+        days: 1,
+        perDay: [{ day: 1, dateLabel: null, drivingH: round2(drivingH), breaks: 0 }],
+        // The offline fallback can't split days or insert 11 h rests, so it does
+        // NOT emit a confident EU 561 verdict (null -> the badge is hidden); only
+        // the backend's day-split machine can judge compliance for a long trip.
+        eu561ok: null,
       },
       assumptions: [
         "Client-side fallback estimate: the backend SOC simulator was unreachable, so this uses a constant-consumption linear model with no per-segment terrain, no charging insertion, and approximate per-stop arrivals. Start the backend (python dashboard/server.py) for the full physics-model plan.",

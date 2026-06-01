@@ -116,8 +116,11 @@ export default function ElevationProfile({ profile = [], chargingStops = [] }) {
           terrain
         </span>
         <h3 className="font-headline font-semibold text-lg text-on-surface">Elevation Profile</h3>
-        <span className="text-[11px] text-on-surface-variant ml-auto">
-          {Math.round(minElev)}–{Math.round(maxElev)} m
+        <span
+          className="text-[11px] text-on-surface-variant ml-auto"
+          title="Terrain elevation range along the route (metres above sea level), the chart's vertical scale — not a distance."
+        >
+          Elev {Math.round(minElev)}–{Math.round(maxElev)} m
         </span>
       </div>
       <div className="relative">

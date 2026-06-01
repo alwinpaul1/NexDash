@@ -76,14 +76,19 @@ def predict_energy(
         JSON-serializable dict with the predicted energy (kWh) and the echoed
         input features.
     """
-    return tools.predict_energy_tool(
-        distance_km=distance_km,
-        payload_t=payload_t,
-        speed_kph=speed_kph,
-        gradient_pct=gradient_pct,
-        temperature_c=temperature_c,
-        wind_mps=wind_mps,
-    )
+    try:
+        return tools.predict_energy_tool(
+            distance_km=distance_km,
+            payload_t=payload_t,
+            speed_kph=speed_kph,
+            gradient_pct=gradient_pct,
+            temperature_c=temperature_c,
+            wind_mps=wind_mps,
+        )
+    except Exception as exc:  # noqa: BLE001 - MCP boundary: an out-of-range arg must
+        # return a structured error to the client, not crash the tool call (mirrors
+        # the in-process agent._run_tool contract).
+        return {"error": f"{type(exc).__name__}: {exc}"}
 
 
 @mcp.tool()
@@ -119,16 +124,21 @@ def check_reachability(
         usable energy after reserve, margin, remaining SOC/range estimates, and
         a confidence note referencing the model's error band.
     """
-    return tools.check_reach_tool(
-        soc_pct=soc_pct,
-        distance_km=distance_km,
-        payload_t=payload_t,
-        speed_kph=speed_kph,
-        gradient_pct=gradient_pct,
-        temperature_c=temperature_c,
-        wind_mps=wind_mps,
-        reserve_pct=reserve_pct,
-    )
+    try:
+        return tools.check_reach_tool(
+            soc_pct=soc_pct,
+            distance_km=distance_km,
+            payload_t=payload_t,
+            speed_kph=speed_kph,
+            gradient_pct=gradient_pct,
+            temperature_c=temperature_c,
+            wind_mps=wind_mps,
+            reserve_pct=reserve_pct,
+        )
+    except Exception as exc:  # noqa: BLE001 - MCP boundary: e.g. speed<=0 now raises a
+        # clear ValueError in check_reachability; return it as a structured error
+        # rather than letting it crash the MCP tool call.
+        return {"error": f"{type(exc).__name__}: {exc}"}
 
 
 if __name__ == "__main__":

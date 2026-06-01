@@ -6,10 +6,12 @@ truck-routing API), a start/min state of charge, payload and ambient
 temperature, it walks the route in fixed-distance chunks and uses the trained
 :func:`nexdash.model.predict_energy` model to estimate per-chunk energy draw.
 SOC is accumulated against the eActros 600's ~600 kWh battery; whenever the
-projected SOC would fall below the operator's ``min_soc`` floor, a charging
-stop is inserted (recharge to ~95% on a ~350 kW MCS charger). EU 561 driving
-rules are layered on top (max 4.5 h driving before a 45 min break; 9 h daily
-driving limit). The result mirrors the ``PlanResult`` shape the frontend
+projected SOC would fall below the operator's ``min_soc`` floor, an *adaptive*
+DC fast-charge stop is inserted on a ~400 kW CCS charger -- topping up only as
+high as the rest of the route needs (see ``_adaptive_target_soc``). EU 561
+driving rules are layered on top (a 45 min break after 4.5 h driving and an 11 h
+daily rest once a day hits the 9 h driving cap, splitting long routes across
+calendar days). The result mirrors the ``PlanResult`` shape the frontend
 expects (minus ``geometry``, which the frontend owns).
 
 Geometry-enriched mode
@@ -42,24 +44,36 @@ Honest approximations
   adds drag and a following wind relieves it. The model is trained on the same
   signed convention (see ``data_gen``). Without geometry a mild constant 3 m/s
   headwind is assumed throughout.
-* **Constant average speed.** A single average speed is derived from
-  ``distance_km / duration_h`` and applied to every chunk. Stop-and-go,
-  motorway vs. urban mix, and traffic variation within the route are not
-  modelled at the chunk level.
-* **Constant payload.** ``payload_t`` is held constant for the whole trip even
-  though multi-drop routes shed cargo at each stop. This is conservative
-  (over-estimates energy on later legs).
-* **Charging model.** Inserted stops are DC fast-charge to a configurable target
-  (default ~80%), at a rated ~400 kW CCS (the eActros 600's current real capability;
-  MCS 1 MW is not yet shipping). Charge *time* follows a power-vs-SOC **taper**
-  (full power to ~80% SOC, derating into the tail; see ``_charge_minutes``), so the
-  slow ``80->100%`` region is no longer under-counted. Energy is priced at a flat
+* **Per-segment speed (geometry mode).** Speed is redistributed across segments
+  by gradient -- slower on sustained climbs, capped on descents -- then anchored
+  so the total drive time still equals the routing engine's measured duration
+  (see ``_segment_speed_shape``). The absolute per-segment speeds are a gradient
+  heuristic, not measured traffic/road-class speeds; the engine's true
+  per-segment travel time is not supplied to the model. In the flat fallback a
+  single ``distance_km / duration_h`` average is applied to every chunk.
+* **Payload decay.** With >=2 waypoints carrying ``dropWeightKg`` the truck
+  lightens at each stop: ``payload_t`` steps down at the stop's distance (see
+  ``_payload_t_at``) so later legs cost less energy. The leg INTO a stop still
+  carries the full pre-drop weight (conservative). Without per-stop drop weights
+  (or on a single-leg route) payload is held constant for the whole trip --
+  conservative (over-estimates energy on later legs).
+* **Charging model.** Inserted stops are DC fast-charge at a rated ~400 kW CCS
+  (the eActros 600's current real capability; MCS 1 MW is not yet shipping).
+  Charge *time* follows a power-vs-SOC **taper** (full power to ~80% SOC,
+  derating into the tail; see ``_charge_minutes``), so the slow ``80->100%``
+  region is not under-counted. The recharge target is **adaptive** (see
+  ``_adaptive_target_soc``): a stop tops up only as high as the rest of the route
+  needs (arriving at the reserve floor), capped at 100% and reaching into the
+  slow tail only when that avoids a second stop; ``charge_target_soc`` is the
+  soft ceiling for intermediate stops, not a hard cap. Energy is priced at a flat
   0.45 EUR/kWh; tariffs vary, so charge cost is indicative, not contractual.
-* **Driver hours (EU 561).** Only the 4.5 h continuous-driving / 45 min break
-  rule is simulated. The ``driver.dailyH`` and ``driver.weeklyH`` fields are the
-  single trip's total driving time (no calendar day/week split and no 11 h daily
-  rest are modelled), so for a trip longer than one shift they read the same
-  value; ``eu561ok`` conservatively flags any total over the 9 h daily cap.
+* **Driver hours (EU 561).** A 45 min break is inserted after 4.5 h continuous
+  driving, and an 11 h daily rest once a calendar day reaches the 9 h daily
+  driving cap -- so a long route is split across days (``driver.perDay`` carries
+  the per-shift breakdown, ``driver.dailyH`` is the heaviest single day and
+  ``driver.weeklyH`` the heaviest 7-day driving window against 56 h). The reduced (9 h) daily
+  rest, the extended 10 h driving day, multi-manning, and any duty already worked
+  this week are not modelled; the week is assumed fresh at departure.
 * **Linear SOC within a chunk.** The SOC profile interpolates linearly across
   each chunk; the model only predicts the chunk endpoints.
 
@@ -118,6 +132,31 @@ EU561_MAX_DRIVE_BEFORE_BREAK_MIN: float = 4.5 * 60.0  # 4h30 continuous driving
 EU561_BREAK_MIN: float = 45.0                          # mandatory break length
 EU561_DAILY_MAX_DRIVE_H: float = 9.0                   # standard daily driving
 EU561_WEEKLY_MAX_DRIVE_H: float = 56.0                 # max weekly driving
+#: Daily rest inserted once the daily driving cap is hit. Regular EU 561 daily
+#: rest is 11 h; the 9 h reduced-rest option (max 3x/week) and the 10 h extended
+#: daily-driving option (max 2x/week) are not modelled — 11 h / 9 h-cap is the
+#: conservative, always-legal choice (it inserts rest at least as early).
+EU561_DAILY_REST_H: float = 11.0
+
+# --- Per-segment speed shaping (geometry mode only) ------------------------- #
+#: A loaded truck loses speed on sustained climbs and is speed-governed (barely
+#: faster) on descents. These shape each segment's speed RELATIVE to the route
+#: average; the shaped speeds are then re-anchored so the total drive time still
+#: equals the routing engine's measured duration — speed is redistributed across
+#: segments, never added or removed in total. Absolute values are a gradient
+#: heuristic, not measured traffic/road-class speeds.
+SPEED_GRAD_K_UP: float = 0.06        # fractional slowdown per +1% of climb
+SPEED_GRAD_K_DOWN: float = 0.015     # fractional speed-up per 1% of descent
+SPEED_DESC_CAP_FRAC: float = 1.05    # descents at most 5% faster (governed)
+#: Energy-model speed clamp, bounded to the model's ACTUAL training envelope
+#: (data_gen samples speed in [30, 85]). Feeding speeds outside it makes the GBM
+#: extrapolate flat and under-predict energy — the optimistic / strand direction.
+SEG_SPEED_MIN_KPH: float = 30.0
+SEG_SPEED_MAX_KPH: float = 85.0
+
+#: Safety headroom (SOC %) added to an adaptive charge target so the linear-SOC
+#: interpolation + rounding never lands the truck a hair below the floor.
+CHARGE_HEADROOM_PCT: float = 2.0
 
 
 def _charge_power_kw(soc_pct: float, rated_kw: float) -> float:
@@ -164,6 +203,52 @@ def _charge_minutes(
         minutes += (kwh_per_pct * s) / power * 60.0
         soc += s
     return minutes
+
+
+def _segment_speed_shape(gradient_pct: float) -> float:
+    """Unitless speed factor vs the route average for a segment's gradient.
+
+    ``<1`` on climbs (a loaded truck loses speed on sustained grades), slightly
+    ``>1`` on descents but capped (trucks are speed-governed, not free-rolling),
+    ``1`` on the flat. Monotone in gradient, so a steeper climb is always slower.
+    """
+    if gradient_pct > 0:
+        return 1.0 / (1.0 + SPEED_GRAD_K_UP * gradient_pct)
+    if gradient_pct < 0:
+        return min(SPEED_DESC_CAP_FRAC, 1.0 + SPEED_GRAD_K_DOWN * (-gradient_pct))
+    return 1.0
+
+
+def _adaptive_target_soc(
+    remaining_energy_kwh: float,
+    arrive_soc: float,
+    battery_kwh: float,
+    *,
+    charge_floor: float,
+    soft_ceiling_soc: float,
+    uncertainty_kwh: float = 0.0,
+    headroom: float = CHARGE_HEADROOM_PCT,
+) -> float:
+    """Lowest depart SOC that secures the rest of the route, capped at 100%.
+
+    If the remaining route is reachable from this one charge, top up only as high
+    as needed to arrive at ``charge_floor`` — often well below the soft ceiling
+    (saving the slow 80->100% tail), or, when it removes a second stop, dipping
+    INTO the tail on demand. If a single charge cannot finish the route, top to
+    the soft ceiling and let the on-demand trigger insert another stop later.
+
+    ``uncertainty_kwh`` is a forecast-error cushion (the caller passes
+    ``mae_band * sqrt(n_remaining_chunks)`` — the sqrt-of-n scaling for roughly
+    independent per-chunk errors) added to the energy still owed, so the target
+    absorbs sub-divergence-band model optimism instead of arriving exactly at the
+    floor on the model's own (possibly optimistic) number. Deterministic.
+    """
+    if battery_kwh <= 0:
+        return min(100.0, max(soft_ceiling_soc, arrive_soc))
+    drop_to_dest_pct = ((remaining_energy_kwh + max(0.0, uncertainty_kwh)) / battery_kwh) * 100.0
+    need_depart = charge_floor + drop_to_dest_pct + headroom
+    depart = need_depart if need_depart <= 100.0 else max(soft_ceiling_soc, charge_floor)
+    return min(100.0, max(depart, arrive_soc + 0.5))
 
 
 def _parse_departure(departure: Optional[str]) -> datetime:
@@ -301,10 +386,18 @@ def plan_route(
     """
     battery_kwh = TRUCK.battery_kwh
     payload_t = max(0.0, payload_kg) / 1000.0
+    # Clamp SOC inputs to physical bounds (mirrors range.check_reachability), so a
+    # stray start_soc>100 or negative min_soc cannot render SOC>100%/<0% or silently
+    # defeat the charge trigger (the dangerous optimistic direction).
+    start_soc = min(100.0, max(0.0, float(start_soc)))
+    min_soc = min(100.0, max(0.0, float(min_soc)))
+    reserve_pct = max(0.0, min(100.0, float(reserve_pct)))
 
     distance_km = max(0.0, float(distance_km))
     duration_h = max(0.0, float(duration_s)) / 3600.0
-    # Average speed across the whole route (flat approximation). Guard /0.
+    # Average speed across the whole route (flat approximation). Guard /0; a missing
+    # routing duration falls back to 70 km/h but is disclosed in `assumptions`.
+    _duration_missing = duration_h <= 0.0 and distance_km > 0.0
     avg_speed_kph = (distance_km / duration_h) if duration_h > 0 else 70.0
     avg_speed_kph = max(20.0, min(95.0, avg_speed_kph))
 
@@ -328,6 +421,16 @@ def plan_route(
     total_charge_min = 0.0
     total_unload_min = 0.0
     n_breaks = 0
+
+    # EU 561 multi-day accounting: a calendar "day" of driving caps at 9 h, after
+    # which an 11 h daily rest is inserted and the day resets; weekly driving
+    # accrues toward 56 h. per_day records each shift for the UI breakdown.
+    day_drive_min = 0.0
+    week_drive_min = 0.0
+    day_index = 0
+    day_breaks = 0
+    total_daily_rest_min = 0.0
+    per_day: list[dict[str, Any]] = []
 
     # Per-destination legs (for per-stop SOC/ETA, payload decay, deliver-by).
     starting_payload_t = payload_t
@@ -386,6 +489,28 @@ def plan_route(
 
     chunk_payloads = [_payload_t_at(c0) for c0 in chunk_start_km]
 
+    # Per-segment speed (geometry mode): redistribute the route-average speed by
+    # gradient — slower on climbs, capped on descents — then ANCHOR so the total
+    # drive time still equals the routing engine's measured duration (speed moves
+    # between segments, the total is never changed). Energy uses the clamped speed
+    # (the model's training domain); drive time uses the UNCLAMPED anchored speed
+    # so the ETA stays exact. Flat-fallback mode has no per-segment gradient, so
+    # every chunk keeps the single average exactly as before.
+    if enrichment and len(chunks) > 1 and avg_speed_kph > 0:
+        _shapes = [_segment_speed_shape(c[1]) for c in chunks]
+        _dists = [c[0] for c in chunks]
+        _tot_d = sum(_dists)
+        _weighted = sum(d / s for d, s in zip(_dists, _shapes) if s > 0)
+        _base_kph = avg_speed_kph * (_weighted / _tot_d) if _tot_d > 0 else avg_speed_kph
+        drive_speeds = [max(1e-6, _base_kph * s) for s in _shapes]  # unclamped -> exact ETA
+        chunk_speeds = [min(SEG_SPEED_MAX_KPH, max(SEG_SPEED_MIN_KPH, v)) for v in drive_speeds]
+    else:
+        # ETA uses the true route average; the ENERGY input is clamped to the
+        # model's training envelope so a high average speed is not extrapolated.
+        drive_speeds = [avg_speed_kph] * len(chunks)
+        _energy_spd = min(SEG_SPEED_MAX_KPH, max(SEG_SPEED_MIN_KPH, avg_speed_kph))
+        chunk_speeds = [_energy_spd] * len(chunks)
+
     # Predict energy for every chunk up front (model-driven; the wind magnitude is
     # used directly as the headwind component, see module docstring). Doing this
     # before the walk lets the charging check look AHEAD at the energy still owed to
@@ -402,11 +527,13 @@ def plan_route(
     mae_band = _held_out_mae_kwh(str(model_path))
     chunk_energies: list[float] = []
     n_low_confidence = 0
+    sum_model_kwh = 0.0
+    sum_physics_kwh = 0.0
     for i, (chunk_km, chunk_grad, chunk_temp, chunk_wind) in enumerate(chunks):
         feats = {
             "distance_km": chunk_km,
             "payload_t": chunk_payloads[i],
-            "speed_kph": avg_speed_kph,
+            "speed_kph": chunk_speeds[i],
             "gradient_pct": chunk_grad,
             "temperature_c": chunk_temp,
             "wind_mps": chunk_wind,
@@ -416,13 +543,15 @@ def plan_route(
             segment_energy_kwh(
                 distance_km=chunk_km,
                 payload_t=chunk_payloads[i],
-                speed_kph=avg_speed_kph,
+                speed_kph=drive_speeds[i],  # TRUE (unclamped) speed: cross-check at real-speed physics
                 gradient_pct=chunk_grad,
                 temperature_c=chunk_temp,
                 wind_mps=chunk_wind,
                 truck=TRUCK,
             )
         )
+        sum_model_kwh += model_kwh
+        sum_physics_kwh += physics_kwh
         diverges = (physics_kwh - model_kwh) > max(3.0 * mae_band, 0.15 * abs(physics_kwh))
         if diverges:
             n_low_confidence += 1
@@ -432,7 +561,7 @@ def plan_route(
 
     for i, (chunk_km, chunk_grad, chunk_temp, chunk_wind) in enumerate(chunks):
         chunk_energy = chunk_energies[i]
-        chunk_drive_min = (chunk_km / avg_speed_kph) * 60.0
+        chunk_drive_min = (chunk_km / drive_speeds[i]) * 60.0
         chunk_soc_drop = (chunk_energy / battery_kwh) * 100.0
         projected_soc = soc - chunk_soc_drop
 
@@ -453,7 +582,25 @@ def plan_route(
             if seg_open:
                 _close_drive_segment()
             arrive_soc = soc
-            depart_soc = charge_target_soc
+            # Adaptive target: charge only as high as the rest of the route needs
+            # (arriving at the destination at the reserve floor), capped at 100% —
+            # dipping into the slow 80->100% tail only when it secures the trip in
+            # one stop, otherwise topping to the soft ceiling and charging again
+            # later. `charge_target_soc` becomes that soft ceiling, not a hard cap.
+            # Forecast-uncertainty cushion: the adaptive target follows the model's
+            # own energy number, which can be optimistic within the divergence band.
+            # Add mae_band * sqrt(n_remaining_chunks) (sqrt-of-n for roughly
+            # independent per-chunk errors) so the depart SOC absorbs that drift
+            # rather than arriving exactly at the floor on an optimistic estimate.
+            n_remaining = max(1, len(chunk_energies) - i)
+            depart_soc = _adaptive_target_soc(
+                remaining_energy_kwh,
+                arrive_soc=arrive_soc,
+                battery_kwh=battery_kwh,
+                charge_floor=charge_floor,
+                soft_ceiling_soc=charge_target_soc,
+                uncertainty_kwh=mae_band * math.sqrt(n_remaining),
+            )
             kwh_added = max(0.0, (depart_soc - arrive_soc) / 100.0 * battery_kwh)
             charge_kw = max_charge_kw if max_charge_kw and max_charge_kw > 0 else CHARGER_KW
             # Taper-aware charge time: the 80->target tail charges slower than a
@@ -491,6 +638,7 @@ def plan_route(
                 {
                     "index": len(charging_stops),
                     "name": station["name"],
+                    "distKm": round(cum_km, 1),  # route distance to the stop (elevation-chart marker)
                     "lat": lat,
                     "lng": lng,
                     "arriveSoc": round(arrive_soc, 1),
@@ -500,16 +648,67 @@ def plan_route(
                     "durationMin": round(charge_min),
                 }
             )
-            # A charge also counts as a rest, satisfying the 561 break clock.
+            # Charging dwell time (credited against the 45-min EU 561 break clock
+            # only if the dwell is itself >= 45 min — guarded below).
             total_charge_min += charge_min
             clock = ch_end
             soc = depart_soc
-            drive_since_break_min = 0.0
+            # Record the charge as an INSTANTANEOUS SOC jump at this distance, so the
+            # SOC-coloured route shows the battery rising AT the charger — not
+            # gradually over the chunk driven away from it. Without these two points
+            # the profile interpolates linearly from the pre-charge low to the
+            # post-charge high across the next chunk, which reads as the truck
+            # gaining charge while it drives.
+            soc_profile.append({"distKm": round(cum_km, 1), "soc": round(arrive_soc, 2)})
+            soc_profile.append({"distKm": round(cum_km, 1), "soc": round(depart_soc, 2)})
+            # A charge satisfies the EU 561 45-min break ONLY if its dwell is itself
+            # >= 45 min; a short adaptive top-up must NOT reset the continuous-driving
+            # clock, else a ~4-min splash would suppress a legally-owed break and
+            # under-state the ETA.
+            if charge_min >= EU561_BREAK_MIN:
+                drive_since_break_min = 0.0
             # Reopen a fresh drive segment after the charge.
             seg_open = True
             seg_soc_start = soc
             seg_start_clock = clock
             projected_soc = soc - chunk_soc_drop
+
+        # --- EU 561 daily driving cap: insert an 11 h overnight rest. ---
+        # Checked before the 4.5 h break so the daily limit takes priority; an
+        # 11 h rest also satisfies the 45 min break, splitting a long route across
+        # calendar days so no single day exceeds the 9 h driving limit.
+        if day_drive_min + chunk_drive_min > EU561_DAILY_MAX_DRIVE_H * 60.0:
+            if seg_open:
+                _close_drive_segment()
+            per_day.append(
+                {
+                    "day": day_index + 1,
+                    "dateLabel": clock.strftime("%a %d %b"),
+                    "drivingH": round(day_drive_min / 60.0, 2),
+                    "breaks": day_breaks,
+                }
+            )
+            rest_start = clock
+            rest_end = rest_start + timedelta(hours=EU561_DAILY_REST_H)
+            segments.append(
+                {
+                    "type": "daily_rest",
+                    "startTime": _hhmm(rest_start),
+                    "endTime": _hhmm(rest_end),
+                    "durationMin": round(EU561_DAILY_REST_H * 60.0),
+                    "label": "Daily Rest (11h)",
+                    "dateLabel": rest_start.strftime("%a %d %b"),
+                }
+            )
+            total_daily_rest_min += EU561_DAILY_REST_H * 60.0
+            clock = rest_end
+            day_drive_min = 0.0
+            drive_since_break_min = 0.0  # the 11 h rest also clears the break clock
+            day_breaks = 0
+            day_index += 1
+            seg_open = True
+            seg_soc_start = soc
+            seg_start_clock = clock
 
         # --- EU 561 break check: 4.5h continuous driving cap. ---
         if drive_since_break_min + chunk_drive_min > EU561_MAX_DRIVE_BEFORE_BREAK_MIN:
@@ -528,6 +727,7 @@ def plan_route(
             )
             total_break_min += EU561_BREAK_MIN
             n_breaks += 1
+            day_breaks += 1
             clock = br_end
             drive_since_break_min = 0.0
             seg_open = True
@@ -545,6 +745,8 @@ def plan_route(
         seg_drive_min += chunk_drive_min
         drive_since_break_min += chunk_drive_min
         total_drive_min += chunk_drive_min
+        day_drive_min += chunk_drive_min
+        week_drive_min += chunk_drive_min
 
         soc_profile.append({"distKm": round(cum_km, 1), "soc": round(soc, 2)})
 
@@ -603,19 +805,45 @@ def plan_route(
     if seg_open:
         _close_drive_segment()
 
+    # Flush the final (partial) day into the per-day breakdown.
+    per_day.append(
+        {
+            "day": day_index + 1,
+            "dateLabel": clock.strftime("%a %d %b"),
+            "drivingH": round(day_drive_min / 60.0, 2),
+            "breaks": day_breaks,
+        }
+    )
+
     # --- Summary aggregation. ---
     arrival_dt = clock
     driving_h = total_drive_min / 60.0
     charging_min_total = total_charge_min
-    total_min = total_drive_min + total_break_min + total_charge_min + total_unload_min
+    total_min = (
+        total_drive_min + total_break_min + total_charge_min
+        + total_unload_min + total_daily_rest_min
+    )
     total_h = total_min / 60.0
 
     kwh_per_100 = (total_energy_kwh / distance_km * 100.0) if distance_km > 0 else 0.0
     charging_cost = sum(s["costEur"] for s in charging_stops)
 
+    # EU 561 compliance is now judged on the REAL day/week split: the machine
+    # inserts an 11 h rest whenever a day would exceed 9 h driving, so the
+    # heaviest single day is <= 9 h on a legal plan (a long multi-day trip is
+    # Compliant, not the false "Violation" the single-shift model used to flag);
+    # the weekly cap is checked against true accrued driving.
+    max_day_drive_h = max((d["drivingH"] for d in per_day), default=driving_h)
+    # weeklyH is the heaviest 7-CONSECUTIVE-DAY driving window, not the whole-trip
+    # total: EU 561's 56 h is a weekly (rolling) cap, so a multi-week haul must not
+    # be falsely flagged. Assumes a fresh week at departure (documented).
+    _per_day_h = [d["drivingH"] for d in per_day]
+    week_drive_h = max(
+        (sum(_per_day_h[i : i + 7]) for i in range(len(_per_day_h))), default=driving_h
+    )
     eu561ok = (
-        driving_h <= EU561_DAILY_MAX_DRIVE_H
-        and driving_h <= EU561_WEEKLY_MAX_DRIVE_H
+        max_day_drive_h <= EU561_DAILY_MAX_DRIVE_H + 1e-6
+        and week_drive_h <= EU561_WEEKLY_MAX_DRIVE_H + 1e-6
     )
 
     elevation_profile = enrichment["elevationProfile"] if enrichment else []
@@ -648,13 +876,28 @@ def plan_route(
     if not enrichment:
         assumptions.append("Flat-route fallback: gradient assumed 0 (no per-segment terrain).")
     assumptions.append(
-        f"Charge time uses a power-vs-SOC taper to a {round(charge_target_soc)}% target "
-        f"at ~{round(max_charge_kw or CHARGER_KW)} kW CCS; the 80->100% tail is slower."
+        f"Charge stops top up adaptively — only as high as the rest of the route needs "
+        f"(arriving at your {round(reserve_pct)}% reserve), capped at 100%. Charge time follows "
+        f"a power-vs-SOC taper, so a stop dips into the slow 80->100% tail only when that secures "
+        f"the trip in one stop; otherwise it caps near {round(charge_target_soc)}% at "
+        f"~{round(max_charge_kw or CHARGER_KW)} kW CCS and charges again later. The target follows "
+        f"the model's own energy forecast, so it inherits that forecast's risk (the physics "
+        f"cross-check and min-SOC floor bound it)."
     )
-    assumptions.append("Single average speed applied to every segment.")
+    if enrichment:
+        assumptions.append(
+            "Per-segment speed varies with gradient (slower on climbs, capped on descents), "
+            "re-anchored so the total ETA still matches the routing engine; the absolute "
+            "per-segment speeds are a gradient heuristic, not measured traffic or road-class speeds."
+        )
+    else:
+        assumptions.append("Single average speed applied to every segment (flat fallback).")
     assumptions.append(
-        "EU 561: only the 4.5 h / 45 min break is modelled — single-shift, no 11 h daily "
-        "rest or day/week split. drivingH/dailyH/weeklyH are the trip total."
+        "Driver hours follow EU 561: a 45-minute break after 4.5 hours of driving, and an "
+        "11-hour daily rest once the 9-hour daily driving limit is reached — so a long route is "
+        "split across calendar days and arrival times include the overnight rests. Weekly driving "
+        "is capped at 56 hours assuming a fresh week at departure; reduced/compensated rest, "
+        "the extended 10-hour day, multi-manning, and hours already worked this week are not modelled."
     )
     if n_low_confidence > 0:
         assumptions.append(
@@ -663,6 +906,21 @@ def plan_route(
             "the model's training envelope). The conservative (higher) physics value "
             "was used for the SOC/charging decision on those segments — treat the plan "
             "as indicative there and keep a wide reserve."
+        )
+    # Route-level cumulative cross-check: a consistent-sign under-prediction can stay
+    # under every per-chunk band yet sum to a dangerous optimism, so we also compare
+    # the whole-route model vs physics totals (band proportional to the route).
+    if (sum_physics_kwh - sum_model_kwh) > max(3.0 * mae_band, 0.10 * sum_physics_kwh):
+        assumptions.append(
+            "ROUTE-LEVEL LOW CONFIDENCE: across the whole route the data-driven model "
+            "predicts materially less energy than the first-principles physics estimate "
+            "— a consistent optimistic drift the per-segment check can miss. Treat the "
+            "SOC and charging plan as indicative and keep a wide reserve."
+        )
+    if _duration_missing:
+        assumptions.append(
+            "Routing duration was missing or zero; ETA, breaks and driver-hours are "
+            "derived from an assumed 70 km/h average, not a measured route time."
         )
     late = [s for s in stops_out if s.get("onTime") is False]
     if late:
@@ -695,12 +953,16 @@ def plan_route(
             "drivingH": round(driving_h, 2),
             "breaks": n_breaks,
             "totalH": round(total_h, 2),
-            # Single-shift model: dailyH/weeklyH are the trip total (no day/week
-            # split or 11 h daily rest is simulated — see `assumptions`).
-            "dailyH": round(driving_h, 2),
+            # dailyH is the HEAVIEST single calendar day's driving (the value the
+            # 9 h daily-limit bar reflects), not the trip total; weeklyH is the
+            # heaviest 7-day driving window. Long trips are split by inserted 11 h rests,
+            # so perDay carries the per-shift breakdown the UI renders.
+            "dailyH": round(max_day_drive_h, 2),
             "dailyMaxH": EU561_DAILY_MAX_DRIVE_H,
-            "weeklyH": round(driving_h, 2),
+            "weeklyH": round(week_drive_h, 2),
             "weeklyMaxH": EU561_WEEKLY_MAX_DRIVE_H,
+            "days": len(per_day),
+            "perDay": per_day,
             "eu561ok": bool(eu561ok),
         },
         "assumptions": assumptions,

@@ -158,18 +158,25 @@ export default function RouteResults({ plan }) {
       <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm p-5 space-y-3">
         <div className="flex items-center justify-between">
           <h3 className="text-[11px] uppercase tracking-wide font-medium text-on-surface-variant">Driver Hours</h3>
-          <span
-            className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${
-              d.eu561ok
-                ? "bg-primary/10 text-primary ring-1 ring-primary/25"
-                : "bg-error/10 text-error ring-1 ring-error/25"
-            }`}
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: "13px" }}>
-              {d.eu561ok ? "verified" : "warning"}
+          {d.eu561ok == null ? (
+            <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-surface text-on-surface-variant ring-1 ring-outline-variant/50">
+              <span className="material-symbols-outlined" style={{ fontSize: "13px" }}>help</span>
+              EU 561 — not evaluated offline
             </span>
-            EU 561 {d.eu561ok ? "Compliant" : "Violation"}
-          </span>
+          ) : (
+            <span
+              className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${
+                d.eu561ok
+                  ? "bg-primary/10 text-primary ring-1 ring-primary/25"
+                  : "bg-error/10 text-error ring-1 ring-error/25"
+              }`}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: "13px" }}>
+                {d.eu561ok ? "verified" : "warning"}
+              </span>
+              EU 561 {d.eu561ok ? "Compliant" : "Violation"}
+            </span>
+          )}
         </div>
 
         <div className="grid grid-cols-3 gap-2 text-center">
@@ -203,6 +210,25 @@ export default function RouteResults({ plan }) {
             <ProgressBar value={d.weeklyH ?? 0} max={d.weeklyMaxH ?? 56} tint="#006d32" />
           </div>
         </div>
+
+        {d.days > 1 && Array.isArray(d.perDay) && (
+          <div className="pt-2 border-t border-outline-variant/30">
+            <p className="text-[10px] uppercase tracking-wide text-on-surface-variant mb-1">
+              {d.days}-day schedule · 11 h rest between days
+            </p>
+            <div className="space-y-0.5">
+              {d.perDay.map((p, i) => (
+                <div key={i} className="flex justify-between text-[11px] text-on-surface-variant tabular-nums">
+                  <span>Day {p.day}{p.dateLabel ? ` · ${p.dateLabel}` : ""}</span>
+                  <span>
+                    {fmtH(p.drivingH)}h driving
+                    {p.breaks ? ` · ${p.breaks} break${p.breaks > 1 ? "s" : ""}` : ""}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Trip timeline */}

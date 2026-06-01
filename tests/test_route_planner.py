@@ -457,3 +457,141 @@ def test_out_of_envelope_grade_is_flagged_low_confidence(monkeypatch):
         geometry=GEOMETRY, model_path=DEFAULT_MODEL_PATH,
     )
     assert not any("low confidence" in a.lower() for a in flat["summary"]["assumptions"])
+
+
+# --------------------------------------------------------------------------- #
+# Per-segment speed (Tier B): gradient-shaped, ETA-anchored
+# --------------------------------------------------------------------------- #
+def _mixed_enrichment(legs, *, temp=15.0, wind=3.0):
+    """enrich_route() stub with a per-segment gradient: ``legs`` = [(km, grad), ...]."""
+    segments, profile = [], [{"distKm": 0.0, "elevM": 0.0}]
+    cum = elev = climb = 0.0
+    for dist_km, grad in legs:
+        cum += dist_km
+        d_elev = grad / 100.0 * dist_km * 1000.0
+        elev += d_elev
+        if d_elev > 0:
+            climb += d_elev
+        segments.append(
+            {"distKm": dist_km, "cumKm": round(cum, 3), "gradientPct": grad,
+             "elevM": round(elev, 1), "temperatureC": temp, "windMps": wind}
+        )
+        profile.append({"distKm": round(cum, 3), "elevM": round(elev, 1)})
+    return {
+        "segments": segments, "elevationProfile": profile,
+        "conditions": {"avgTempC": temp, "avgWindMps": wind, "windDirDeg": 0.0,
+                       "maxGradientPct": max(g for _, g in legs), "climbM": round(climb, 1),
+                       "descentM": 0.0},
+    }
+
+
+def test_segment_speed_shape_is_monotone_in_gradient():
+    """WHY: a loaded truck must be slower the steeper the climb, and never freewheel
+    fast downhill (governed). A non-monotone shape would mis-rank where speed — and
+    thus the speed-sensitive aero/rolling energy — concentrates along the route."""
+    assert route_planner._segment_speed_shape(0.0) == 1.0
+    assert route_planner._segment_speed_shape(2.0) > route_planner._segment_speed_shape(6.0)
+    assert route_planner._segment_speed_shape(6.0) < 1.0
+    assert 1.0 < route_planner._segment_speed_shape(-6.0) <= route_planner.SPEED_DESC_CAP_FRAC
+
+
+def test_per_segment_speed_preserves_total_eta(monkeypatch):
+    """WHY: per-segment speed only REDISTRIBUTES time across segments; it must not
+    change the total drive time the routing engine measured. The anchor guarantees
+    Σ leg_dist/leg_speed == the route-average duration — a broken anchor would
+    silently move the ETA the dispatcher was promised."""
+    legs = [(50.0, 6.0), (50.0, -4.0), (50.0, 0.0), (50.0, 5.0), (50.0, -2.0), (50.0, 0.0)]
+    monkeypatch.setattr(route_planner.geodata, "enrich_route",
+                        lambda geometry, departure_iso=None: _mixed_enrichment(legs))
+    dur_s = 300.0 / 65.0 * 3600.0
+    result = route_planner.plan_route(
+        distance_km=300.0, duration_s=dur_s, start_soc=100.0, min_soc=0.0,
+        payload_kg=10000.0, geometry=GEOMETRY, model_path=DEFAULT_MODEL_PATH,
+    )
+    assert result["summary"]["drivingTimeH"] == pytest.approx(dur_s / 3600.0, rel=0.02)
+
+
+def test_adaptive_target_soc_tops_up_only_as_much_as_needed():
+    """WHY: the old gate always charged to a fixed 80%. Adaptive charging must (a) top
+    up only as high as the rest of the route needs when that's below the soft ceiling
+    (saving the slow tail), (b) dip INTO the tail (>ceiling) when one charge can still
+    finish the trip, and (c) cap at the soft ceiling when more than one charge is
+    needed — never exceeding 100% nor charging below the arrival SOC."""
+    batt = 600.0
+    short = route_planner._adaptive_target_soc(
+        remaining_energy_kwh=0.12 * batt, arrive_soc=15.0, battery_kwh=batt,
+        charge_floor=20.0, soft_ceiling_soc=80.0)
+    assert 20.0 < short < 80.0                       # (a) only as high as needed
+    tail = route_planner._adaptive_target_soc(
+        remaining_energy_kwh=0.70 * batt, arrive_soc=15.0, battery_kwh=batt,
+        charge_floor=20.0, soft_ceiling_soc=80.0)
+    assert 80.0 < tail <= 100.0                      # (b) into the tail on demand
+    multi = route_planner._adaptive_target_soc(
+        remaining_energy_kwh=1.50 * batt, arrive_soc=15.0, battery_kwh=batt,
+        charge_floor=20.0, soft_ceiling_soc=80.0)
+    assert multi == pytest.approx(80.0)              # (c) capped, finish later
+    assert short >= 15.5 and tail >= 15.5            # never below arrival
+
+
+def test_eu561_splits_long_trip_with_daily_rest(monkeypatch):
+    """WHY: a >9 h-driving trip is LEGAL once split with an 11 h daily rest — the old
+    single-shift model falsely flagged it a 561 'Violation' and reported dailyH as the
+    whole-trip total. The machine must insert the rest, keep each day <=9 h driving,
+    report Compliant, and give a per-day breakdown that sums back to total driving."""
+    monkeypatch.setattr(
+        route_planner.geodata, "enrich_route",
+        lambda geometry, departure_iso=None:
+        _fake_enrichment(gradient_pct=0.0, n_segments=18, dist_km_each=50.0),
+    )
+    # 900 km at 70 km/h ~ 12.9 h of driving -> must split across 2 calendar days.
+    result = route_planner.plan_route(
+        distance_km=900.0, duration_s=900.0 / 70.0 * 3600.0, start_soc=100.0,
+        min_soc=10.0, payload_kg=10000.0, departure="2026-05-30T06:00",
+        geometry=GEOMETRY, model_path=DEFAULT_MODEL_PATH,
+    )
+    rests = [s for s in result["segments"] if s.get("type") == "daily_rest"]
+    assert rests, "a >9 h trip must insert at least one 11 h daily rest"
+    assert all(s["durationMin"] == round(route_planner.EU561_DAILY_REST_H * 60.0) for s in rests)
+    d = result["summary"]["driver"]
+    assert d["dailyH"] <= route_planner.EU561_DAILY_MAX_DRIVE_H + 1e-6   # heaviest day <= 9 h
+    assert d["eu561ok"] is True                                         # legal once split
+    assert d["days"] == len(d["perDay"]) >= 2
+    assert sum(p["drivingH"] for p in d["perDay"]) == pytest.approx(d["drivingH"], abs=0.05)
+
+
+def test_assumptions_do_not_leak_internal_field_names(monkeypatch):
+    """WHY: user-facing caveats must read as plain language. The old EU 561 string
+    leaked the raw JSON field names 'drivingH/dailyH/weeklyH' into the dispatcher's
+    Modelling-assumptions panel — this guards against that regressing."""
+    monkeypatch.setattr(route_planner.geodata, "enrich_route",
+                        lambda geometry, departure_iso=None: _fake_enrichment(gradient_pct=2.0))
+    result = route_planner.plan_route(
+        distance_km=200.0, duration_s=200.0 / 70.0 * 3600.0, start_soc=90.0,
+        min_soc=10.0, payload_kg=10000.0, geometry=GEOMETRY, model_path=DEFAULT_MODEL_PATH,
+    )
+    blob = " ".join(result["summary"]["assumptions"])
+    for leaked in ("drivingH", "dailyH", "weeklyH"):
+        assert leaked not in blob, f"internal field name {leaked!r} leaked into assumptions"
+
+
+def test_check_reachability_rejects_nonpositive_speed():
+    """#18 (fail-loud): a moving segment needs speed>0. check_reachability must raise
+    a clear ValueError on speed<=0 — not crash deep in the physics layer and not let
+    predict_energy silently extrapolate a stationary segment."""
+    from nexdash.range import check_reachability
+
+    with pytest.raises(ValueError, match="speed_kph"):
+        check_reachability(
+            soc_pct=80, distance_km=50, payload_t=10, speed_kph=0,
+            gradient_pct=0, temperature_c=20,
+        )
+
+
+def test_adaptive_target_soc_uncertainty_cushion_raises_depart():
+    """#13: the forecast-uncertainty cushion must push the depart SOC strictly above
+    the no-cushion target, so a charge does not aim to arrive exactly at the floor on
+    the model's own (possibly optimistic) energy number."""
+    kw = dict(arrive_soc=15.0, battery_kwh=600.0, charge_floor=20.0, soft_ceiling_soc=80.0)
+    base = route_planner._adaptive_target_soc(0.30 * 600.0, **kw)
+    cushioned = route_planner._adaptive_target_soc(0.30 * 600.0, uncertainty_kwh=30.0, **kw)
+    assert cushioned > base
