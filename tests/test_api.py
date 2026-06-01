@@ -170,3 +170,38 @@ def test_predict_without_model_returns_503(client_without_model):
     assert payload.get("error") == "model_unavailable"
     # The operator must be told how to fix it.
     assert "run_pipeline.py" in payload.get("detail", "")
+
+
+def test_optimize_reorders_and_reports_savings(client_with_model):
+    """POST /api/optimize returns a permutation of the input stops + the saving vs
+    the typed order (never worse). This is what the "Optimize Route" button calls to
+    actually REORDER the stops before routing them."""
+    body = {
+        "origin": {"lat": 52.52, "lng": 13.40, "label": "Berlin"},
+        "destinations": [
+            {"lat": 53.55, "lng": 10.00, "label": "Hamburg"},
+            {"lat": 51.34, "lng": 12.37, "label": "Leipzig"},
+            {"lat": 51.05, "lng": 13.74, "label": "Dresden"},
+        ],
+        "startSoc": 95, "minSoc": 15, "payloadKg": 12000,
+    }
+    resp = client_with_model.post("/api/optimize", json=body)
+    assert resp.status_code == 200
+    out = resp.json()
+    assert sorted(out["optimizedOrder"]) == [0, 1, 2]   # a permutation of the 3 stops
+    assert out["savingsEur"] >= -1e-6                    # never worse than the typed order
+    assert "assumptions" in out
+
+
+def test_optimize_without_model_returns_503(client_without_model):
+    """Optimisation costs orders via plan_route, so it needs the model -> 503 when absent."""
+    resp = client_without_model.post(
+        "/api/optimize",
+        json={
+            "origin": {"lat": 52.5, "lng": 13.4},
+            "destinations": [{"lat": 53.5, "lng": 10.0}, {"lat": 51.3, "lng": 12.4}],
+            "startSoc": 90, "minSoc": 15, "payloadKg": 8000,
+        },
+    )
+    assert resp.status_code == 503
+    assert resp.json().get("error") == "model_unavailable"

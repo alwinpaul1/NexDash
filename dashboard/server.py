@@ -32,6 +32,7 @@ from nexdash import range as range_module
 from nexdash import route_planner as route_planner_module
 from nexdash import model_info as model_info_module
 from nexdash import agent as agent_module
+from nexdash import optimizer as optimizer_module
 
 logger = logging.getLogger("nexdash.api")
 
@@ -239,6 +240,56 @@ async def route_plan(req: RoutePlanRequest):
         )
 
     return result
+
+
+class OptimizeRequest(BaseModel):
+    """Inputs for cost-minimising stop-order optimisation (the VRP layer)."""
+
+    origin: dict[str, Any] = Field(..., description="{lat, lng, label?} trip start.")
+    destinations: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="[{lat, lng, label?, dropWeightKg?}] stops to reorder.",
+    )
+    startSoc: float = Field(100.0, ge=0, le=100, description="Starting SOC (%).")
+    minSoc: float = Field(15.0, ge=0, le=100, description="SOC floor (%).")
+    payloadKg: float = Field(0.0, ge=0, description="Cargo payload (kg).")
+    temperatureC: float = Field(15.0, description="Ambient temperature (deg C).")
+    returnToOrigin: bool = Field(False, description="Return to the depot after the last stop.")
+
+
+@app.post("/api/optimize")
+async def optimize(req: OptimizeRequest):
+    """Pick the cheapest visiting ORDER for the stops (energy + driver-time cost).
+
+    Pure-offline VRP (Held-Karp / 2-opt, payload-aware) — needs no routing key.
+    Returns ``optimizedOrder`` (input indices, best-first) + ``savingsEur`` vs the
+    given order; the caller then re-routes that order through the real engine for
+    the road-accurate plan. The cost uses ``plan_route``, so it needs the trained
+    model and responds ``503`` when it is unavailable.
+    """
+    if not getattr(app.state, "model_available", False):
+        return JSONResponse(
+            status_code=503,
+            content={"error": "model_unavailable", "detail": _MODEL_MISSING_MESSAGE},
+        )
+
+    try:
+        return optimizer_module.optimize_route(
+            req.origin,
+            req.destinations,
+            start_soc=req.startSoc,
+            min_soc=req.minSoc,
+            payload_kg=req.payloadKg,
+            temperature_c=req.temperatureC,
+            return_to_origin=req.returnToOrigin,
+            model_path=DEFAULT_MODEL_PATH,
+        )
+    except Exception as exc:  # pragma: no cover - surfaces unexpected failures
+        logger.exception("Optimize failed: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content={"error": "optimize_failed", "detail": str(exc)},
+        )
 
 
 @app.get("/api/model-info")
