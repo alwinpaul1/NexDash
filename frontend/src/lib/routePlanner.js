@@ -64,6 +64,34 @@ async function tomtomFetch(url, { timeoutMs = 8000, retries = 2 } = {}) {
 // explicit override via VITE_API_BASE if the API runs elsewhere.
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 
+// Flat fallback charging tariff (mirrors backend PRICE_EUR_PER_KWH). A real
+// per-station tariff overrides this when the station data carries one — see
+// extractPricePerKwh. The categorySearch endpoint we use today returns no price,
+// so this flat rate applies until a tariff feed (TomTom EV Search API
+// `include=tariffs`, or another structured source) is wired.
+const FLAT_PRICE_EUR_PER_KWH = 0.45;
+
+// Pull a per-kWh ENERGY tariff (EUR) from a TomTom station result IF present.
+// categorySearch carries none -> null (flat fallback). TomTom's EV Search API
+// (`include=tariffs`) returns references.tariffs[] with elements[].priceComponents[]
+// of type ENERGY|TIME|FLAT; we take the ENERGY price. Defensive: any shape miss -> null.
+function extractPricePerKwh(r) {
+  try {
+    const tariffs = r?.references?.tariffs || r?.chargingPark?.tariffs;
+    if (!Array.isArray(tariffs) || tariffs.length === 0) return null;
+    for (const t of tariffs) {
+      const comps = Array.isArray(t?.elements)
+        ? t.elements.flatMap((e) => e?.priceComponents || [])
+        : t?.priceComponents || [];
+      const energy = comps.find((c) => c?.type === "ENERGY" && Number.isFinite(c?.price));
+      if (energy) return energy.price;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 const BATTERY_KWH = 600; // eActros 600 usable battery (matches backend TRUCK).
 const COUNTRY_SET = "DE,AT,CH,NL,BE,FR,PL,CZ,DK";
 
@@ -481,6 +509,7 @@ async function enrichStations(stops, radiusKm = 30) {
         return {
           ...s,
           name: r.poi?.name || s.name,
+          pricePerKwh: extractPricePerKwh(r),
           lat: r.position?.lat ?? s.lat,
           lng: r.position?.lon ?? s.lng,
           address: r.address?.municipality || r.address?.freeformAddress || s.address,
@@ -497,14 +526,59 @@ async function enrichStations(stops, radiusKm = 30) {
   );
 }
 
+// Cost-minimising stop ORDER from the backend VRP (offline; no routing key).
+// Returns {optimizedOrder, savingsEur, savingsPct, solver} or null (keep the typed
+// order) on any failure or fewer than 2 valid destinations. The order is chosen on
+// a great-circle proxy; the final plan is then routed on the REAL road (see below).
+async function optimizeOrder(planner) {
+  const dests = (planner?.destinations || []).filter((d) => d?.lat != null && d?.lng != null);
+  if (dests.length < 2 || planner?.origin?.lat == null) return null;
+  try {
+    const res = await fetch(`${API_BASE}/api/optimize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        origin: { lat: planner.origin.lat, lng: planner.origin.lng, label: planner.origin.label || "" },
+        destinations: dests.map((d) => ({
+          lat: d.lat, lng: d.lng, label: d.label || "", dropWeightKg: d.dropWeightKg || 0,
+        })),
+        startSoc: planner.startSoc ?? 100,
+        minSoc: planner.minSoc ?? 15,
+        payloadKg: planner.payloadKg ?? 0,
+        temperatureC: planner.temperatureC ?? 15,
+      }),
+    });
+    if (!res.ok) return null;
+    const d = await res.json();
+    if (!Array.isArray(d?.optimizedOrder)) return null;
+    return { optimizedOrder: d.optimizedOrder, savingsEur: d.savingsEur, savingsPct: d.savingsPct, solver: d.solver };
+  } catch {
+    return null;
+  }
+}
+
 // --------------------------------------------------------------------------- //
 // Public entry point
 // --------------------------------------------------------------------------- //
 
 export async function optimizeRoute(planner) {
-  const waypoints = collectWaypoints(planner);
+  // 0. Optimise the visiting ORDER first via the backend VRP (offline; no routing
+  // key). On failure or <2 stops this is null and the typed order is kept. The
+  // reorder applies to the FILTERED valid destinations (matching collectWaypoints,
+  // which skips null-coord stops), so optimizedOrder indices line up.
+  const opt = await optimizeOrder(planner);
+  let activePlanner = planner;
+  if (opt && Array.isArray(opt.optimizedOrder)) {
+    const validDests = (planner.destinations || []).filter((d) => d?.lat != null && d?.lng != null);
+    const reordered = opt.optimizedOrder.map((i) => validDests[i]).filter(Boolean);
+    if (reordered.length === validDests.length) {
+      activePlanner = { ...planner, destinations: reordered };
+    }
+  }
+  const waypoints = collectWaypoints(activePlanner);
 
-  // 1. Geometry + totals from TomTom (truck). Fall back to straight line.
+  // 1. Geometry + totals from TomTom (truck) for the (optimised) order. Fall back
+  // to straight line.
   let geometry;
   let distanceKm;
   let durationS;
@@ -526,23 +600,53 @@ export async function optimizeRoute(planner) {
 
   // 2. SOC simulation from the backend. Fall back to a local linear drain.
   try {
-    // SOC sim + real charging stations + live traffic incidents — independent
-    // calls, so run them together.
     const [sim, incidents] = await Promise.all([
-      backendPlan({ waypoints, geometry, legTimings, distanceKm, durationS, planner }),
+      backendPlan({ waypoints, geometry, legTimings, distanceKm, durationS, planner: activePlanner }),
       fetchIncidents(geometry),
     ]);
     // Swap simulated hubs for real nearby TomTom charging stations.
     const chargingStops = await enrichStations(sim.chargingStops || [], planner?.maxDetourKm);
-    // Re-label the charge timeline segments to the enriched stations, in order.
+    // B6 — re-cost each stop with the REAL station tariff when the station data
+    // carries one (pricePerKwh from the EV Search API); flat fallback otherwise.
+    for (const e of chargingStops) {
+      const rate = e.pricePerKwh != null ? e.pricePerKwh : FLAT_PRICE_EUR_PER_KWH;
+      if (Number.isFinite(e.kWh)) e.costEur = round2(e.kWh * rate);
+      e.priceSource = e.pricePerKwh != null ? "station" : "flat-fallback";
+    }
+    // Re-label the charge timeline segments to the enriched stations, in order,
+    // carrying the re-costed value through.
     let ci = 0;
     const segments = (sim.segments || []).map((seg) => {
       if (seg.type === "charge" && chargingStops[ci]) {
         const e = chargingStops[ci++];
-        return { ...seg, station: { name: e.name, lat: e.lat, lng: e.lng, address: e.address } };
+        return {
+          ...seg,
+          costEur: e.costEur ?? seg.costEur,
+          station: { name: e.name, lat: e.lat, lng: e.lng, address: e.address },
+        };
       }
       return seg;
     });
+    const summary = { ...(sim.summary || {}) };
+    // Recompute the charging-cost rollup from the per-station re-cost.
+    summary.chargingCostEur = round2(chargingStops.reduce((a, e) => a + (e.costEur || 0), 0));
+    // Surface honest caveats in the existing assumptions block (RouteResults reads it).
+    const assumptions = Array.isArray(summary.assumptions) ? [...summary.assumptions] : [];
+    if (opt) {
+      assumptions.unshift(
+        `Stop order optimised (${opt.solver}): ~€${(opt.savingsEur ?? 0).toFixed(0)} ` +
+          `(${(opt.savingsPct ?? 0).toFixed(0)}%) cheaper than the typed order. The order is ` +
+          `ranked on a great-circle proxy; the plan below is the real TomTom road route + measured speed.`
+      );
+    }
+    if (chargingStops.length && chargingStops.some((e) => e.priceSource === "flat-fallback")) {
+      assumptions.push(
+        `Charging cost uses a flat €${FLAT_PRICE_EUR_PER_KWH}/kWh where the station's tariff is ` +
+          `unavailable (the routing provider's charging data carries no price); a real per-station ` +
+          `tariff is applied wherever a tariff feed provides one.`
+      );
+    }
+    summary.assumptions = assumptions;
     return {
       geometry,
       socProfile: sim.socProfile || [],
@@ -554,11 +658,12 @@ export async function optimizeRoute(planner) {
       // Enriched real-world layers from the backend (Open-Meteo).
       elevationProfile: sim.elevationProfile || [],
       conditions: sim.conditions || {},
-      summary: sim.summary || {},
+      summary,
+      optimization: opt || null,
       traffic: { delayS: trafficDelayS, incidents },
     };
   } catch {
-    return localFallback({ planner, geometry, distanceKm, durationS });
+    return localFallback({ planner: activePlanner, geometry, distanceKm, durationS });
   }
 }
 

@@ -65,8 +65,10 @@ Honest approximations
   ``_adaptive_target_soc``): a stop tops up only as high as the rest of the route
   needs (arriving at the reserve floor), capped at 100% and reaching into the
   slow tail only when that avoids a second stop; ``charge_target_soc`` is the
-  soft ceiling for intermediate stops, not a hard cap. Energy is priced at a flat
-  0.45 EUR/kWh; tariffs vary, so charge cost is indicative, not contractual.
+  soft ceiling for intermediate stops, not a hard cap. Energy is priced here at a
+  flat 0.45 EUR/kWh fallback; when a real per-station tariff feed is available the
+  frontend re-costs each stop at the selected station's actual EUR/kWh, so charge
+  cost is indicative (flat) unless a station tariff is present -- never contractual.
 * **Driver hours (EU 561).** A 45 min break is inserted after 4.5 h continuous
   driving, and an 11 h daily rest once a calendar day reaches the 9 h daily
   driving cap -- so a long route is split across days (``driver.perDay`` carries
