@@ -257,7 +257,7 @@ def test_missing_api_key_raises_explicit_error(monkeypatch):
 def test_strip_reasoning_removes_think_blocks() -> None:
     """<think>...</think> must be stripped from the user-facing reply.
 
-    WHY: MiniMax-M2 emits chain-of-thought in <think> tags; leaking it to the
+    WHY: MiniMax-M3 emits chain-of-thought in <think> tags; leaking it to the
     dispatcher would be noisy and unprofessional. Closed and unclosed (truncated)
     tags must both be removed, and a reply that is ONLY reasoning falls back to
     the raw text rather than going blank.
