@@ -14,6 +14,10 @@
 // best-effort local fallback so the UI still renders something sensible.
 
 const TOMTOM_KEY = import.meta.env.VITE_TOMTOM_API_KEY;
+// Open Charge Map (free; key required) — best-effort per-station tariff from each
+// charger's UsageCost. Coverage is sparse + free-text, so it's a real price where
+// present and an honest flat fallback otherwise (see ocmPricePerKwh / parseUsageCost).
+const OCM_KEY = import.meta.env.VITE_OCM_API_KEY;
 
 // Single source of truth for the routed vehicle, so what TomTom routes matches
 // the eActros 600 the backend simulates (kerb ~18 t + 22 t payload = 40 t GCW,
@@ -85,6 +89,51 @@ function extractPricePerKwh(r) {
         : t?.priceComponents || [];
       const energy = comps.find((c) => c?.type === "ENERGY" && Number.isFinite(c?.price));
       if (energy) return energy.price;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// Parse Open Charge Map's free-text UsageCost into a per-kWh EUR rate, STRICTLY.
+// "Free"/"0"/"0.00" -> 0; "0,39 €/kWh" / "0.39 EUR/kWh" -> 0.39. Anything
+// time/parking/subscription-based (per Tag/day/hour/min, "Parken", "abonnement",
+// "afhankelijk", session/flat fee) -> null, so an unparseable string becomes an
+// honest flat-fallback rather than a MIS-READ price. Bounded to a sane EUR/kWh.
+function parseUsageCost(raw) {
+  if (raw == null) return null;
+  const s = String(raw).trim().toLowerCase();
+  if (s === "") return null;
+  if (/(^|[^0-9])(free|gratis|kostenlos)([^a-z]|$)/.test(s)) return 0;
+  if (/^0([.,]0+)?$/.test(s)) return 0;
+  // Reject non-per-kWh units to avoid mis-reading parking/day/session fees.
+  if (/(tag\b|\/\s*day|\/\s*h\b|hour|stunde|\bmin\b|park|abonnement|afhankelijk|month|monat|session|flat\s*fee)/.test(s)) {
+    return null;
+  }
+  const t = s.replace(",", ".");
+  const m = t.match(/([0-9]+(?:\.[0-9]+)?)\s*(?:eur|€)\s*\/?\s*kwh/) || t.match(/([0-9]+(?:\.[0-9]+)?)\s*\/?\s*kwh/);
+  if (!m) return null;
+  const v = parseFloat(m[1]);
+  return Number.isFinite(v) && v >= 0 && v < 5 ? v : null; // sane EUR/kWh bound
+}
+
+// Best-effort per-station tariff (EUR/kWh) from Open Charge Map near (lat,lng):
+// the nearest station carrying a usable UsageCost, else null (-> flat fallback).
+// Fail-soft on any error/miss; OCM coverage is sparse, so null is the common case.
+async function ocmPricePerKwh(lat, lng) {
+  if (!OCM_KEY || !Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  try {
+    const url =
+      `https://api.openchargemap.io/v3/poi/?output=json&latitude=${lat}&longitude=${lng}` +
+      `&distance=2&distanceunit=KM&maxresults=6&compact=true&verbose=false&key=${OCM_KEY}`;
+    const res = await fetch(url, { headers: { "X-API-Key": OCM_KEY } });
+    if (!res.ok) return null;
+    const pois = await res.json();
+    if (!Array.isArray(pois)) return null;
+    for (const p of pois) {
+      const price = parseUsageCost(p?.UsageCost);
+      if (price != null) return price;
     }
     return null;
   } catch {
@@ -506,12 +555,18 @@ async function enrichStations(stops, radiusKm = 30) {
             ? Math.round((s.kWh / (powerKw * 0.9)) * 60)
             : null;
 
+        const stationLat = r.position?.lat ?? s.lat;
+        const stationLng = r.position?.lon ?? s.lng;
+        // Tariff: prefer a structured TomTom EV-Search tariff; else a best-effort
+        // Open Charge Map per-station UsageCost; null -> flat fallback at re-cost.
+        let pricePerKwh = extractPricePerKwh(r);
+        if (pricePerKwh == null) pricePerKwh = await ocmPricePerKwh(stationLat, stationLng);
         return {
           ...s,
           name: r.poi?.name || s.name,
-          pricePerKwh: extractPricePerKwh(r),
-          lat: r.position?.lat ?? s.lat,
-          lng: r.position?.lon ?? s.lng,
+          pricePerKwh,
+          lat: stationLat,
+          lng: stationLng,
           address: r.address?.municipality || r.address?.freeformAddress || s.address,
           connectors,
           maxPowerKw: powerKw ? Math.round(powerKw) : null,
@@ -641,9 +696,9 @@ export async function optimizeRoute(planner) {
     }
     if (chargingStops.length && chargingStops.some((e) => e.priceSource === "flat-fallback")) {
       assumptions.push(
-        `Charging cost uses a flat €${FLAT_PRICE_EUR_PER_KWH}/kWh where the station's tariff is ` +
-          `unavailable (the routing provider's charging data carries no price); a real per-station ` +
-          `tariff is applied wherever a tariff feed provides one.`
+        `Charging cost uses each station's real tariff (Open Charge Map) where available; ` +
+          `OCM pricing is sparse and free-text, so stops without a usable tariff fall back to a ` +
+          `flat €${FLAT_PRICE_EUR_PER_KWH}/kWh.`
       );
     }
     summary.assumptions = assumptions;
