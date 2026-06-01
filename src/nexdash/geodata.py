@@ -405,8 +405,14 @@ def _num(v):
 # ---------------------------------------------------------------------------
 # Public: enrich_route
 # ---------------------------------------------------------------------------
-def enrich_route(geometry, departure_iso=None) -> dict:
+def enrich_route(geometry, departure_iso=None, leg_timings=None) -> dict:
     """Enrich a road polyline with per-segment physical conditions.
+
+    When ``leg_timings`` (the routing engine's per-leg ``{lengthM, travelTimeS}``)
+    is supplied, each segment is additionally stamped with a ``measuredSpeedKph``
+    — the REAL traffic-aware speed of the leg covering that segment (mapped by
+    cumulative-distance fraction, so it is robust to polyline downsampling). When
+    absent, segments carry no speed field and the planner uses its heuristic.
 
     Returns a dict (all values JSON-serialisable, numeric):
 
@@ -530,6 +536,29 @@ def enrich_route(geometry, departure_iso=None) -> dict:
 
         if not segments:
             return empty
+
+        # Stamp REAL per-segment speed from the routing engine's per-leg travel time
+        # when supplied. Map each segment to its leg by cumulative-distance FRACTION
+        # (robust to the great-circle-vs-road scale gap and to downsampling): a leg's
+        # measured speed = lengthM/1000 / (travelTimeS/3600). Purely additive — when
+        # leg_timings is absent, segments carry no speed field.
+        if leg_timings:
+            total_road_m = sum(max(0.0, float(t.get("lengthM", 0) or 0)) for t in leg_timings)
+            final_cum = float(segments[-1]["cumKm"]) or 0.0
+            if total_road_m > 0 and final_cum > 0:
+                bounds = []  # (cumulative_end_fraction, measured_kph_or_None)
+                acc_m = 0.0
+                for t in leg_timings:
+                    length_m = max(0.0, float(t.get("lengthM", 0) or 0))
+                    travel_s = float(t.get("travelTimeS", 0) or 0)
+                    acc_m += length_m
+                    spd = (length_m / 1000.0) / (travel_s / 3600.0) if travel_s > 0 else None
+                    bounds.append((acc_m / total_road_m, spd))
+                for seg in segments:
+                    frac = float(seg["cumKm"]) / final_cum
+                    spd = next((s for f, s in bounds if frac <= f + 1e-9), bounds[-1][1])
+                    if spd and spd > 0:
+                        seg["measuredSpeedKph"] = round(spd, 2)
 
         avg_temp = temp_acc / dist_acc if dist_acc > 0 else DEFAULT_TEMP_C
         avg_wind = wind_acc / dist_acc if dist_acc > 0 else DEFAULT_WIND_MPS

@@ -345,6 +345,7 @@ def plan_route(
     temperature_c: float = 15.0,
     waypoints: Optional[list[dict[str, Any]]] = None,
     geometry: Optional[list[list[float]]] = None,
+    leg_timings: Optional[list[dict[str, Any]]] = None,
     model_path: Union[str, Path] = DEFAULT_MODEL_PATH,
 ) -> dict[str, Any]:
     """Simulate SOC drain + charging + driver hours over a route.
@@ -469,8 +470,8 @@ def plan_route(
     # Build the list of chunks covering the route. Each chunk carries its own
     # physical conditions: in flat fallback mode these are the constant
     # approximations; in geometry mode they come from the enriched profile.
-    enrichment = _enrich(geometry, departure, distance_km)
-    chunks = _build_chunks(distance_km, enrichment, temperature_c)
+    enrichment = _enrich(geometry, departure, distance_km, leg_timings)
+    chunks, chunk_measured_speeds = _build_chunks(distance_km, enrichment, temperature_c)
 
     # Payload carried during each chunk, accounting for per-stop drops: the truck
     # lightens as it sheds cargo at each destination, so later legs cost less
@@ -496,7 +497,15 @@ def plan_route(
     # (the model's training domain); drive time uses the UNCLAMPED anchored speed
     # so the ETA stays exact. Flat-fallback mode has no per-segment gradient, so
     # every chunk keeps the single average exactly as before.
-    if enrichment and len(chunks) > 1 and avg_speed_kph > 0:
+    if enrichment and chunks and all(m is not None for m in chunk_measured_speeds):
+        # Tier A — REAL per-leg speed measured from the routing engine's travel time
+        # is available for every chunk: use it directly (traffic/road-class aware).
+        # ETA from these speeds already equals the engine's duration (same source),
+        # so no harmonic anchor is needed. Energy still clamps to the training domain.
+        drive_speeds = [float(m) for m in chunk_measured_speeds]
+        chunk_speeds = [min(SEG_SPEED_MAX_KPH, max(SEG_SPEED_MIN_KPH, v)) for v in drive_speeds]
+        _speed_source = "measured"
+    elif enrichment and len(chunks) > 1 and avg_speed_kph > 0:
         _shapes = [_segment_speed_shape(c[1]) for c in chunks]
         _dists = [c[0] for c in chunks]
         _tot_d = sum(_dists)
@@ -504,12 +513,14 @@ def plan_route(
         _base_kph = avg_speed_kph * (_weighted / _tot_d) if _tot_d > 0 else avg_speed_kph
         drive_speeds = [max(1e-6, _base_kph * s) for s in _shapes]  # unclamped -> exact ETA
         chunk_speeds = [min(SEG_SPEED_MAX_KPH, max(SEG_SPEED_MIN_KPH, v)) for v in drive_speeds]
+        _speed_source = "heuristic"
     else:
         # ETA uses the true route average; the ENERGY input is clamped to the
         # model's training envelope so a high average speed is not extrapolated.
         drive_speeds = [avg_speed_kph] * len(chunks)
         _energy_spd = min(SEG_SPEED_MAX_KPH, max(SEG_SPEED_MIN_KPH, avg_speed_kph))
         chunk_speeds = [_energy_spd] * len(chunks)
+        _speed_source = "average"
 
     # Predict energy for every chunk up front (model-driven; the wind magnitude is
     # used directly as the headwind component, see module docstring). Doing this
@@ -884,7 +895,12 @@ def plan_route(
         f"the model's own energy forecast, so it inherits that forecast's risk (the physics "
         f"cross-check and min-SOC floor bound it)."
     )
-    if enrichment:
+    if _speed_source == "measured":
+        assumptions.append(
+            "Per-segment speed is MEASURED from the routing engine's per-leg travel time "
+            "(traffic / road-class aware); within a leg, variation is still distributed by gradient."
+        )
+    elif enrichment:
         assumptions.append(
             "Per-segment speed varies with gradient (slower on climbs, capped on descents), "
             "re-anchored so the total ETA still matches the routing engine; the absolute "
@@ -986,17 +1002,25 @@ def _enrich(
     geometry: Optional[list[list[float]]],
     departure: Optional[str],
     distance_km: float,
+    leg_timings: Optional[list[dict[str, Any]]] = None,
 ) -> Optional[dict[str, Any]]:
     """Enrich ``geometry`` into per-segment conditions, or ``None`` if absent.
 
     Fails soft: if :func:`nexdash.geodata.enrich_route` yields no usable
     segments (empty/garbage geometry, network down) we return ``None`` so the
-    planner uses its flat-route fallback.
+    planner uses its flat-route fallback. When ``leg_timings`` (the routing
+    engine's per-leg travel time) is supplied, it is forwarded so enrich_route can
+    stamp a measured per-segment speed; absent, the call shape is unchanged.
     """
     if not geometry or distance_km <= 0:
         return None
     try:
-        enriched = geodata.enrich_route(geometry, departure_iso=departure)
+        if leg_timings:
+            enriched = geodata.enrich_route(
+                geometry, departure_iso=departure, leg_timings=leg_timings
+            )
+        else:
+            enriched = geodata.enrich_route(geometry, departure_iso=departure)
     except Exception:  # pragma: no cover - geodata is contractually no-raise
         return None
     if not enriched or not enriched.get("segments"):
@@ -1008,10 +1032,13 @@ def _build_chunks(
     distance_km: float,
     enrichment: Optional[dict[str, Any]],
     temperature_c: float,
-) -> list[tuple[float, float, float, float]]:
-    """Build the ordered list of simulation chunks.
+) -> tuple[list[tuple[float, float, float, float]], list[Optional[float]]]:
+    """Build the ordered list of simulation chunks + their measured speeds.
 
-    Each chunk is ``(km, gradient_pct, temperature_c, wind_mps)``.
+    Returns ``(chunks, measured_speeds)``. Each chunk is
+    ``(km, gradient_pct, temperature_c, wind_mps)``; ``measured_speeds[i]`` is the
+    distance-weighted real per-leg speed (km/h) for chunk ``i`` when the routing
+    engine supplied per-leg travel time (Tier A), else ``None`` (heuristic).
 
     * Flat fallback (no enrichment): even ``CHUNK_KM`` slices carrying the
       constant gradient/temperature/wind approximations.
@@ -1023,6 +1050,10 @@ def _build_chunks(
       energy and SOC are accounted against the true route length.
     """
     chunks: list[tuple[float, float, float, float]] = []
+    # Parallel to ``chunks``: the distance-weighted MEASURED speed (km/h) for each
+    # chunk when the routing engine supplied real per-leg travel time (Tier A),
+    # else ``None`` so the caller falls back to the gradient-speed heuristic.
+    measured: list[Optional[float]] = []
 
     if enrichment is None:
         remaining = distance_km
@@ -1030,7 +1061,7 @@ def _build_chunks(
             step = min(CHUNK_KM, remaining)
             chunks.append((step, GRADIENT_PCT, temperature_c, WIND_MPS))
             remaining -= step
-        return chunks
+        return chunks, [None] * len(chunks)
 
     segs = enrichment["segments"]
     sampled_total = sum(max(0.0, float(s.get("distKm", 0.0))) for s in segs)
@@ -1051,14 +1082,18 @@ def _build_chunks(
     win_grad_km = 0.0  # distance-weighted accumulators (value * km)
     win_temp_km = 0.0
     win_wind_km = 0.0
+    win_meas_km = 0.0   # measured-speed * km, over the window portion that HAD a speed
+    win_meas_dist = 0.0
 
     def _flush_window() -> None:
-        nonlocal win_km, win_grad_km, win_temp_km, win_wind_km
+        nonlocal win_km, win_grad_km, win_temp_km, win_wind_km, win_meas_km, win_meas_dist
         if win_km > 1e-6:
             chunks.append(
                 (win_km, win_grad_km / win_km, win_temp_km / win_km, win_wind_km / win_km)
             )
-        win_km = win_grad_km = win_temp_km = win_wind_km = 0.0
+            # Measured speed only if the routing engine timed this window's segments.
+            measured.append(win_meas_km / win_meas_dist if win_meas_dist > 1e-6 else None)
+        win_km = win_grad_km = win_temp_km = win_wind_km = win_meas_km = win_meas_dist = 0.0
 
     for s in segs:
         seg_km = max(0.0, float(s.get("distKm", 0.0))) * scale
@@ -1067,6 +1102,7 @@ def _build_chunks(
         grad = float(s.get("gradientPct", GRADIENT_PCT))
         temp = float(s.get("temperatureC", temperature_c))
         wind = float(s.get("windMps", WIND_MPS))
+        seg_meas = s.get("measuredSpeedKph")  # real per-leg speed, when available
         remaining = seg_km
         while remaining > 1e-6:
             step = min(remaining, CHUNK_KM - win_km)
@@ -1074,6 +1110,9 @@ def _build_chunks(
             win_grad_km += grad * step
             win_temp_km += temp * step
             win_wind_km += wind * step
+            if seg_meas is not None and float(seg_meas) > 0:
+                win_meas_km += float(seg_meas) * step
+                win_meas_dist += step
             remaining -= step
             if win_km >= CHUNK_KM - 1e-9:
                 _flush_window()
@@ -1081,7 +1120,7 @@ def _build_chunks(
 
     if not chunks:  # Degenerate enrichment -> fall back to flat.
         return _build_chunks(distance_km, None, temperature_c)
-    return chunks
+    return chunks, measured
 
 
 def _interp_point(

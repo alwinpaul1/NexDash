@@ -162,14 +162,23 @@ async function tomtomRoute(waypoints) {
   if (!route) throw new Error("no route returned");
 
   const geometry = [];
+  const legTimings = [];
   for (const leg of route.legs || []) {
     for (const p of leg.points || []) {
       geometry.push([p.latitude, p.longitude]);
     }
+    // Per-leg measured timing -> the backend derives a REAL per-segment speed
+    // (traffic/road-class aware) from it instead of the gradient heuristic.
+    const ls = leg.summary || {};
+    legTimings.push({
+      lengthM: ls.lengthInMeters || 0,
+      travelTimeS: ls.travelTimeInSeconds || 0,
+    });
   }
   const summary = route.summary || {};
   return {
     geometry,
+    legTimings,
     distanceKm: (summary.lengthInMeters || 0) / 1000,
     durationS: summary.travelTimeInSeconds || 0,
     // Live-traffic delay baked into travelTime (routeType=fastest + traffic=true
@@ -300,7 +309,7 @@ async function fetchIncidents(geometry) {
 // Backend SOC simulation
 // --------------------------------------------------------------------------- //
 
-async function backendPlan({ waypoints, geometry, distanceKm, durationS, planner }) {
+async function backendPlan({ waypoints, geometry, legTimings, distanceKm, durationS, planner }) {
   const body = {
     // Carry per-stop delivery data so the backend can run the per-leg simulation
     // (payload decay after each drop, unload dwell in the ETA, deliver-by check).
@@ -315,6 +324,8 @@ async function backendPlan({ waypoints, geometry, distanceKm, durationS, planner
     // Full road polyline so the backend can enrich every segment with real
     // elevation / gradient / temperature / wind from Open-Meteo.
     geometry: Array.isArray(geometry) ? geometry : [],
+    // Per-leg measured travel time -> backend derives REAL per-segment speed.
+    legTimings: Array.isArray(legTimings) ? legTimings : [],
     distanceKm,
     durationS,
     startSoc: planner?.startSoc ?? 100,
@@ -498,12 +509,14 @@ export async function optimizeRoute(planner) {
   let distanceKm;
   let durationS;
   let trafficDelayS = 0;
+  let legTimings = [];
   try {
     const r = await tomtomRoute(waypoints);
     geometry = r.geometry;
     distanceKm = r.distanceKm;
     durationS = r.durationS;
     trafficDelayS = r.trafficDelayS || 0;
+    legTimings = r.legTimings || [];
   } catch {
     const fb = straightLineRoute(waypoints);
     geometry = fb.geometry;
@@ -516,7 +529,7 @@ export async function optimizeRoute(planner) {
     // SOC sim + real charging stations + live traffic incidents — independent
     // calls, so run them together.
     const [sim, incidents] = await Promise.all([
-      backendPlan({ waypoints, geometry, distanceKm, durationS, planner }),
+      backendPlan({ waypoints, geometry, legTimings, distanceKm, durationS, planner }),
       fetchIncidents(geometry),
     ]);
     // Swap simulated hubs for real nearby TomTom charging stations.

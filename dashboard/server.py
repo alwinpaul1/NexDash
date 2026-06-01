@@ -79,6 +79,15 @@ class RoutePlanRequest(BaseModel):
             "the flat-route approximation is used."
         ),
     )
+    legTimings: Optional[list[dict[str, Any]]] = Field(
+        None,
+        description=(
+            "Optional per-leg [{lengthM, travelTimeS}] from the routing engine, in "
+            "polyline order. When present the backend derives a REAL measured "
+            "per-segment speed (traffic/road-class aware) instead of the gradient "
+            "heuristic; absent, the heuristic is used."
+        ),
+    )
 
 
 def _load_model_if_present(app: FastAPI) -> None:
@@ -219,6 +228,7 @@ async def route_plan(req: RoutePlanRequest):
             temperature_c=req.temperatureC,
             waypoints=req.waypoints,
             geometry=req.geometry,
+            leg_timings=req.legTimings,
             model_path=DEFAULT_MODEL_PATH,
         )
     except Exception as exc:  # pragma: no cover - surfaces unexpected failures
