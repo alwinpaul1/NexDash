@@ -595,3 +595,26 @@ def test_adaptive_target_soc_uncertainty_cushion_raises_depart():
     base = route_planner._adaptive_target_soc(0.30 * 600.0, **kw)
     cushioned = route_planner._adaptive_target_soc(0.30 * 600.0, uncertainty_kwh=30.0, **kw)
     assert cushioned > base
+
+
+def test_measured_per_leg_speed_is_used_when_available(monkeypatch):
+    """A1(1) 'use real data where available': when the enrichment carries a MEASURED
+    per-leg speed (from the routing engine's travel time), the planner drives on it
+    directly — not the gradient heuristic — and the panel says the speed is measured.
+    Absent that field, the existing tests prove the heuristic path is unchanged."""
+    def _enrich_with_measured(geometry, departure_iso=None, leg_timings=None):
+        enr = _fake_enrichment(gradient_pct=2.0, n_segments=8, dist_km_each=25.0)
+        for s in enr["segments"]:
+            s["measuredSpeedKph"] = 50.0  # real measured leg speed
+        return enr
+
+    monkeypatch.setattr(route_planner.geodata, "enrich_route", _enrich_with_measured)
+    result = route_planner.plan_route(
+        distance_km=200.0, duration_s=200.0 / 70.0 * 3600.0, start_soc=100.0, min_soc=0.0,
+        payload_kg=10000.0, geometry=GEOMETRY, model_path=DEFAULT_MODEL_PATH,
+    )
+    # Driving time reflects the MEASURED 50 km/h (200/50 = 4.0 h), NOT the supplied
+    # 70 km/h route average (~2.86 h) — proving the real per-leg speed drives the sim.
+    assert result["summary"]["drivingTimeH"] == pytest.approx(200.0 / 50.0, rel=0.03)
+    blob = " ".join(result["summary"]["assumptions"]).lower()
+    assert "measured" in blob and "gradient heuristic" not in blob
