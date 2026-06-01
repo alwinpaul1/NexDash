@@ -119,14 +119,16 @@ below constant-speed physics, a gap the steady-state model structurally cannot
 close on a net-flat route.
 
 To make the **displayed** energy headline track field reality, NexDash applies a
-single documented multiplier `config.FIELD_CALIBRATION_FACTOR = 0.85` to
+single documented multiplier `config.FIELD_CALIBRATION_FACTOR = 0.80` to
 `summary.energyKwh` / `summary.kwhPer100` only:
 
-- 708 kWh (steady-state) × 0.85 = **602 kWh = ~101.9 kWh/100 km** — within the
-  cited 40 t field range (**~0.88–1.12 kWh/km**: ADAC 0.88, Daimler 15,000 km tour
-  1.03, Commercial Motor 1.05–1.12), near the ~1.0 centre and the Daimler tour
-  average (1.03). (This worked example is the geometry-enriched, net-downhill run;
-  the flat-fallback variant lands higher, ~114 kWh/100 km after the factor.) [S4][S5]
+- 708 kWh (steady-state) × 0.80 = **~566 kWh = ~95.8 kWh/100 km** — mid the
+  real-world laden band (**~0.96–1.03 kWh/km**: Daimler 15,000 km European tour
+  1.03 at 40 t, Vandijck 0.96, ADAC German-roads 0.88), and right for this **36 t**
+  (sub-40 t) German-autobahn run. 0.80 maps the ~1.265 kWh/km steady-state anchor
+  to ~1.01 kWh/km — the field centre — vs Mercedes' optimistic ~1.19 spec. (This
+  worked example is the geometry-enriched, net-downhill run; the flat-fallback
+  variant lands ~107 kWh/100 km after the factor.) [S4][S5]
 - **It is NOT a physics change.** The locked `Cd / Crr / drivetrain_eff / A`
   anchors and the 1.265 / 1.47 / 1.55 kWh/km steady-state figures above are
   unchanged. The factor only reconciles the *reported* number with field data.
