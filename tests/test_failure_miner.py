@@ -110,3 +110,111 @@ def test_deterministic_under_fixed_seed():
     a = failure_miner.mine_failure_modes(X, abs_err, feature_names=FEATURES, min_support=20, seed=7)
     b = failure_miner.mine_failure_modes(X, abs_err, feature_names=FEATURES, min_support=20, seed=7)
     assert a == b
+
+
+# --- B4: split-sample honest CI (confirm_split) ------------------------------
+#
+# WHY this matters: the single-sample miner reports a within-leaf bootstrap CI
+# that is conditioned on the very split the tree chose to maximise error, so its
+# lower bound is optimistic (selection bias). The cure is to discover pockets on
+# one half and *re-confirm* them on a disjoint half the tree never optimised
+# against. These tests pin the two claims that make the cure trustworthy:
+#   1. On pure noise the honest gate lets NOTHING through (no false discovery).
+#   2. On a real planted signal the honest CONFIRM lower bound still clears 1.0.
+# If either failed, confirm_split would be theatre rather than a real correction.
+
+
+def test_default_is_byte_identical_without_confirm_split():
+    """Regression guard: the new arg must not perturb the default path at all.
+
+    WHY: confirm_split is additive. With no new arg, every shipped report must be
+    byte-identical to the pre-B4 miner — otherwise the 'additive' contract is a
+    lie and existing report fixtures silently drift.
+    """
+    X, abs_err = _synthetic(n=1500, seed=0)
+    abs_err = abs_err.copy()
+    abs_err[(X[:, 3] > 4.0) & (X[:, 1] > 15.0)] += 30.0
+    implicit = failure_miner.mine_failure_modes(
+        X, abs_err, feature_names=FEATURES, min_support=20, seed=7
+    )
+    explicit_off = failure_miner.mine_failure_modes(
+        X, abs_err, feature_names=FEATURES, min_support=20, seed=7, confirm_split=False
+    )
+    assert implicit == explicit_off
+    # And the default record must NOT carry the confirm-only fields.
+    for p in implicit:
+        assert "lift_ci_low_confirm" not in p
+        assert "lift_confirm" not in p
+
+
+def test_null_no_pocket_survives_confirm_gate():
+    """Null world (X random, error independent of X) -> nothing clears CONFIRM.
+
+    WHY: this is the false-discovery test for the honest gate. With error drawn
+    independently of every feature, ANY pocket the tree finds on DISCOVER is a
+    selection artefact; routed through the disjoint CONFIRM half it must collapse
+    toward lift 1.0, so its confirmed lower bound cannot clear min_lift. We assert
+    the gate rejects across many independent null draws (a single seed could get
+    lucky), encoding the actual guarantee: split-sample inference does not
+    manufacture failures from noise.
+    """
+    n_seeds = 40
+    survivors = 0
+    for s in range(n_seeds):
+        # error has NO dependence on X -> any elevated leaf is pure selection bias
+        X, abs_err = _synthetic(n=1200, seed=5000 + s)
+        pockets = failure_miner.mine_failure_modes(
+            X, abs_err, feature_names=FEATURES, min_support=30, seed=5000 + s,
+            confirm_split=True,
+        )
+        if pockets:
+            survivors += 1
+    rate = survivors / n_seeds
+    assert rate < 0.05, f"confirm gate admitted noise pockets on {rate:.0%} of seeds"
+
+
+def test_planted_signal_clears_confirm_lower_bound():
+    """Real signal (error up where gradient>4 AND payload>15) -> confirmed pocket.
+
+    WHY: the gate must reject noise WITHOUT also rejecting truth. Here the error
+    elevation is a genuine feature-conditioned effect present in BOTH halves, so
+    re-evaluating on the held-back CONFIRM rows must still show strong lift, and
+    its honest (selection-corrected) lower bound must clear 1.0 — proving the
+    pocket is statistically real, not a within-leaf optimism artefact.
+    """
+    X, abs_err = _synthetic(n=2400, seed=0)
+    grad, payload = X[:, 3], X[:, 1]
+    planted = (grad > 4.0) & (payload > 15.0)
+    abs_err = abs_err.copy()
+    abs_err[planted] += 30.0  # large, feature-conditioned elevation in both halves
+
+    pockets = failure_miner.mine_failure_modes(
+        X, abs_err, feature_names=FEATURES, min_support=20, seed=0,
+        confirm_split=True,
+    )
+    assert pockets, "confirm_split found no pocket despite a strong planted signal"
+    top = pockets[0]
+    # The surviving pocket must reference both planted dimensions.
+    assert "gradient_pct" in top["conditions"] and "payload_t" in top["conditions"], top["conditions"]
+    # Honest, selection-corrected interval is present and its lower bound is the
+    # binding gate -> it must clear 1.0 (statistically real on unseen rows).
+    assert "lift_ci_low_confirm" in top and "lift_ci_high_confirm" in top
+    assert top["lift_ci_low_confirm"] > 1.0, top
+    assert top["lift_confirm"] > 2.0
+    # Back-compat fields still travel alongside the honest ones.
+    assert top["selection_biased_ci"] is True
+    assert "lift_ci_low" in top
+
+
+def test_confirm_split_is_deterministic():
+    """Seeded split + bootstrap -> identical confirmed pockets across calls."""
+    X, abs_err = _synthetic(n=2400, seed=0)
+    abs_err = abs_err.copy()
+    abs_err[(X[:, 3] > 4.0) & (X[:, 1] > 15.0)] += 30.0
+    a = failure_miner.mine_failure_modes(
+        X, abs_err, feature_names=FEATURES, min_support=20, seed=11, confirm_split=True
+    )
+    b = failure_miner.mine_failure_modes(
+        X, abs_err, feature_names=FEATURES, min_support=20, seed=11, confirm_split=True
+    )
+    assert a == b
