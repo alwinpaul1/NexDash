@@ -104,22 +104,31 @@ function fmtChargeTime(min) {
   return m ? `${h} h ${m} min` : `${h} h`;
 }
 
+// Battery-level → colour, in 5 distinct bands so the route line reads as a
+// high→low SOC gradient (deep-green full, through yellow/amber, to red near empty).
 function socColor(soc) {
-  if (soc >= 50) return "#00d166";
-  if (soc >= 25) return "#f59e0b";
-  return "#ba1a1a";
+  if (soc >= 80) return "#15803d"; // 80-100% — deep green (comfortable)
+  if (soc >= 60) return "#22c55e"; // 60-80%  — green
+  if (soc >= 40) return "#eab308"; // 40-60%  — yellow
+  if (soc >= 20) return "#f59e0b"; // 20-40%  — amber (getting low)
+  return "#ef4444";                // <20%    — red (near reserve)
 }
 
-function pinIcon(kind) {
+function pinIcon(kind, num) {
   const color = kind === "origin" ? "#1ca64c" : "#0059bb";
   // Teardrop location pin: colored drop, white ring. Origin shows a center dot,
   // destinations a small flag glyph inside the ring.
+  // Destinations show their sequence number inside the ring (so Destination 1 vs
+  // 2 are distinguishable on the map, matching the numbered list); origin shows a
+  // center dot. A dest with no number falls back to the flag glyph.
   const center =
     kind === "origin"
       ? `<circle cx="12" cy="12" r="3" fill="${color}"/>`
+      : Number.isFinite(num)
+      ? `<text x="12" y="12" text-anchor="middle" dominant-baseline="central" font-family="Inter,sans-serif" font-size="9" font-weight="700" fill="${color}">${num}</text>`
       : "";
   const flag =
-    kind === "origin"
+    kind === "origin" || Number.isFinite(num)
       ? ""
       : `<span class="material-symbols-outlined" style="position:absolute;left:19px;top:18px;transform:translate(-50%,-50%);font-size:14px;color:${color};">flag</span>`;
   return L.divIcon({
@@ -250,6 +259,11 @@ function buildSocSegments(geometry, socProfile, totalKm) {
 // giving a live sense of direction/progress without cluttering the line.
 // Animated imperatively via requestAnimationFrame (rAF timestamp only — no
 // per-frame React re-render) and torn down cleanly when the route changes.
+// Above this zoom level the moving truck only darts across a small visible area
+// on a loop, which reads as distracting rather than informative — so the runner
+// is hidden when the map is zoomed in past it. Tunable: lower = hide sooner.
+const RUNNER_MAX_ZOOM = 11;
+
 function RouteRunner({ geometry }) {
   const map = useMap();
   useEffect(() => {
@@ -303,6 +317,23 @@ function RouteRunner({ geometry }) {
       }
     }
 
+    // Hide the moving truck once the map is zoomed in past RUNNER_MAX_ZOOM: at
+    // that scale it only darts across a small visible area on a loop, which is
+    // distracting rather than useful. The animation clock keeps running (so the
+    // truck is at the right spot when you zoom back out) — we just hide the
+    // element and pause the clip while zoomed in.
+    const runnerEl = marker.getElement();
+    const syncRunnerZoom = () => {
+      const hide = map.getZoom() >= RUNNER_MAX_ZOOM;
+      if (runnerEl) runnerEl.style.display = hide ? "none" : "";
+      if (video) {
+        if (hide) video.pause();
+        else if (!reduceMotion) video.play().catch(() => {});
+      }
+    };
+    syncRunnerZoom();
+    map.on("zoomend", syncRunnerZoom);
+
     // Slow, smooth lap: scale with route length, clamped to 16-32 s.
     const duration = Math.min(32000, Math.max(16000, total * 45));
 
@@ -333,6 +364,7 @@ function RouteRunner({ geometry }) {
 
     return () => {
       if (raf) cancelAnimationFrame(raf);
+      map.off("zoomend", syncRunnerZoom);
       map.removeLayer(marker);
     };
   }, [map, geometry]);
@@ -524,8 +556,21 @@ export default function RouteMap({ plan, waypoints = [] }) {
     [geometry, plan?.socProfile, plan?.summary?.distanceKm]
   );
 
-  const origin = waypoints[0];
-  const dests = waypoints.slice(1);
+  // Identify origin/destinations by ROLE, not array position: when the user
+  // adds a destination before setting an origin, the destination must NOT be
+  // drawn with the origin pin. Falls back to position-based for any legacy
+  // caller that doesn't tag waypoints with `kind`.
+  const hasKinds = waypoints.some((w) => w?.kind);
+  const origin = hasKinds ? waypoints.find((w) => w.kind === "origin") : waypoints[0];
+  const dests = hasKinds ? waypoints.filter((w) => w.kind === "dest") : waypoints.slice(1);
+  // Number destination pins by the order the route ACTUALLY visits them. With
+  // stop-order optimisation off (default) the plan keeps the typed order, so the
+  // pin number is just the list position; when it's on, `optimizedOrder[k]` is the
+  // typed index visited at position k, so a dest's pin number is its position in
+  // that array. This keeps the pin numbers consistent with the drawn route line.
+  const optOrder = plan?.optimization?.optimizedOrder;
+  const visitNum = (i) =>
+    Array.isArray(optOrder) && optOrder.indexOf(i) >= 0 ? optOrder.indexOf(i) + 1 : i + 1;
   const center = geometry[0] || [51.0, 10.2];
   const stops = (plan?.chargingStops || []).filter(
     (s) => Number.isFinite(s.lat) && Number.isFinite(s.lng)
@@ -641,9 +686,9 @@ export default function RouteMap({ plan, waypoints = [] }) {
         {layers.stops &&
           dests.map((d, i) =>
             Number.isFinite(d.lat) ? (
-              <Marker key={`dest-${i}`} position={[d.lat, d.lng]} icon={pinIcon("dest")} title={`Destination ${i + 1}: ${d.label || ""}`}>
+              <Marker key={`dest-${i}`} position={[d.lat, d.lng]} icon={pinIcon("dest", visitNum(i))} title={`Destination ${visitNum(i)}: ${d.label || ""}`}>
                 <Tooltip direction="top" offset={[0, -46]}>
-                  <span style={{ fontWeight: 600 }}>Destination {i + 1}</span>
+                  <span style={{ fontWeight: 600 }}>Destination {visitNum(i)}</span>
                   <br />
                   {d.label}
                 </Tooltip>
@@ -674,7 +719,7 @@ export default function RouteMap({ plan, waypoints = [] }) {
                 )}
                 <span className="ct-line ct-sub">
                   {s.availability ? (
-                    <span className="ct-avail">
+                    <span className="ct-avail" style={s.availability.available > 0 ? undefined : { color: "#ff8a80" }}>
                       {s.availability.available} of {s.availability.total} free
                     </span>
                   ) : null}

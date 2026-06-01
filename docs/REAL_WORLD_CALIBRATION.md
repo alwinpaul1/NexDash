@@ -105,6 +105,45 @@ falls to **~0.90 kWh/km**; mid-load (29 t) to **~1.09 kWh/km**. The empty→full
 span (~0.90 → ~1.265) is ~+40% gross, consistent with the +0.6–0.8% per tonne
 field sensitivity over a 22 t payload swing. [S8][S5]
 
+### Field-calibration factor (displayed energy vs steady-state physics)
+The physics above is a **constant-speed, full-tractive-demand steady-state**
+model. On a real, gently-rolling Autobahn run it reproduces the *spec/WLTP* end
+of consumption, **not** the field-measured average. Worked example — a 36 t
+(18 t payload) Munich→Berlin run (~591 km, ~1104 m climb but **net downhill**:
+Munich ~520 m → Berlin ~34 m, so net gradient ≈ −0.08%), 15 °C, ~83 km/h: the
+first-principles figure is **~122–126 kWh/100 km** (≈ the manufacturer
+spec-implied 600 kWh ÷ 500 km ≈ 120). The field tests above for the *same* class
+of run land **lower** — ADAC 88, Daimler tour 1.03, Commercial Motor 1.05–1.12 —
+because real driving (coasting, eco-driving, traffic flow, mixed-route regen) runs
+below constant-speed physics, a gap the steady-state model structurally cannot
+close on a net-flat route.
+
+To make the **displayed** energy headline track field reality, NexDash applies a
+single documented multiplier `config.FIELD_CALIBRATION_FACTOR = 0.85` to
+`summary.energyKwh` / `summary.kwhPer100` only:
+
+- 708 kWh (steady-state) × 0.85 = **602 kWh = ~101.9 kWh/100 km** — within the
+  cited 40 t field range (**~0.88–1.12 kWh/km**: ADAC 0.88, Daimler 15,000 km tour
+  1.03, Commercial Motor 1.05–1.12), near the ~1.0 centre and the Daimler tour
+  average (1.03). (This worked example is the geometry-enriched, net-downhill run;
+  the flat-fallback variant lands higher, ~114 kWh/100 km after the factor.) [S4][S5]
+- **It is NOT a physics change.** The locked `Cd / Crr / drivetrain_eff / A`
+  anchors and the 1.265 / 1.47 / 1.55 kWh/km steady-state figures above are
+  unchanged. The factor only reconciles the *reported* number with field data.
+- **It never touches safety.** The SOC walk, charge-trigger look-ahead, charge
+  sizing and reachability all run on the **un-discounted** steady-state estimate,
+  so the displayed figure being lower can never delay a charge or strand the
+  truck. The route plan (stops, timing, arrival SOC) is byte-identical with or
+  without the factor; guard test
+  `test_field_calibration_scales_displayed_energy_only` enforces this.
+- **Tunable / removable.** `plan_route(field_calibration=…)` and the
+  `/api/route-plan` `fieldCalibration` field override it (0.5–1.0; 1.0 shows the
+  raw steady-state figure; ~0.79 matches the NexOS reference demo's ~95).
+- **REMOVAL CONDITION.** Retune or remove once the ML model is retrained against
+  field (not steady-state) labels, or the energy-side speed model changes — at
+  that point the model would track field consumption directly and the multiplier
+  would double-count.
+
 ### HVAC / auxiliary load vs temperature (U-shape)
 Aux power = `aux_base_kw` (flat comfort band) + a linear rise on each side.
 Calibrated to the eActros winter test and EV-HVAC literature:

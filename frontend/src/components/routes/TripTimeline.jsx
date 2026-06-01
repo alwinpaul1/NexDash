@@ -24,9 +24,11 @@ function fmtDur(min) {
 }
 
 function socColor(soc) {
-  if (soc >= 50) return "#00d166";
-  if (soc >= 25) return "#f59e0b";
-  return "#ba1a1a";
+  if (soc >= 80) return "#15803d"; // 80-100% deep green
+  if (soc >= 60) return "#22c55e"; // 60-80% green
+  if (soc >= 40) return "#eab308"; // 40-60% yellow
+  if (soc >= 20) return "#f59e0b"; // 20-40% amber
+  return "#ef4444"; // <20% red
 }
 
 function Marker({ icon, tint }) {
@@ -117,7 +119,7 @@ function ChargeCard({ seg }) {
           <span style={{ color: socColor(end) }}>{Math.round(end)}%</span>
         </span>
         <span className="text-on-surface tabular-nums">
-          {Math.round(seg.kWh || 0)} kWh · €{(seg.costEur || 0).toFixed(2)}
+          {Math.round(seg.kWh || 0)} kWh
         </span>
       </div>
     </div>

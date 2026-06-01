@@ -411,13 +411,26 @@ async function fetchAvailability(availabilityId) {
     const res = await tomtomFetch(url);
     if (!res.ok) return null;
     const data = await res.json();
+    // The eActros charges on CCS DC, so count ONLY CCS connectors — a stack of slow
+    // AC outlets must not masquerade as "free" truck plugs. Critically, TomTom marks
+    // many sites as status "unknown" (NOT a real free/occupied count); treat unknown
+    // as UNKNOWN, never as "0 free". If no CCS connector has a definite live status
+    // (available/occupied/reserved/outOfService), return null so the UI shows nothing
+    // rather than a misleading "0 of N free". (Confirmed against the live API.)
     let available = 0;
     let total = 0;
+    let definite = 0;
     for (const c of data.connectors || []) {
+      const type = String(c.type || "");
+      if (!(type.includes("CCS") || type.includes("Combo"))) continue;
       total += c.total || 0;
-      available += c.availability?.current?.available || 0;
+      const cur = c.availability?.current || {};
+      const a = Number(cur.available) || 0;
+      available += a;
+      definite +=
+        a + (Number(cur.occupied) || 0) + (Number(cur.reserved) || 0) + (Number(cur.outOfService) || 0);
     }
-    if (total === 0) return null;
+    if (total === 0 || definite === 0) return null;
     return { available, total };
   } catch {
     return null;
@@ -434,16 +447,17 @@ async function fetchAvailability(availabilityId) {
 //   maxPowerKw:   number | null         — max ratedPowerKW across connectors
 //   availability: { available, total } | null  — live "X of Y free" (best-effort)
 //   openingHours: string | null         — short human string
-async function enrichStations(stops, radiusKm = 30) {
+async function enrichStations(stops, radiusKm = 30, minChargerKw = 150) {
   if (!TOMTOM_KEY || !Array.isArray(stops) || stops.length === 0) return stops || [];
   const radius = Math.max(1000, Math.round((radiusKm || 30) * 1000));
   // A 40 t eActros charges on high-power DC (CCS Combo / MCS), NOT the slow AC
   // "normal" points cars use. TomTom has no dedicated truck-charging category,
   // so we proxy "truck charging" with CCS connector + high power. Preference:
-  //   1) truck-capable HPC: CCS, >=150 kW
-  //   2) any DC fast charger (>=150 kW)
+  //   1) truck-capable HPC: CCS, >= the operator's Min Charger Speed
+  //   2) any DC fast charger (>= Min Charger Speed)
   //   3) nearest-any (last-resort fallback so a stop is never empty)
-  const TRUCK_MIN_KW = 150;
+  // The minimum power is the planner's "Min Charger Speed" slider (default 150 kW).
+  const TRUCK_MIN_KW = Number.isFinite(minChargerKw) && minChargerKw > 0 ? minChargerKw : 150;
   const TRUCK_CONNECTORS = "IEC62196Type2CCS"; // CCS Combo — the truck/HPC DC standard
   return Promise.all(
     stops.map(async (s) => {
@@ -453,20 +467,37 @@ async function enrichStations(stops, radiusKm = 30) {
           `https://api.tomtom.com/search/2/categorySearch/EV%20charging.json` +
           `?key=${TOMTOM_KEY}&lat=${s.lat}&lon=${s.lng}&radius=${radius}&categorySet=7309&limit=5` +
           `&openingHours=nextSevenDays&relatedPois=child`;
-        const nearest = async ({ minPowerKW = 0, connectorSet = "" } = {}) => {
+        const nearestList = async ({ minPowerKW = 0, connectorSet = "" } = {}) => {
           let u = base;
           if (minPowerKW) u += `&minPowerKW=${minPowerKW}`;
           if (connectorSet) u += `&connectorSet=${connectorSet}`;
           const res = await tomtomFetch(u);
-          if (!res.ok) return null;
+          if (!res.ok) return [];
           const data = await res.json();
-          return (data.results || [])[0] || null;
+          return data.results || [];
         };
-        const r =
-          (await nearest({ minPowerKW: TRUCK_MIN_KW, connectorSet: TRUCK_CONNECTORS })) ||
-          (await nearest({ minPowerKW: TRUCK_MIN_KW })) ||
-          (await nearest());
-        if (!r) return s;
+        let candidates = await nearestList({ minPowerKW: TRUCK_MIN_KW, connectorSet: TRUCK_CONNECTORS });
+        if (!candidates.length) candidates = await nearestList({ minPowerKW: TRUCK_MIN_KW });
+        if (!candidates.length) candidates = await nearestList();
+        if (!candidates.length) return s;
+
+        // Prefer the nearest CURRENTLY-AVAILABLE station. TomTom returns candidates
+        // nearest-first; take the first with a free plug, falling back to the nearest
+        // if none report one (or none expose live availability). Availability is a
+        // planning-time snapshot — the truck arrives later — so it only breaks ties
+        // between nearby stations; it never blocks a stop (you'd strand otherwise).
+        let r = candidates[0];
+        let availability = await fetchAvailability(r.dataSources?.chargingAvailability?.id);
+        if (!(availability && availability.available > 0)) {
+          for (const cand of candidates.slice(1)) {
+            const a = await fetchAvailability(cand.dataSources?.chargingAvailability?.id);
+            if (a && a.available > 0) {
+              r = cand;
+              availability = a;
+              break;
+            }
+          }
+        }
 
         // Connectors: dedupe by label, keep the highest power seen per label.
         const rawConnectors = r.chargingPark?.connectors || [];
@@ -481,8 +512,7 @@ async function enrichStations(stops, radiusKm = 30) {
         }
         const connectors = [...byLabel.values()].sort((a, b) => b.powerKw - a.powerKw);
 
-        // Live availability (best-effort, never breaks the route).
-        const availability = await fetchAvailability(r.dataSources?.chargingAvailability?.id);
+        // (availability was resolved above, preferring a currently-free station)
 
         // Opening hours → short human string (e.g. "Mon 06:00-22:00 …").
         let openingHours = null;
@@ -526,19 +556,72 @@ async function enrichStations(stops, radiusKm = 30) {
   );
 }
 
-// Cost-minimising stop ORDER from the backend VRP (offline; no routing key).
-// Returns {optimizedOrder, savingsEur, savingsPct, solver} or null (keep the typed
-// order) on any failure or fewer than 2 valid destinations. The order is chosen on
-// a great-circle proxy; the final plan is then routed on the REAL road (see below).
+// Build a REAL road distance/time matrix over [origin, ...dests] via TomTom truck
+// routing — one calculateRoute per node pair, symmetric so we only route the upper
+// triangle (one-ways/traffic asymmetry is ignored for the ORDERING proxy only; the
+// final displayed plan is the real directed route). Indexed 0=origin, 1..N=dests in
+// the given order — exactly what the backend optimiser expects. Bounded to <=9 nodes
+// to cap the call count; returns null on any failure (backend then uses great-circle).
+async function buildRoadMatrix(nodes) {
+  const n = nodes.length;
+  if (!TOMTOM_KEY || n < 2 || n > 9) return null;
+  const dist = Array.from({ length: n }, () => new Array(n).fill(0));
+  const time = Array.from({ length: n }, () => new Array(n).fill(0));
+  try {
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const r = await tomtomRoute([nodes[i], nodes[j]]);
+        dist[i][j] = dist[j][i] = r.distanceKm;
+        time[i][j] = time[j][i] = (r.durationS || 0) / 3600;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return { distMatrixKm: dist, timeMatrixH: time };
+}
+
+// Straight-line km to the nearest high-power (>=150 kW) charger near a point, via the
+// same TomTom EV category search the stop enrichment uses. Feeds the "can the truck
+// still reach a charger from the final stop?" check. null on failure.
+async function nearestChargerKm(point, minChargerKw = 150) {
+  if (!TOMTOM_KEY || !Number.isFinite(point?.lat) || !Number.isFinite(point?.lng)) return null;
+  const minKw = Number.isFinite(minChargerKw) && minChargerKw > 0 ? Math.round(minChargerKw) : 150;
+  try {
+    const u =
+      `https://api.tomtom.com/search/2/categorySearch/EV%20charging.json` +
+      `?key=${TOMTOM_KEY}&lat=${point.lat}&lon=${point.lng}&radius=60000` +
+      `&categorySet=7309&minPowerKW=${minKw}&limit=1`;
+    const res = await tomtomFetch(u);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const r = (data.results || [])[0];
+    if (!Number.isFinite(r?.position?.lat) || !Number.isFinite(r?.position?.lon)) return null;
+    return haversineKm([point.lat, point.lng], [r.position.lat, r.position.lon]);
+  } catch {
+    return null;
+  }
+}
+
+// Energy-minimising stop ORDER from the backend optimiser. Supplies a REAL road
+// distance/time matrix + per-destination nearest-charger distances so the order is
+// chosen on roads (not a straight-line proxy), scored with the ML energy model, and
+// the reach-a-charger-from-the-final-stop check is anchored to the chosen last stop.
+// Returns {optimizedOrder, savingsKwh, savingsPctKwh, solver, destinationCharger,
+// dataSources} or null (keep the typed order) on failure or <2 valid destinations.
 async function optimizeOrder(planner) {
   const dests = (planner?.destinations || []).filter((d) => d?.lat != null && d?.lng != null);
   if (dests.length < 2 || planner?.origin?.lat == null) return null;
   try {
+    const origin = { lat: planner.origin.lat, lng: planner.origin.lng, label: planner.origin.label || "" };
+    // Real road matrix + nearest-charger distances (best-effort; null -> backend proxy).
+    const matrix = await buildRoadMatrix([origin, ...dests]);
+    const chargerKmByDest = await Promise.all(dests.map((d) => nearestChargerKm(d, planner?.minChargerKw)));
     const res = await fetch(`${API_BASE}/api/optimize`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        origin: { lat: planner.origin.lat, lng: planner.origin.lng, label: planner.origin.label || "" },
+        origin,
         destinations: dests.map((d) => ({
           lat: d.lat, lng: d.lng, label: d.label || "", dropWeightKg: d.dropWeightKg || 0,
         })),
@@ -546,12 +629,25 @@ async function optimizeOrder(planner) {
         minSoc: planner.minSoc ?? 15,
         payloadKg: planner.payloadKg ?? 0,
         temperatureC: planner.temperatureC ?? 15,
+        reservePct: planner.reservePct ?? 10,
+        maxChargeKw: planner.maxChargeKw ?? 400,
+        windMps: planner.windMps ?? 0,
+        distMatrixKm: matrix?.distMatrixKm ?? null,
+        timeMatrixH: matrix?.timeMatrixH ?? null,
+        chargerKmByDest,
       }),
     });
     if (!res.ok) return null;
     const d = await res.json();
     if (!Array.isArray(d?.optimizedOrder)) return null;
-    return { optimizedOrder: d.optimizedOrder, savingsEur: d.savingsEur, savingsPct: d.savingsPct, solver: d.solver };
+    return {
+      optimizedOrder: d.optimizedOrder,
+      savingsKwh: d.savingsKwh,
+      savingsPctKwh: d.savingsPctKwh,
+      solver: d.solver,
+      destinationCharger: d.destinationCharger || null,
+      dataSources: d.dataSources || null,
+    };
   } catch {
     return null;
   }
@@ -566,7 +662,14 @@ export async function optimizeRoute(planner) {
   // key). On failure or <2 stops this is null and the typed order is kept. The
   // reorder applies to the FILTERED valid destinations (matching collectWaypoints,
   // which skips null-coord stops), so optimizedOrder indices line up.
-  const opt = await optimizeOrder(planner);
+  // Stop order ALWAYS follows the user's typed sequence (origin -> destinations as
+  // listed): the route, map pins and delivery list all reflect exactly what the
+  // dispatcher entered, and "Optimize Route" optimises the energy / charging /
+  // SOC plan FOR that order. The VRP stop-order optimiser (`optimizeOrder` +
+  // backend /api/optimize) is intentionally left available but NOT auto-invoked —
+  // wire it to an explicit "suggest a better order" action if that's ever wanted,
+  // rather than silently reordering what the user asked for.
+  const opt = null;
   let activePlanner = planner;
   if (opt && Array.isArray(opt.optimizedOrder)) {
     const validDests = (planner.destinations || []).filter((d) => d?.lat != null && d?.lng != null);
@@ -605,48 +708,76 @@ export async function optimizeRoute(planner) {
       fetchIncidents(geometry),
     ]);
     // Swap simulated hubs for real nearby TomTom charging stations.
-    const chargingStops = await enrichStations(sim.chargingStops || [], planner?.maxDetourKm);
-    // B6 — re-cost each stop with the REAL station tariff when the station data
-    // carries one (pricePerKwh from the EV Search API); flat fallback otherwise.
-    for (const e of chargingStops) {
-      const rate = e.pricePerKwh != null ? e.pricePerKwh : FLAT_PRICE_EUR_PER_KWH;
-      if (Number.isFinite(e.kWh)) e.costEur = round2(e.kWh * rate);
-      e.priceSource = e.pricePerKwh != null ? "station" : "flat-fallback";
+    const chargingStops = await enrichStations(sim.chargingStops || [], planner?.maxDetourKm, planner?.minChargerKw);
+
+    // Re-route the DISPLAYED polyline THROUGH the real charging stations so the
+    // drawn route visibly detours off the road into each station, instead of the
+    // pin floating beside the highway. This is DISPLAY-ONLY: the SOC simulation,
+    // charging plan, ETA, EU 561 and energy were already computed by the backend
+    // on the direct route and are NOT recomputed — we only swap the geometry the
+    // map draws. One extra TomTom call routes through all stops at once; any
+    // failure silently keeps the original (direct) geometry, and summary.distanceKm
+    // stays the backend value so the SOC-colour scale (totalKm/geomTotal) and the
+    // calibrated energy headline are unaffected.
+    if (chargingStops.length) {
+      try {
+        const rerouteNodes = [
+          { lat: waypoints[0]?.lat, lng: waypoints[0]?.lng, distKm: 0 },
+          ...chargingStops.map((s) => ({ lat: s.lat, lng: s.lng, distKm: s.distKm })),
+          ...waypoints.slice(1).map((w, i) => ({
+            lat: w?.lat,
+            lng: w?.lng,
+            distKm: Number.isFinite(sim.stops?.[i]?.distKm) ? sim.stops[i].distKm : Infinity,
+          })),
+        ]
+          .filter((n) => Number.isFinite(n.lat) && Number.isFinite(n.lng))
+          .sort((a, b) => a.distKm - b.distKm);
+        // Worth a re-route only if a station sits between origin and a stop.
+        if (rerouteNodes.length >= 3) {
+          const rr = await tomtomRoute(rerouteNodes);
+          if (rr && Array.isArray(rr.geometry) && rr.geometry.length >= 2) {
+            geometry = rr.geometry;
+          }
+        }
+      } catch {
+        /* keep the original (direct) geometry on any failure */
+      }
     }
-    // Re-label the charge timeline segments to the enriched stations, in order,
-    // carrying the re-costed value through.
+
+    // Re-label the charge timeline segments to the enriched stations, in order.
     let ci = 0;
     const segments = (sim.segments || []).map((seg) => {
       if (seg.type === "charge" && chargingStops[ci]) {
         const e = chargingStops[ci++];
-        return {
-          ...seg,
-          costEur: e.costEur ?? seg.costEur,
-          station: { name: e.name, lat: e.lat, lng: e.lng, address: e.address },
-        };
+        return { ...seg, station: { name: e.name, lat: e.lat, lng: e.lng, address: e.address } };
       }
       return seg;
     });
     const summary = { ...(sim.summary || {}) };
-    // Recompute the charging-cost rollup from the per-station re-cost.
-    summary.chargingCostEur = round2(chargingStops.reduce((a, e) => a + (e.costEur || 0), 0));
-    // Surface honest caveats in the existing assumptions block (RouteResults reads it).
+    // Honest caveats surfaced in the existing assumptions block (RouteResults reads it).
     const assumptions = Array.isArray(summary.assumptions) ? [...summary.assumptions] : [];
     if (opt) {
+      const savedKwh = Number.isFinite(opt.savingsKwh) ? opt.savingsKwh : 0;
+      const distSrc = opt.dataSources?.distance === "tomtom-road-matrix" ? "real road distances" : "a great-circle proxy";
+      const energySrc = opt.dataSources?.energy === "ml-model" ? "the ML energy model" : "the physics model";
       assumptions.unshift(
-        `Stop order optimised (${opt.solver}): ~€${(opt.savingsEur ?? 0).toFixed(0)} ` +
-          `(${(opt.savingsPct ?? 0).toFixed(0)}%) cheaper than the typed order. The order is ` +
-          `ranked on a great-circle proxy; the plan below is the real TomTom road route + measured speed.`
+        `Stop order optimised (${opt.solver}) on ${distSrc} + ${energySrc}: saves ~${savedKwh.toFixed(0)} kWh ` +
+          `(${(opt.savingsPctKwh ?? 0).toFixed(0)}%) of energy vs the typed order.`
       );
     }
-    if (chargingStops.length && chargingStops.some((e) => e.priceSource === "flat-fallback")) {
+    // Reach-a-charger-from-the-final-stop verdict (P2-D5): surface it prominently.
+    if (opt?.destinationCharger?.note) {
+      assumptions.unshift(opt.destinationCharger.note);
+    }
+    // Be honest that the "X of Y free" badge is a planning-time snapshot.
+    if (chargingStops.some((e) => e && e.availability)) {
       assumptions.push(
-        `Charging cost uses a flat €${FLAT_PRICE_EUR_PER_KWH}/kWh where the station's tariff is ` +
-          `unavailable (the routing provider's charging data carries no price); a real per-station ` +
-          `tariff is applied wherever a tariff feed provides one.`
+        "Charging-station \"X of Y free\" is a LIVE snapshot at planning time; the truck arrives later, so " +
+          "availability may differ. We prefer a currently-free station where one exists nearby — not a guarantee."
       );
     }
     summary.assumptions = assumptions;
+    summary.destinationCharger = opt?.destinationCharger || null;
     return {
       geometry,
       socProfile: sim.socProfile || [],

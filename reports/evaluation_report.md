@@ -1,7 +1,7 @@
 # NexDash Energy Model -- Evaluation Report
 
-_Generated 2026-06-01 05:46:32 by `run_pipeline.py` (seed = 42, deterministic)._
-_Model version: `b01e68ba8d83-f37d9fa0` (content-addressed: training-data SHA + code SHA). See `models/<artifact>.provenance.json` and `models/registry/` for full lineage; compare versions with `python -m nexdash.promote <champion> <challenger>`._
+_Generated 2026-06-01 23:00:27 by `run_pipeline.py` (seed = 42, deterministic)._
+_Model version: `654304b4454c-914ab768` (content-addressed: training-data SHA + code SHA). See `models/<artifact>.provenance.json` and `models/registry/` for full lineage; compare versions with `python -m nexdash.promote <champion> <challenger>`._
 
 This report evaluates the energy-consumption model for the
 **Mercedes-Benz eActros 600** (~600 kWh usable battery, ~500 km
@@ -31,32 +31,32 @@ all learnable structure comes from the physics.
 | distance_km | 1.00 | 60.06 | 350.00 | 42.33 |
 | payload_t | 0.00 | 11.08 | 21.99 | 6.37 |
 | speed_kph | 30.00 | 71.52 | 85.00 | 10.49 |
-| gradient_pct | -6.00 | 0.02 | 6.00 | 1.79 |
+| gradient_pct | -6.00 | 0.02 | 6.00 | 2.11 |
 | temperature_c | -15.00 | 12.08 | 40.00 | 10.90 |
 | wind_mps | -12.00 | -0.04 | 12.00 | 3.37 |
-| energy_kwh | -33.49 | 81.30 | 514.85 | 73.40 |
+| energy_kwh | -50.00 | 86.67 | 523.38 | 88.67 |
 
 ## 2. Headline performance (held-out test set)
 
 Computed by `nexdash.evaluate.evaluate` on the 1,200 held-out
 segments the model never saw during training.
 
-- **MAE:** **5.970 kWh** per segment -- the typical absolute
+- **MAE:** **6.018 kWh** per segment -- the typical absolute
   miss on a single leg.
-- **RMSE:** 9.133 kWh
-- **MAPE:** 14.06 % (per-segment, computed on
-  1,188 of 1,200 test rows; the 12
+- **RMSE:** 9.509 kWh
+- **MAPE:** 12.86 % (per-segment, computed on
+  1,187 of 1,200 test rows; the 13
   near-zero rows below the 1 kWh floor are excluded so tiny
   denominators don't make MAPE explode meaninglessly)
-- **R^2:** 0.9836
-- **% of a full charge:** **0.995 %** -- the per-segment MAE
+- **R^2:** 0.9879
+- **% of a full charge:** **1.003 %** -- the per-segment MAE
   expressed against the 600 kWh usable battery; a fleet-intuitive
   "fraction of one charge we might be off by per leg".
 
 **Read this honestly.** These are **per-SEGMENT** errors. A real route is many
 segments and the errors accumulate (roughly with the number of legs), so the
 **trip-level** error is several times larger than any single-segment figure and is
-**not** bounded by the 0.99 % number. Treat that percentage as a
+**not** bounded by the 1.00 % number. Treat that percentage as a
 per-leg sanity scale, not a promise that a whole route lands inside a 10 % reserve.
 
 ## 3. Model vs. linear baseline
@@ -70,10 +70,10 @@ quantify the value of the non-linear model over a transparent reference.
 
 | Metric | HistGradientBoosting (primary) | LinearRegression (baseline) |
 | --- | --- | --- |
-| MAE (kWh) | 5.970 | 25.120 |
-| RMSE (kWh) | 9.133 | 33.490 |
-| MAPE (%) | 14.06 | 95.08 |
-| R^2 | 0.9836 | 0.7794 |
+| MAE (kWh) | 6.018 | 11.854 |
+| RMSE (kWh) | 9.509 | 17.425 |
+| MAPE (%) | 12.86 | 46.16 |
+| R^2 | 0.9879 | 0.9595 |
 
 ## 4. Failure-mode analysis
 
@@ -85,50 +85,50 @@ become large relative ones.
 
 | Temperature bin | MAE (kWh) | MAPE (%) | n |
 | --- | --- | --- | --- |
-| cold (<0C) | 5.582 | 13.51 | 166 |
-| mild (0-30C) | 6.057 | 14.16 | 979 |
-| hot (>30C) | 5.595 | 13.90 | 55 |
+| cold (<0C) | 6.534 | 16.68 | 166 |
+| mild (0-30C) | 5.902 | 12.02 | 979 |
+| hot (>30C) | 6.525 | 16.22 | 55 |
 
 ### By gradient
 
 | Gradient bin | MAE (kWh) | MAPE (%) | n |
 | --- | --- | --- | --- |
-| steep_down (<-4%) | 2.698 | 31.24 | 18 |
-| flat (-4..+4%) | 5.985 | 13.87 | 1162 |
-| steep_up (>+4%) | 8.054 | 10.48 | 20 |
+| steep_down (<-4%) | 2.177 | 23.22 | 33 |
+| flat (-4..+4%) | 6.084 | 12.79 | 1131 |
+| steep_up (>+4%) | 7.462 | 5.71 | 36 |
 
 ### By payload
 
 | Payload bin | MAE (kWh) | MAPE (%) | n |
 | --- | --- | --- | --- |
-| light (<7t) | 5.385 | 11.66 | 390 |
-| mid (7-15t) | 5.379 | 15.42 | 432 |
-| heavy (>15t) | 7.249 | 14.97 | 378 |
+| light (<7t) | 5.455 | 10.81 | 390 |
+| mid (7-15t) | 5.877 | 15.69 | 432 |
+| heavy (>15t) | 6.761 | 11.70 | 378 |
 
 ## 5. Calibration & discovered failure modes
 
-Split-conformal prediction-interval coverage, calibrated on 600 held-out rows and audited on a disjoint 600 rows. **PASS** = the nominal level falls inside the bootstrap CI of realized coverage; **FAIL** = the band is mis-calibrated (the honest signal). Expected Calibration Error: **0.0117**.
+Split-conformal prediction-interval coverage, calibrated on 600 held-out rows and audited on a disjoint 600 rows. **PASS** = the nominal level falls inside the bootstrap CI of realized coverage; **FAIL** = the band is mis-calibrated (the honest signal). Expected Calibration Error: **0.0144**.
 
 | Nominal | Empirical | Width (kWh) | Coverage 95% CI | Status |
 | --- | --- | --- | --- | --- |
-| 80% | 79.5% | 8.96 | [76.2%, 82.7%] | PASS |
-| 90% | 90.8% | 15.75 | [88.3%, 93.0%] | PASS |
-| 95% | 97.2% | 22.03 | [95.8%, 98.5%] | CONSERVATIVE |
+| 80% | 78.0% | 9.08 | [74.5%, 81.5%] | PASS |
+| 90% | 89.8% | 15.46 | [87.2%, 92.2%] | PASS |
+| 95% | 97.2% | 23.58 | [95.8%, 98.5%] | CONSERVATIVE |
 
 Per-gradient-regime 90% coverage (Mondrian / group-conditional bands — steep regimes honestly get their own width):
 
 | Regime | Empirical | Width (kWh) | n | Note |
 | --- | --- | --- | --- | --- |
-| flat | 90.4% | 15.57 | 581 |  |
-| steep_down | 100.0% | 15.75 | 9 | indicative (sparse) |
-| steep_up | 90.0% | 15.75 | 10 | indicative (sparse) |
+| flat | 90.8% | 15.94 | 567 |  |
+| steep | 87.9% | 14.20 | 33 |  |
 
 **Auto-discovered failure modes.** A shallow decision tree on the held-out absolute error searches the feature space for the worst error pockets the hand-picked slices above never enumerated. Each is gated by a support floor (n >= 30) and a bootstrapped lift CI, so only statistically-real pockets are reported (not 3-row flukes).
 
 | Discovered condition | n | Pocket MAE | Lift vs global | Lift 95% CI |
 | --- | --- | --- | --- | --- |
-| `distance_km>157.6` | 44 | 18.05 kWh | 3.02x | [2.37, 3.75] |
-| `113.2<distance_km<=157.6 AND wind_mps>-1.4` | 54 | 12.53 kWh | 2.1x | [1.7, 2.53] |
+| `distance_km>162.3` | 40 | 19.88 kWh | 3.3x | [2.7, 3.93] |
+| `103.0<distance_km<=162.3 AND gradient_pct>0.6` | 58 | 13.26 kWh | 2.2x | [1.77, 2.66] |
+| `36.9<distance_km<=103.0 AND gradient_pct>1.0` | 216 | 11.15 kWh | 1.85x | [1.66, 2.05] |
 
 _Honest scope: coverage is measured against the **synthetic held-out labels** (our own noisy physics), i.e. coverage-of-physics, not coverage-of-reality — the same circular-evaluation caveat as the headline metrics. A FAIL or a high-lift pocket is disclosed, never hidden._
 
@@ -150,12 +150,12 @@ _Honest scope: coverage is measured against the **synthetic held-out labels** (o
 
 **What these metrics do and don't prove.** Every figure here measures how faithfully the ML model reproduces `nexdash.physics.segment_energy_kwh` -- the *same* function that generated the labels. They bound model-vs-PHYSICS error, **not** model-vs-REALITY error, which is unknown until real eActros telematics arrive. A low MAE proves the model re-learned our physics, not that the physics matches a real truck.
 
-Within that caveat, the error is **not uniform** across the operating envelope (overall MAPE ~ 14.06%). The failure-mode tables above expose where it degrades and the physics behind each weak spot.
+Within that caveat, the error is **not uniform** across the operating envelope (overall MAPE ~ 12.86%). The failure-mode tables above expose where it degrades and the physics behind each weak spot.
 
-- **Temperature.** The `mild (0-30C)` slice carries the largest absolute error (MAE 6.06 kWh; MAPE 14.16%): this is the high-volume middle of the range holding the most rows and the largest-energy segments, so it carries the most absolute error by sheer mass; the cold and hot extremes show no MAE inflation here, so the synthetic HVAC penalty is well-learned rather than a failure mode.
+- **Temperature.** The `cold (<0C)` slice carries the largest absolute error (MAE 6.53 kWh; MAPE 16.68%): auxiliary/HVAC draw rises toward this temperature extreme and is spread over travel time, so short, slow segments here carry an outsized, harder-to-predict auxiliary share.
 
-- **Gradient (the safety-critical one).** Ranked by absolute energy, the `steep_up (>+4%)` slice is the weakest (MAE 8.05 kWh). Steep *climbs* convert payload mass into potential energy fastest, so any miss there is a large *absolute* kWh miss — exactly the regime that strands a truck. Note the downhill slice can show a huge *percentage* error, but its absolute error is tiny (regen drives net energy near zero, so the denominator collapses); that is loud in MAPE yet operationally harmless, which is why we headline MAE, not MAPE. (Only n=20 test segments — treat this slice as indicative, not a precise measurement.)
+- **Gradient (the safety-critical one).** Ranked by absolute energy, the `steep_up (>+4%)` slice is the weakest (MAE 7.46 kWh). Steep *climbs* convert payload mass into potential energy fastest, so any miss there is a large *absolute* kWh miss — exactly the regime that strands a truck. Note the downhill slice can show a huge *percentage* error, but its absolute error is tiny (regen drives net energy near zero, so the denominator collapses); that is loud in MAPE yet operationally harmless, which is why we headline MAE, not MAPE.
 
-- **Payload.** The `heavy (>15t)` slice shows the highest absolute error (MAE 7.25 kWh; MAPE 14.97%). Payload scales rolling resistance and gradient potential energy linearly, so heavy loads both consume the most energy and leave the most room to be wrong about it in absolute terms.
+- **Payload.** The `heavy (>15t)` slice shows the highest absolute error (MAE 6.76 kWh; MAPE 11.70%). Payload scales rolling resistance and gradient potential energy linearly, so heavy loads both consume the most energy and leave the most room to be wrong about it in absolute terms.
 
 Three structural caveats apply, all limits of the *synthetic data*, not just the model. First, labels carry multiplicative (~6%) plus additive sensor noise, which sets a hard floor on achievable accuracy -- the model cannot beat the noise it was trained on. Second, the gradient is capped per row so the implied net climb stays geographically plausible, and net-regen descents are kept as genuine negative labels (no zero-clamp), so the noise stays unstructured; rare *combinations* of features (e.g. heavy payload + steep climb + extreme cold at once) are still under-represented and should be treated as lower-confidence extrapolations. Third -- and most importantly -- this is a circular evaluation against our own physics (see above): real accuracy is unknown until telematics data arrives.

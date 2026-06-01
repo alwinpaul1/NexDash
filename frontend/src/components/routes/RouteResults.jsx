@@ -27,6 +27,19 @@ function ProgressBar({ value, max, tint }) {
   );
 }
 
+// Format a duration given in MINUTES as a readable "Xh Ym" (e.g. 195 -> "3h 15m",
+// 636 -> "10h 36m", 45 -> "45m"). Used for both total trip time and charging time.
+function fmtHm(min) {
+  if (min == null || !Number.isFinite(min)) return "0m";
+  const total = Math.round(min);
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  if (h && m) return `${h}h ${m}m`;
+  return h ? `${h}h` : `${m}m`;
+}
+
+// Hours as a compact decimal (e.g. 7.4 -> "7.4", 9 -> "9") — used by the
+// driver-hours bars, which read against whole-hour limits (9 h / 56 h).
 function fmtH(h) {
   if (h == null) return "0";
   return Number.isInteger(h) ? String(h) : h.toFixed(1);
@@ -81,8 +94,8 @@ export default function RouteResults({ plan }) {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <InfoCard icon="ev_station" value={s.chargingStops ?? 0} label="Charging Stops" tint="#f59e0b" />
           <InfoCard icon="straighten" value={`${Math.round(s.distanceKm || 0)} km`} label="Total Distance" tint="#0059bb" />
-          <InfoCard icon="schedule" value={`${fmtH(s.totalTimeH)} h`} label="Total Time" />
-          <InfoCard icon="bolt" value={`${Math.round(s.chargingTimeMin || 0)} min`} label="Charging Time" tint="#f59e0b" />
+          <InfoCard icon="schedule" value={fmtHm((s.totalTimeH || 0) * 60)} label="Total Time" />
+          <InfoCard icon="bolt" value={fmtHm(s.chargingTimeMin || 0)} label="Charging Time" tint="#f59e0b" />
         </div>
 
         {/* Live traffic — TomTom routes around closures/congestion (fastest +
@@ -247,8 +260,12 @@ export default function RouteResults({ plan }) {
           <InfoCard icon="battery_charging_full" value={`${Math.round(s.energyKwh || 0)}`} label="Total kWh" />
           <InfoCard icon="speed" value={`${Math.round(s.kwhPer100 || 0)}`} label="kWh / 100km" tint="#0059bb" />
           <InfoCard icon="trending_up" value={`${Math.round(s.elevationGainM || 0)} m`} label="Elevation Gain" tint="#f59e0b" />
-          <InfoCard icon="euro" value={`€${(s.chargingCostEur || 0).toFixed(0)}`} label="Charging Cost" />
+          <InfoCard icon="ev_station" value={`${s.chargingStops || 0}`} label="Charging Stops" />
         </div>
+        <p className="mt-2 text-[10px] leading-tight text-on-surface-variant/70">
+          Total kWh is field-calibrated to real-world consumption; charging and range
+          margin use a higher conservative estimate (see modelling assumptions below).
+        </p>
       </div>
 
       {/* Honest modelling assumptions — surfaced from the backend so the

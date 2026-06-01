@@ -68,7 +68,19 @@ class RoutePlanRequest(BaseModel):
     payloadKg: float = Field(0.0, ge=0, description="Cargo payload (kg).")
     reservePct: float = Field(10.0, ge=0, le=100, description="Safety-reserve buffer above min SOC (%).")
     maxChargeKw: float = Field(400.0, gt=0, description="Max charging power (kW); eActros 600 CCS ~400 kW.")
-    chargeTargetSoc: float = Field(80.0, ge=0, le=100, description="SOC (%) to recharge to at on-route stops.")
+    chargeTargetSoc: float = Field(95.0, ge=0, le=100, description="SOC (%) to recharge to at on-route stops (long-haul 'charge it up' target).")
+    fieldCalibration: Optional[float] = Field(
+        None,
+        ge=0.5,
+        le=1,
+        description=(
+            "Optional field-calibration factor (0.5-1.0) scaling ONLY the DISPLAYED energy "
+            "headline (energyKwh / kwhPer100) toward real-world laden eActros 600 consumption; "
+            "the SOC walk and all charging/reachability decisions are unaffected. None uses the "
+            "server default (config.FIELD_CALIBRATION_FACTOR = 0.85); set 1.0 for the raw "
+            "conservative steady-state physics figure."
+        ),
+    )
     departure: Optional[str] = Field(None, description="ISO local departure datetime.")
     temperatureC: float = Field(15.0, description="Ambient temperature (deg C).")
     geometry: Optional[list[list[float]]] = Field(
@@ -225,6 +237,11 @@ async def route_plan(req: RoutePlanRequest):
             reserve_pct=req.reservePct,
             max_charge_kw=req.maxChargeKw,
             charge_target_soc=req.chargeTargetSoc,
+            field_calibration=(
+                req.fieldCalibration
+                if req.fieldCalibration is not None
+                else route_planner_module.FIELD_CALIBRATION_FACTOR
+            ),
             departure=req.departure,
             temperature_c=req.temperatureC,
             waypoints=req.waypoints,
@@ -254,7 +271,25 @@ class OptimizeRequest(BaseModel):
     minSoc: float = Field(15.0, ge=0, le=100, description="SOC floor (%).")
     payloadKg: float = Field(0.0, ge=0, description="Cargo payload (kg).")
     temperatureC: float = Field(15.0, description="Ambient temperature (deg C).")
+    reservePct: float = Field(10.0, ge=0, le=100, description="Safety-reserve buffer above min SOC (%).")
+    maxChargeKw: float = Field(400.0, gt=0, description="Max charging power (kW).")
     returnToOrigin: bool = Field(False, description="Return to the depot after the last stop.")
+    # --- all-factors inputs (optional; absent => legacy great-circle + physics) --- #
+    windMps: float = Field(0.0, description="Representative wind speed (m/s) for leg energy.")
+    distMatrixKm: list[list[float]] | None = Field(
+        None, description="Real road distance matrix (km); index 0=origin, 1..N=destinations in order.",
+    )
+    timeMatrixH: list[list[float]] | None = Field(
+        None, description="Real road travel-time matrix (h); same indexing as distMatrixKm.",
+    )
+    finalChargerDistanceKm: float | None = Field(
+        None, ge=0, description="Distance (km) from the final destination to its nearest charger.",
+    )
+    chargerKmByDest: list[float] | None = Field(
+        None,
+        description="Per-destination nearest-charger distance (km), aligned to destinations; "
+        "the backend uses the optimised final stop's value for the reach-charger check.",
+    )
 
 
 @app.post("/api/optimize")
@@ -274,15 +309,39 @@ async def optimize(req: OptimizeRequest):
         )
 
     try:
+        # All-factors path activates only when the caller supplies a real road
+        # matrix; otherwise we stay on the legacy great-circle + physics ordering
+        # (so callers/tests that send no matrix are unaffected). When active, the
+        # backend enriches per-node elevation itself (geodata is server-side and
+        # fail-soft) and scores legs with the trained ML model.
+        use_real = req.distMatrixKm is not None
+        node_elevations = None
+        if use_real:
+            from nexdash import geodata
+
+            pts = [(float(req.origin["lat"]), float(req.origin["lng"]))]
+            for d in req.destinations:
+                if d and d.get("lat") is not None and d.get("lng") is not None:
+                    pts.append((float(d["lat"]), float(d["lng"])))
+            node_elevations = geodata.elevations(pts)
         return optimizer_module.optimize_route(
             req.origin,
             req.destinations,
             start_soc=req.startSoc,
             min_soc=req.minSoc,
             payload_kg=req.payloadKg,
+            reserve_pct=req.reservePct,
+            max_charge_kw=req.maxChargeKw,
             temperature_c=req.temperatureC,
             return_to_origin=req.returnToOrigin,
             model_path=DEFAULT_MODEL_PATH,
+            dist_matrix_km=req.distMatrixKm,
+            time_matrix_h=req.timeMatrixH,
+            node_elevations_m=node_elevations,
+            wind_mps=req.windMps,
+            use_model=use_real,
+            final_charger_distance_km=req.finalChargerDistanceKm,
+            charger_km_by_dest=req.chargerKmByDest,
         )
     except Exception as exc:  # pragma: no cover - surfaces unexpected failures
         logger.exception("Optimize failed: %s", exc)
@@ -391,12 +450,20 @@ def _load_dotenv() -> None:
         os.environ.setdefault(key.strip(), value.strip().strip("'\""))
 
 
-def main(host: str = "0.0.0.0", port: int = 8000) -> None:
-    """Entry point for ``python dashboard/server.py``."""
+def main(host: str = "0.0.0.0", port: Optional[int] = None) -> None:
+    """Entry point for ``python dashboard/server.py``.
 
+    The port defaults to the ``NEXDASH_API_PORT`` env var (set by the dev
+    launcher, which picks a free port and points Vite's proxy at the same one),
+    falling back to 8000. Pass ``port`` explicitly to override.
+    """
+
+    import os
     import uvicorn
 
     _load_dotenv()
+    if port is None:
+        port = int(os.environ.get("NEXDASH_API_PORT", "8000"))
     uvicorn.run(app, host=host, port=port)
 
 

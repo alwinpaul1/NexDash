@@ -3,9 +3,11 @@
 // big arrival % in the center, START / MIN labels under the arc ends.
 
 function socColor(soc) {
-  if (soc >= 50) return "#00d166"; // accent
-  if (soc >= 25) return "#f59e0b"; // amber
-  return "#ba1a1a"; // error
+  if (soc >= 80) return "#15803d"; // 80-100% deep green
+  if (soc >= 60) return "#22c55e"; // 60-80% green
+  if (soc >= 40) return "#eab308"; // 40-60% yellow
+  if (soc >= 20) return "#f59e0b"; // 20-40% amber
+  return "#ef4444"; // <20% red
 }
 
 function polar(cx, cy, r, angleDeg) {

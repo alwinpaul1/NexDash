@@ -52,7 +52,13 @@ export default function ChargingStopsList({ stops = [] }) {
               </div>
               <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
                 {s.availability ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 text-primary px-2 py-0.5 font-medium">
+                  <span
+                    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium ${
+                      s.availability.available > 0
+                        ? "bg-primary/10 text-primary"
+                        : "bg-surface text-on-surface-variant ring-1 ring-outline-variant/60"
+                    }`}
+                  >
                     {s.availability.available} of {s.availability.total} free
                   </span>
                 ) : null}
