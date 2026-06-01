@@ -245,6 +245,44 @@ def failure_mode_report(model: Any, df_test: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+def calibration_report(model: Any, df_test: pd.DataFrame) -> dict[str, Any]:
+    """Verified-uncertainty + auto-discovered-failure report on the held-out set.
+
+    Combines two honest-evaluation checks over the *same* held-out predictions:
+
+    * **Calibration audit** (:mod:`nexdash.calibration`): split-conformal interval
+      coverage at 80/90/95% with a bootstrap PASS/FAIL per level, an Expected
+      Calibration Error, and a Mondrian per-gradient-regime coverage breakdown —
+      proving whether the model's stated uncertainty band actually holds.
+    * **Failure mining** (:mod:`nexdash.failure_miner`): the worst multi-feature
+      error pockets a shallow decision tree finds in the held-out residuals,
+      gated by a support floor and a bootstrapped lift CI — surfacing failure
+      modes the hand-picked slices never enumerated.
+
+    Returns ``{"calibration": {...}, "failure_modes": [...]}`` (JSON-serialisable),
+    or empty structures if the test set is too small. Deterministic and offline.
+    """
+    from . import calibration, failure_miner
+
+    y_true = df_test[TARGET].to_numpy(dtype=float)
+    y_pred = _predict(model, df_test)
+
+    # Gradient regime per row, matching the hand-picked failure-mode bins, so the
+    # Mondrian audit reports conformal coverage on the same cold/steep regions.
+    grad = df_test["gradient_pct"].to_numpy(dtype=float)
+    groups = np.where(grad < -4, "steep_down", np.where(grad > 4, "steep_up", "flat"))
+
+    cal = calibration.calibrate_and_audit(y_true, y_pred, groups=groups)
+
+    abs_error = np.abs(y_pred - y_true)
+    pockets = failure_miner.mine_failure_modes(
+        df_test[FEATURE_COLUMNS].to_numpy(dtype=float),
+        abs_error,
+        feature_names=FEATURE_COLUMNS,
+    )
+    return {"calibration": cal, "failure_modes": pockets}
+
+
 def make_plots(
     model: Any,
     df_test: pd.DataFrame,
@@ -351,4 +389,10 @@ def make_plots(
     return saved
 
 
-__all__ = ["evaluate", "failure_mode_report", "make_plots", "NOMINAL_TRIP_KM"]
+__all__ = [
+    "evaluate",
+    "failure_mode_report",
+    "calibration_report",
+    "make_plots",
+    "NOMINAL_TRIP_KM",
+]

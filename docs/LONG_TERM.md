@@ -178,9 +178,17 @@ Beyond point error, the challenger must be **calibrated**: predicted confidence 
 should match observed error coverage. The seed already reports the model's real held-out
 MAE in `range.py`'s `confidence_note` and runs a first-principles physics cross-check that
 flags `confidence: "low"` when the two estimates diverge (**implemented** — this is the
-seed's sanity-clamp). The long-term extension is to validate that band against *measured*
-error: we track interval coverage (e.g. does the stated band contain the true value ~90%
-of the time?) and reject challengers that are sharper but over-confident.
+seed's sanity-clamp). Validating that band against *measured* error is now also
+**implemented** (`nexdash.calibration`, surfaced as report Section 5): split-conformal
+intervals are calibrated on a held-out half and their realized coverage audited on a
+disjoint half at 80/90/95%, with a bootstrap PASS/FAIL per level (FAIL only when the band
+*under*-covers — the over-confident direction — since conformal guarantees coverage >= the
+level), a Mondrian per-gradient-regime breakdown, and an Expected Calibration Error. A
+companion auto-miner (`nexdash.failure_miner`) searches the held-out residuals for the
+worst multi-feature error pockets the hand-picked slices miss. The promotion gate
+(`nexdash.promote`) already rejects challengers that regress a slice or raise the
+optimistic-error rate; folding the conformal coverage check into that gate (reject the
+sharper-but-over-confident challenger) is the remaining online step.
 
 ### 3.5 Champion / challenger + shadow mode (online gate)
 After offline gates pass:
