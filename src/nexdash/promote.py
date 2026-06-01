@@ -16,7 +16,13 @@ held-out set:
 2. **No regime regresses.** No failure-mode slice (cold / steep / heavy, etc.)
    may get worse by more than a small tolerance — an aggregate win must not hide
    a cold-weather or steep-grade regression, which is exactly the tail a
-   dispatcher cares about.
+   dispatcher cares about. The steep-grade bins are *rare* (~1.6% of rows, so
+   ~18-20 in a held-out fold) and would slip under a naive 30-row support floor,
+   so this gate is two-tier: well-supported slices are vetoed at the strict
+   tolerance, sparse-but-safety-relevant slices (the steep tail) are still vetoed
+   at a wider tolerance and flagged ``indicative``, and slices too sparse to
+   judge at all are *disclosed* as ``unguarded`` rather than silently skipped —
+   the blind spot must never pass with a clean verdict.
 3. **It is not more dangerous.** The *optimistic-error rate* (fraction of rows
    where the model predicts LESS energy than truth — the direction that strands
    a truck) must not rise. A challenger that lowers mean MAE while becoming more
@@ -44,8 +50,16 @@ __all__ = ["compare", "held_out_split", "main"]
 
 #: A slice may not get worse by more than this many kWh of MAE (absolute).
 SLICE_REGRESSION_TOL_KWH: float = 0.5
-#: Minimum rows for a slice to count toward the regression check (sparse = noisy).
+#: Minimum rows for a slice to be *strictly* vetoed at the tight tolerance above.
 SLICE_MIN_N: int = 30
+#: Lower support floor for a *sparse* slice to still be vetoed (at the wider
+#: tolerance below) and flagged ``indicative``. The steep-grade safety bins land
+#: here (~18-20 rows in a real held-out fold) — below ``SLICE_MIN_N`` they used to
+#: be silently skipped, defeating the very protection gate #2 promises.
+SLICE_INDICATIVE_MIN_N: int = 8
+#: Wider MAE-regression tolerance applied to sparse (indicative) slices, so
+#: small-sample noise does not trip the veto but a genuine regression still does.
+SLICE_INDICATIVE_REGRESSION_TOL_KWH: float = 1.0
 #: The optimistic-error rate may not rise by more than this fraction.
 OPTIMISTIC_RATE_TOL: float = 0.01
 
@@ -116,32 +130,60 @@ def _paired_bootstrap_ci(
 
 def _slice_regressions(
     champ: EnergyModel, chal: EnergyModel, df_test: pd.DataFrame
-) -> list[dict[str, Any]]:
-    """Failure-mode slices where the challenger's MAE regresses beyond tolerance."""
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Failure-mode slices where the challenger's MAE regresses beyond tolerance.
+
+    Returns ``(regressions, unguarded)``:
+
+    * ``regressions`` — slices that **block** promotion. Well-supported slices
+      (``n >= SLICE_MIN_N``) are vetoed at ``SLICE_REGRESSION_TOL_KWH`` and
+      flagged ``indicative=False``; sparse-but-safety-relevant slices
+      (``SLICE_INDICATIVE_MIN_N <= n < SLICE_MIN_N`` — the steep-grade tail) are
+      still vetoed but at the wider ``SLICE_INDICATIVE_REGRESSION_TOL_KWH`` and
+      flagged ``indicative=True`` so the small-sample caveat travels with the
+      verdict.
+    * ``unguarded`` — slices too sparse to veto at all (``0 < n <
+      SLICE_INDICATIVE_MIN_N``) that nonetheless *appear* to regress. These do
+      NOT block (the sample is too small to trust a veto) but are **disclosed**
+      so the blind spot is never silent — this is precisely the gap that used to
+      let a steep-grade regression pass with a clean verdict.
+    """
     champ_fm = failure_mode_report(champ, df_test)
     chal_fm = failure_mode_report(chal, df_test)
-    out: list[dict[str, Any]] = []
+    regressions: list[dict[str, Any]] = []
+    unguarded: list[dict[str, Any]] = []
     for dim, bins in champ_fm.items():
         for label, cmetrics in bins.items():
             chmetrics = chal_fm.get(dim, {}).get(label, {})
             n = int(chmetrics.get("n", 0) or 0)
             c_mae = cmetrics.get("mae_kwh")
             x_mae = chmetrics.get("mae_kwh")
-            if n < SLICE_MIN_N or c_mae is None or x_mae is None:
+            if n <= 0 or c_mae is None or x_mae is None:
                 continue
             if np.isnan(c_mae) or np.isnan(x_mae):
                 continue
-            if x_mae > c_mae + SLICE_REGRESSION_TOL_KWH:
-                out.append(
-                    {
-                        "slice": f"{dim}:{label}",
-                        "n": n,
-                        "champion_mae": round(float(c_mae), 4),
-                        "challenger_mae": round(float(x_mae), 4),
-                        "regression_kwh": round(float(x_mae - c_mae), 4),
-                    }
-                )
-    return out
+            regression = float(x_mae - c_mae)
+            row = {
+                "slice": f"{dim}:{label}",
+                "n": n,
+                "champion_mae": round(float(c_mae), 4),
+                "challenger_mae": round(float(x_mae), 4),
+                "regression_kwh": round(regression, 4),
+            }
+            if n >= SLICE_MIN_N:
+                if regression > SLICE_REGRESSION_TOL_KWH:
+                    regressions.append({**row, "indicative": False})
+            elif n >= SLICE_INDICATIVE_MIN_N:
+                # Sparse but safety-relevant (steep tail): veto at the wider
+                # tolerance so a real regression still blocks, flagged indicative.
+                if regression > SLICE_INDICATIVE_REGRESSION_TOL_KWH:
+                    regressions.append({**row, "indicative": True})
+            else:
+                # Too sparse to veto, but disclose an apparent regression rather
+                # than silently dropping the safety slice.
+                if regression > SLICE_REGRESSION_TOL_KWH:
+                    unguarded.append(row)
+    return regressions, unguarded
 
 
 def compare(
@@ -155,8 +197,11 @@ def compare(
     """Decide whether the challenger should replace the champion.
 
     Returns a structured verdict dict with ``promote`` (bool), the bootstrap CI
-    on the MAE improvement, any slice regressions, the two optimistic-error
-    rates, and human-readable ``reasons``. Deterministic and offline.
+    on the MAE improvement, any blocking ``slice_regressions`` (incl. sparse
+    steep-tail slices vetoed at the wider tolerance and flagged ``indicative``),
+    any ``unguarded_slices`` (too sparse to veto but disclosed so the steep-grade
+    blind spot is never silent), the two optimistic-error rates, and
+    human-readable ``reasons``. Deterministic and offline.
     """
     champ = EnergyModel.load(champion_path)
     chal = EnergyModel.load(challenger_path)
@@ -170,7 +215,7 @@ def compare(
     point, ci_lo, ci_hi = _paired_bootstrap_ci(err_champ, err_chal, n_boot=n_boot)
     wins_significantly = ci_lo > 0.0  # whole CI above 0 => challenger truly better
 
-    regressions = _slice_regressions(champ, chal, df_test)
+    regressions, unguarded = _slice_regressions(champ, chal, df_test)
     no_slice_regression = len(regressions) == 0
 
     opt_champ = _optimistic_rate(champ, df_test)
@@ -187,12 +232,21 @@ def compare(
     )
     if regressions:
         worst = max(regressions, key=lambda r: r["regression_kwh"])
+        n_ind = sum(1 for r in regressions if r.get("indicative"))
+        suffix = f", incl. {n_ind} sparse/indicative" if n_ind else ""
         reasons.append(
-            f"{len(regressions)} slice(s) regressed beyond {SLICE_REGRESSION_TOL_KWH} kWh "
-            f"(worst {worst['slice']}: +{worst['regression_kwh']} kWh)"
+            f"{len(regressions)} slice(s) regressed beyond tolerance{suffix} "
+            f"(worst {worst['slice']}: +{worst['regression_kwh']} kWh, n={worst['n']})"
         )
     else:
         reasons.append("no failure-mode slice regressed beyond tolerance")
+    if unguarded:
+        worst_u = max(unguarded, key=lambda r: r["regression_kwh"])
+        reasons.append(
+            f"{len(unguarded)} safety-critical slice(s) too sparse to veto "
+            f"(n<{SLICE_INDICATIVE_MIN_N}; worst {worst_u['slice']}: "
+            f"+{worst_u['regression_kwh']} kWh, n={worst_u['n']}) — disclosed, inspect manually"
+        )
     reasons.append(
         f"optimistic-error rate champion {opt_champ:.3f} -> challenger {opt_chal:.3f} "
         + ("(not more dangerous)" if not_more_dangerous else "(MORE optimistic -> blocked)")
@@ -206,6 +260,7 @@ def compare(
         "improvement_ci_95": [round(ci_lo, 4), round(ci_hi, 4)],
         "wins_significantly": bool(wins_significantly),
         "slice_regressions": regressions,
+        "unguarded_slices": unguarded,
         "optimistic_rate_champion": round(opt_champ, 4),
         "optimistic_rate_challenger": round(opt_chal, 4),
         "not_more_dangerous": bool(not_more_dangerous),
