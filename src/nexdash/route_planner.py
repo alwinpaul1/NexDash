@@ -71,9 +71,11 @@ Honest approximations
   driving, and an 11 h daily rest once a calendar day reaches the 9 h daily
   driving cap -- so a long route is split across days (``driver.perDay`` carries
   the per-shift breakdown, ``driver.dailyH`` is the heaviest single day and
-  ``driver.weeklyH`` the heaviest 7-day driving window against 56 h). The reduced (9 h) daily
-  rest, the extended 10 h driving day, multi-manning, and any duty already worked
-  this week are not modelled; the week is assumed fresh at departure.
+  ``driver.weeklyH`` the heaviest 7-day driving window against 56 h). The extended
+  10 h driving day (max 2x/week) is opt-in via ``allow_extended_days`` and any duty
+  already worked this week via ``hours_already_driven_this_week``; with both at
+  their defaults the daily cap stays 9 h and the week is assumed fresh at
+  departure. The reduced (9 h) daily rest and multi-manning are not modelled.
 * **Linear SOC within a chunk.** The SOC profile interpolates linearly across
   each chunk; the model only predicts the chunk endpoints.
 
@@ -131,11 +133,14 @@ GRADIENT_PCT: float = 0.0
 EU561_MAX_DRIVE_BEFORE_BREAK_MIN: float = 4.5 * 60.0  # 4h30 continuous driving
 EU561_BREAK_MIN: float = 45.0                          # mandatory break length
 EU561_DAILY_MAX_DRIVE_H: float = 9.0                   # standard daily driving
+EU561_EXT_DAILY_MAX_DRIVE_H: float = 10.0              # extended daily driving (opt-in)
+EU561_MAX_EXT_DAYS_PER_WEEK: int = 2                   # max 10 h days per week
 EU561_WEEKLY_MAX_DRIVE_H: float = 56.0                 # max weekly driving
 #: Daily rest inserted once the daily driving cap is hit. Regular EU 561 daily
-#: rest is 11 h; the 9 h reduced-rest option (max 3x/week) and the 10 h extended
-#: daily-driving option (max 2x/week) are not modelled — 11 h / 9 h-cap is the
-#: conservative, always-legal choice (it inserts rest at least as early).
+#: rest is 11 h; the 9 h reduced-rest option (max 3x/week) is not modelled — 11 h
+#: is the conservative, always-legal choice (it inserts rest at least as early).
+#: The 10 h extended driving day (max 2x/week) is opt-in via
+#: ``allow_extended_days``; with the default 0 the cap stays 9 h.
 EU561_DAILY_REST_H: float = 11.0
 
 # --- Per-segment speed shaping (geometry mode only) ------------------------- #
@@ -289,17 +294,31 @@ def _parse_iso_opt(value: Optional[str]) -> Optional[datetime]:
 
 
 def _build_stops(
-    waypoints: Optional[list[dict[str, Any]]], total_km: float
+    waypoints: Optional[list[dict[str, Any]]],
+    total_km: float,
+    geometry: Optional[list[list[float]]] = None,
 ) -> list[dict[str, Any]]:
     """Resolve destination waypoints into per-stop legs along the route.
 
     Returns one entry per *destination* (the origin, index 0, is excluded), each
-    with its cumulative distance from the origin (great-circle leg lengths scaled
-    so the final stop lands exactly at ``total_km``) plus any per-stop delivery
-    data the caller attached: ``dropWeightKg`` (cargo shed at the stop),
-    ``unloadMin`` (dwell), and ``deliverBy`` (ISO deadline). Returns ``[]`` when
-    there are fewer than two usable waypoints, so the planner falls back to a
-    single continuous leg with constant payload (unchanged legacy behaviour).
+    with its cumulative distance from the origin plus any per-stop delivery data
+    the caller attached: ``dropWeightKg`` (cargo shed at the stop), ``unloadMin``
+    (dwell), and ``deliverBy`` (ISO deadline). Returns ``[]`` when there are fewer
+    than two usable waypoints, so the planner falls back to a single continuous leg
+    with constant payload (unchanged legacy behaviour).
+
+    Distance placement (``cumKm``):
+
+    * **With ``geometry``** (the routing-engine polyline): each waypoint is snapped
+      to the nearest point on the polyline and its ALONG-polyline arc length is
+      accumulated (see :func:`_snap_km_on_geometry`), then rescaled to ``total_km``
+      (the polyline is great-circle-sampled, so its raw arc length underestimates
+      road length — the same rescale used by :func:`_build_chunks`). This puts a
+      payload drop where the truck actually reaches it on a winding road, not where
+      the straight origin->stop line would place it.
+    * **Without geometry** (fallback): the legacy estimate — great-circle leg
+      lengths between consecutive waypoints, scaled so the final stop lands exactly
+      at ``total_km``. Byte-identical to before this option existed.
     """
     if not waypoints or total_km <= 0:
         return []
@@ -307,26 +326,61 @@ def _build_stops(
     if len(pts) < 2:
         return []
     coords = [(float(w["lat"]), float(w["lng"])) for w in pts]
-    legs = [_haversine_km(coords[i - 1], coords[i]) for i in range(1, len(coords))]
-    gc_total = sum(legs)
-    if gc_total <= 0:
-        return []
-    scale = total_km / gc_total
+
+    # Geometry mode: snap each waypoint onto the road polyline and accumulate its
+    # along-polyline arc length, rescaled to the routing engine's total_km. Only
+    # used when EVERY destination snaps successfully; any failure falls back to the
+    # great-circle estimate so a partial/garbage polyline never silently mis-places
+    # a single stop.
+    snapped_cum: Optional[list[float]] = None
+    snap_geo = _snap_km_on_geometry(coords[0], geometry)
+    if snap_geo is not None:
+        poly_total = snap_geo[1]
+        scale_geo = total_km / poly_total if poly_total > 0 else 0.0
+        if scale_geo > 0:
+            acc: list[float] = []
+            ok = True
+            for i in range(1, len(pts)):
+                snap = _snap_km_on_geometry(coords[i], geometry)
+                if snap is None:
+                    ok = False
+                    break
+                acc.append(snap[0] * scale_geo)
+            if ok and acc:
+                snapped_cum = acc
 
     stops: list[dict[str, Any]] = []
-    cum = 0.0
-    for i in range(1, len(pts)):
-        cum += legs[i - 1] * scale
-        w = pts[i]
-        stops.append(
-            {
-                "label": w.get("label") or f"Stop {i}",
-                "cumKm": min(total_km, round(cum, 3)),
-                "dropWeightKg": max(0.0, float(w.get("dropWeightKg", 0) or 0)),
-                "unloadMin": max(0.0, float(w.get("unloadMin", 0) or 0)),
-                "deliverBy": w.get("deliverBy") or None,
-            }
-        )
+    if snapped_cum is not None:
+        for i in range(1, len(pts)):
+            w = pts[i]
+            stops.append(
+                {
+                    "label": w.get("label") or f"Stop {i}",
+                    "cumKm": min(total_km, round(snapped_cum[i - 1], 3)),
+                    "dropWeightKg": max(0.0, float(w.get("dropWeightKg", 0) or 0)),
+                    "unloadMin": max(0.0, float(w.get("unloadMin", 0) or 0)),
+                    "deliverBy": w.get("deliverBy") or None,
+                }
+            )
+    else:
+        legs = [_haversine_km(coords[i - 1], coords[i]) for i in range(1, len(coords))]
+        gc_total = sum(legs)
+        if gc_total <= 0:
+            return []
+        scale = total_km / gc_total
+        cum = 0.0
+        for i in range(1, len(pts)):
+            cum += legs[i - 1] * scale
+            w = pts[i]
+            stops.append(
+                {
+                    "label": w.get("label") or f"Stop {i}",
+                    "cumKm": min(total_km, round(cum, 3)),
+                    "dropWeightKg": max(0.0, float(w.get("dropWeightKg", 0) or 0)),
+                    "unloadMin": max(0.0, float(w.get("unloadMin", 0) or 0)),
+                    "deliverBy": w.get("deliverBy") or None,
+                }
+            )
     stops[-1]["cumKm"] = total_km  # final destination sits exactly at route end
     return stops
 
@@ -346,6 +400,8 @@ def plan_route(
     waypoints: Optional[list[dict[str, Any]]] = None,
     geometry: Optional[list[list[float]]] = None,
     leg_timings: Optional[list[dict[str, Any]]] = None,
+    allow_extended_days: int = 0,
+    hours_already_driven_this_week: float = 0.0,
     model_path: Union[str, Path] = DEFAULT_MODEL_PATH,
 ) -> dict[str, Any]:
     """Simulate SOC drain + charging + driver hours over a route.
@@ -374,6 +430,19 @@ def plan_route(
             engine. When present the planner enriches it (elevation gradient +
             weather) and simulates SOC per enriched segment; when absent it
             falls back to the flat-route approximation.
+        allow_extended_days: How many of this trip's calendar days may use the
+            EU 561 extended 10 h driving cap instead of the standard 9 h (clamped
+            to ``[0, EU561_MAX_EXT_DAYS_PER_WEEK]`` = ``[0, 2]``). A day "uses" an
+            extended slot the moment its driving crosses 9 h; once the allowance
+            is spent later days revert to the 9 h cap (inserting the 11 h rest
+            earlier). With the default ``0`` every day caps at 9 h and the output
+            is byte-identical to before this option existed.
+        hours_already_driven_this_week: Driving hours already worked earlier in
+            the current EU 561 fixed week, before this trip's departure (clamped
+            ``>= 0``). Seeded as prior driving into the heaviest 7-day window so a
+            mid-week driver sits closer to the 56 h weekly cap and ``eu561ok``
+            reflects it. With the default ``0.0`` the week is assumed fresh at
+            departure, exactly as before.
         model_path: Path to the trained energy model artifact.
 
     Returns:
@@ -393,6 +462,11 @@ def plan_route(
     start_soc = min(100.0, max(0.0, float(start_soc)))
     min_soc = min(100.0, max(0.0, float(min_soc)))
     reserve_pct = max(0.0, min(100.0, float(reserve_pct)))
+    # EU 561 narrowings (opt-in; defaults reproduce today's output exactly).
+    # allow_extended_days: how many days may use the 10 h cap (clamped [0, 2]).
+    allow_extended_days = int(max(0, min(EU561_MAX_EXT_DAYS_PER_WEEK, int(allow_extended_days))))
+    # hours_already_driven_this_week: prior duty seeded into the weekly window.
+    hours_already_driven_this_week = max(0.0, float(hours_already_driven_this_week))
 
     distance_km = max(0.0, float(distance_km))
     duration_h = max(0.0, float(duration_s)) / 3600.0
@@ -432,10 +506,22 @@ def plan_route(
     day_breaks = 0
     total_daily_rest_min = 0.0
     per_day: list[dict[str, Any]] = []
+    # Extended-day accounting: a day's applied driving cap is 10 h while extended
+    # slots remain (or this day already became extended), else 9 h. A day "uses" a
+    # slot the moment its driving crosses 9 h. `day_extended` is the current day's
+    # flag, recorded on each per_day entry.
+    ext_days_used = 0
+    day_extended = False
+
+    def _day_cap_h() -> float:
+        """Applied daily driving cap (h) for the current day, EU 561 extended-aware."""
+        if day_extended or ext_days_used < allow_extended_days:
+            return EU561_EXT_DAILY_MAX_DRIVE_H
+        return EU561_DAILY_MAX_DRIVE_H
 
     # Per-destination legs (for per-stop SOC/ETA, payload decay, deliver-by).
     starting_payload_t = payload_t
-    stops_meta = _build_stops(waypoints, distance_km)
+    stops_meta = _build_stops(waypoints, distance_km, geometry)
     stops_out: list[dict[str, Any]] = []
     next_stop_idx = 0
 
@@ -687,8 +773,10 @@ def plan_route(
         # --- EU 561 daily driving cap: insert an 11 h overnight rest. ---
         # Checked before the 4.5 h break so the daily limit takes priority; an
         # 11 h rest also satisfies the 45 min break, splitting a long route across
-        # calendar days so no single day exceeds the 9 h driving limit.
-        if day_drive_min + chunk_drive_min > EU561_DAILY_MAX_DRIVE_H * 60.0:
+        # calendar days so no single day exceeds the applied driving limit. The cap
+        # is 10 h while extended slots remain (opt-in via allow_extended_days), else
+        # the standard 9 h — so with the default the rest lands exactly as before.
+        if day_drive_min + chunk_drive_min > _day_cap_h() * 60.0:
             if seg_open:
                 _close_drive_segment()
             per_day.append(
@@ -697,6 +785,7 @@ def plan_route(
                     "dateLabel": clock.strftime("%a %d %b"),
                     "drivingH": round(day_drive_min / 60.0, 2),
                     "breaks": day_breaks,
+                    "extended": day_extended,
                 }
             )
             rest_start = clock
@@ -717,6 +806,7 @@ def plan_route(
             drive_since_break_min = 0.0  # the 11 h rest also clears the break clock
             day_breaks = 0
             day_index += 1
+            day_extended = False  # a fresh day starts on the standard cap
             seg_open = True
             seg_soc_start = soc
             seg_start_clock = clock
@@ -758,6 +848,19 @@ def plan_route(
         total_drive_min += chunk_drive_min
         day_drive_min += chunk_drive_min
         week_drive_min += chunk_drive_min
+
+        # The moment the current day's driving crosses the standard 9 h cap it has
+        # used an extended (10 h) slot: mark it so the rest of the day keeps the
+        # 10 h cap, and consume one allowance so later days revert to 9 h once the
+        # slots run out. Only fires when allow_extended_days > 0 (else the rollover
+        # above already inserted the rest at 9 h and the day never reaches here >9 h).
+        if (
+            not day_extended
+            and ext_days_used < allow_extended_days
+            and day_drive_min > EU561_DAILY_MAX_DRIVE_H * 60.0 + 1e-9
+        ):
+            day_extended = True
+            ext_days_used += 1
 
         soc_profile.append({"distKm": round(cum_km, 1), "soc": round(soc, 2)})
 
@@ -823,6 +926,7 @@ def plan_route(
             "dateLabel": clock.strftime("%a %d %b"),
             "drivingH": round(day_drive_min / 60.0, 2),
             "breaks": day_breaks,
+            "extended": day_extended,
         }
     )
 
@@ -845,15 +949,32 @@ def plan_route(
     # Compliant, not the false "Violation" the single-shift model used to flag);
     # the weekly cap is checked against true accrued driving.
     max_day_drive_h = max((d["drivingH"] for d in per_day), default=driving_h)
+    # Per-day legality is judged against each day's APPLIED cap: an extended day is
+    # legal up to 10 h, a standard day up to 9 h. With allow_extended_days=0 no day
+    # is extended, so this is exactly the old "every day <= 9 h" check.
+    daily_ok = all(
+        d["drivingH"]
+        <= (EU561_EXT_DAILY_MAX_DRIVE_H if d.get("extended") else EU561_DAILY_MAX_DRIVE_H)
+        + 1e-6
+        for d in per_day
+    )
     # weeklyH is the heaviest 7-CONSECUTIVE-DAY driving window, not the whole-trip
     # total: EU 561's 56 h is a weekly (rolling) cap, so a multi-week haul must not
-    # be falsely flagged. Assumes a fresh week at departure (documented).
+    # be falsely flagged. `hours_already_driven_this_week` is prepended as prior
+    # driving (one synthetic leading day) so a mid-week departure starts closer to
+    # the 56 h cap; with the default 0.0 the week is fresh and the window is the
+    # trip's own days exactly as before.
     _per_day_h = [d["drivingH"] for d in per_day]
+    _window_h = (
+        [hours_already_driven_this_week] + _per_day_h
+        if hours_already_driven_this_week > 0
+        else _per_day_h
+    )
     week_drive_h = max(
-        (sum(_per_day_h[i : i + 7]) for i in range(len(_per_day_h))), default=driving_h
+        (sum(_window_h[i : i + 7]) for i in range(len(_window_h))), default=driving_h
     )
     eu561ok = (
-        max_day_drive_h <= EU561_DAILY_MAX_DRIVE_H + 1e-6
+        daily_ok
         and week_drive_h <= EU561_WEEKLY_MAX_DRIVE_H + 1e-6
     )
 
@@ -908,13 +1029,43 @@ def plan_route(
         )
     else:
         assumptions.append("Single average speed applied to every segment (flat fallback).")
-    assumptions.append(
-        "Driver hours follow EU 561: a 45-minute break after 4.5 hours of driving, and an "
-        "11-hour daily rest once the 9-hour daily driving limit is reached — so a long route is "
-        "split across calendar days and arrival times include the overnight rests. Weekly driving "
-        "is capped at 56 hours assuming a fresh week at departure; reduced/compensated rest, "
-        "the extended 10-hour day, multi-manning, and hours already worked this week are not modelled."
-    )
+    # With BOTH defaults (allow_extended_days=0, hours_already_driven_this_week=0.0)
+    # this caveat is emitted verbatim — byte-identical to before these options
+    # existed. When an option is opted into, the corresponding "not modelled"
+    # clause NARROWS (it is now modelled), per the honest-limitations contract.
+    if allow_extended_days == 0 and hours_already_driven_this_week == 0.0:
+        assumptions.append(
+            "Driver hours follow EU 561: a 45-minute break after 4.5 hours of driving, and an "
+            "11-hour daily rest once the 9-hour daily driving limit is reached — so a long route is "
+            "split across calendar days and arrival times include the overnight rests. Weekly driving "
+            "is capped at 56 hours assuming a fresh week at departure; reduced/compensated rest, "
+            "the extended 10-hour day, multi-manning, and hours already worked this week are not modelled."
+        )
+    else:
+        _not_modelled = ["reduced/compensated rest", "multi-manning"]
+        if allow_extended_days > 0:
+            _daily_cap_clause = (
+                f"the daily driving limit is reached (up to {allow_extended_days} day(s) "
+                f"of this trip may use the extended 10-hour cap, used {ext_days_used}; "
+                "the rest cap at 9 hours)"
+            )
+        else:
+            _daily_cap_clause = "the 9-hour daily driving limit is reached"
+            _not_modelled.append("the extended 10-hour day")
+        if hours_already_driven_this_week > 0:
+            _week_clause = (
+                f"is capped at 56 hours, seeded with {round(hours_already_driven_this_week, 1)} "
+                "hour(s) already driven earlier this week"
+            )
+        else:
+            _week_clause = "is capped at 56 hours assuming a fresh week at departure"
+            _not_modelled.append("hours already worked this week")
+        assumptions.append(
+            "Driver hours follow EU 561: a 45-minute break after 4.5 hours of driving, and an "
+            f"11-hour daily rest once {_daily_cap_clause} — so a long route is "
+            "split across calendar days and arrival times include the overnight rests. Weekly driving "
+            f"{_week_clause}; " + ", ".join(_not_modelled) + " are not modelled."
+        )
     if n_low_confidence > 0:
         assumptions.append(
             f"LOW CONFIDENCE on {n_low_confidence} segment(s): the data-driven model "
@@ -1193,6 +1344,64 @@ def _interp_on_geometry(
             return (round(lat, 5), round(lng, 5))
         acc += d
     return (round(pts[-1][0], 5), round(pts[-1][1], 5))
+
+
+def _snap_km_on_geometry(
+    point: tuple[float, float],
+    geometry: Optional[list[list[float]]],
+) -> Optional[tuple[float, float]]:
+    """Snap ``point`` to the nearest spot on the road polyline; return its
+    ALONG-polyline arc length and the polyline's total arc length (both km).
+
+    Mirrors :func:`_interp_on_geometry` (same vertex walk, same
+    :func:`_haversine_km` between vertices) but in reverse: instead of mapping an
+    arc length to a coordinate, it maps a coordinate to its arc length. For each
+    polyline segment the waypoint is projected onto the segment in a local
+    equirectangular plane (lat/lng scaled by ``cos(lat)`` — faithful for the short
+    hops of a downsampled polyline), the projection clamped to the segment, and the
+    great-circle distance to that foot point measured. The closest foot point wins;
+    its arc length is the summed segment lengths before it plus the projected
+    fraction of its own segment. Returns ``None`` when the geometry is unusable so
+    the caller falls back to the great-circle leg estimate.
+
+    WHY: payload-drop placement (``_build_stops``/``_payload_t_at``) previously
+    located a stop by scaling straight-line origin->...->stop leg lengths, which
+    can sit a drop kilometres off where the truck actually passes it on a winding
+    road — moving the payload step onto the wrong chunk. Snapping to true road
+    distance puts the drop where the route really reaches it.
+    """
+    if not geometry:
+        return None
+    pts = [(float(p[0]), float(p[1])) for p in geometry if len(p) >= 2]
+    if len(pts) < 2:
+        return None
+    seg = [_haversine_km(pts[i - 1], pts[i]) for i in range(1, len(pts))]
+    total = sum(seg)
+    if total <= 0:
+        return None
+
+    plat, plng = point
+    # Equirectangular scaling so 1 deg lng ≈ 1 deg lat in distance near this lat.
+    coslat = math.cos(math.radians(plat))
+    best_dist = float("inf")
+    best_arc = 0.0
+    acc = 0.0
+    for i, d in enumerate(seg):
+        ax, ay = pts[i][0], pts[i][1] * coslat
+        bx, by = pts[i + 1][0], pts[i + 1][1] * coslat
+        px, py = plat, plng * coslat
+        dx, dy = bx - ax, by - ay
+        denom = dx * dx + dy * dy
+        t = 0.0 if denom <= 0 else ((px - ax) * dx + (py - ay) * dy) / denom
+        t = max(0.0, min(1.0, t))
+        foot = (pts[i][0] + (pts[i + 1][0] - pts[i][0]) * t,
+                pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t)
+        gd = _haversine_km(point, foot)
+        if gd < best_dist:
+            best_dist = gd
+            best_arc = acc + d * t
+        acc += d
+    return (best_arc, total)
 
 
 __all__ = ["plan_route"]

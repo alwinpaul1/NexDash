@@ -5,12 +5,18 @@ deliverable the brief asks for. Given a new batch of operating data (e.g. a
 month of real telematics) and the training reference, it answers three questions:
 
 * **Did the inputs move?** Per-feature Population Stability Index (PSI) on fixed
-  quantile bins taken from the training reference. **PSI alone drives the tier and
-  the rollup verdict** (industry-standard tiers: < 0.1 stable, 0.1-0.25 watch,
-  > 0.25 significant drift). A two-sample Kolmogorov-Smirnov p-value is also
-  reported per feature as a *supplementary diagnostic only* — it does NOT escalate
-  the verdict (two-sample KS p-values collapse toward 0 at large n even on
-  operationally trivial shifts, so wiring it into the tier would over-alert).
+  quantile bins taken from the training reference. **PSI is primary: it sets the
+  base tier and is the only thing that can *originate* an alert** (industry-standard
+  tiers: < 0.1 stable, 0.1-0.25 watch, > 0.25 significant drift). A two-sample
+  Kolmogorov-Smirnov test is reported per feature (both the statistic ``D`` and the
+  p-value) and is wired into the verdict through *effect size, not significance*:
+  it can bump a feature's tier by AT MOST one step (e.g. stable -> watch) and ONLY
+  when the shift is both statistically significant (p < 0.01) AND large enough to
+  matter (D > ``KS_D_MIN``). The raw p-value is deliberately NOT trusted on its own:
+  two-sample KS p-values collapse toward 0 at large n even on operationally trivial
+  shifts, so a tiny-but-significant large-n shift must NOT escalate (the documented
+  over-alert pathology). KS can thus *confirm and sharpen* an alert, never create
+  one from nothing.
 * **Is the relationship still holding?** When the new batch carries the true
   energy labels, a realized-residual monitor compares live MAE / mean bias
   against the model's training-time error — the only signal grounded in truth,
@@ -45,6 +51,19 @@ __all__ = ["psi", "feature_drift", "residual_monitor", "drift_report", "main"]
 PSI_WATCH: float = 0.10
 PSI_DRIFT: float = 0.25
 
+#: Ordered tiers, worst last — used to bump a tier by one bounded step.
+_TIER_ORDER: tuple[str, ...] = ("stable", "watch", "drift")
+
+#: Minimum KS statistic D for an *effect-size* escalation. D is the max gap
+#: between the two empirical CDFs (0 = identical, 1 = disjoint support), so it is
+#: independent of sample size — unlike the p-value, it does not shrink as n grows.
+#: 0.1 = a 10-percentage-point CDF gap, the floor below which a "significant"
+#: difference is operationally trivial and must not raise the verdict.
+KS_D_MIN: float = 0.10
+
+#: KS p-value below which a shift is treated as statistically real (not noise).
+KS_P_MAX: float = 0.01
+
 
 def psi(expected: np.ndarray, actual: np.ndarray, *, bins: int = 10) -> float:
     """Population Stability Index between a reference and a current sample.
@@ -75,19 +94,26 @@ def psi(expected: np.ndarray, actual: np.ndarray, *, bins: int = 10) -> float:
     return float(np.sum((a_pct - e_pct) * np.log(a_pct / e_pct)))
 
 
-def _ks_pvalue(expected: np.ndarray, actual: np.ndarray) -> Optional[float]:
-    """Two-sample KS p-value (low => distributions differ), or None if scipy absent."""
+def _ks_stat_pvalue(
+    expected: np.ndarray, actual: np.ndarray
+) -> tuple[Optional[float], Optional[float]]:
+    """Two-sample KS ``(statistic D, p-value)``, or ``(None, None)`` if scipy absent.
+
+    ``D`` is the maximum gap between the two empirical CDFs (effect size; sample-size
+    independent); the p-value is its significance (collapses toward 0 at large n).
+    """
     try:
         from scipy.stats import ks_2samp
     except Exception:  # pragma: no cover - scipy is a declared dep but stay soft
-        return None
+        return None, None
     expected = np.asarray(expected, dtype=float)
     actual = np.asarray(actual, dtype=float)
     expected = expected[np.isfinite(expected)]
     actual = actual[np.isfinite(actual)]
     if expected.size < 2 or actual.size < 2:
-        return None
-    return float(ks_2samp(expected, actual).pvalue)
+        return None, None
+    res = ks_2samp(expected, actual)
+    return float(res.statistic), float(res.pvalue)
 
 
 def _tier(psi_value: float) -> str:
@@ -98,25 +124,62 @@ def _tier(psi_value: float) -> str:
     return "drift"
 
 
+def _escalate(
+    psi_tier: str,
+    ks_stat: Optional[float],
+    ks_p: Optional[float],
+    n: int,
+) -> str:
+    """Bump the PSI tier by AT MOST one step on a genuine, large-enough KS shift.
+
+    The escalation fires only when the KS shift is both statistically real
+    (``ks_p < KS_P_MAX``) AND large in effect size (``ks_stat > KS_D_MIN``). Using
+    ``D`` as the gate — not the p-value alone — is what stops the over-alert
+    pathology: a trivially small shift that becomes "significant" purely because n
+    is huge has ``D`` near 0, fails the effect-size gate, and does NOT escalate.
+
+    KS can therefore only *confirm* an alert PSI already sees forming (e.g. lift a
+    borderline ``stable`` to ``watch``); it can never originate one beyond a single
+    bounded step, and ``drift`` (the top tier) is never exceeded. ``n`` is accepted
+    for signature clarity / future logging but intentionally does not relax the
+    gates — the whole point is that the verdict is n-independent.
+    """
+    if ks_stat is None or ks_p is None:
+        return psi_tier
+    if not (ks_p < KS_P_MAX and ks_stat > KS_D_MIN):
+        return psi_tier
+    idx = _TIER_ORDER.index(psi_tier)
+    return _TIER_ORDER[min(idx + 1, len(_TIER_ORDER) - 1)]
+
+
 def feature_drift(
     reference: pd.DataFrame,
     current: pd.DataFrame,
     *,
     feature_columns: Optional[list[str]] = None,
 ) -> dict[str, dict[str, Any]]:
-    """Per-feature PSI + KS p-value + tier for every model input feature."""
+    """Per-feature PSI + KS (statistic D & p-value) + tier for every input feature.
+
+    PSI sets the base tier; the KS statistic/p-value may then bump it by one bounded
+    step via :func:`_escalate` (effect size, never the n-inflated p-value alone).
+    """
     cols = feature_columns or list(FEATURE_COLUMNS)
     out: dict[str, dict[str, Any]] = {}
+    n = int(len(current))
     for col in cols:
         if col not in reference.columns or col not in current.columns:
             continue
         ref = reference[col].to_numpy(dtype=float)
         cur = current[col].to_numpy(dtype=float)
         p = psi(ref, cur)
+        ks_stat, ks_p = _ks_stat_pvalue(ref, cur)
+        psi_tier = _tier(p)
         out[col] = {
             "psi": round(p, 4),
-            "ks_pvalue": (round(v, 6) if (v := _ks_pvalue(ref, cur)) is not None else None),
-            "tier": _tier(p),
+            "ks_stat": (round(ks_stat, 6) if ks_stat is not None else None),
+            "ks_pvalue": (round(ks_p, 6) if ks_p is not None else None),
+            "psi_tier": psi_tier,
+            "tier": _escalate(psi_tier, ks_stat, ks_p, n),
         }
     return out
 

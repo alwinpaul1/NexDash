@@ -618,3 +618,207 @@ def test_measured_per_leg_speed_is_used_when_available(monkeypatch):
     assert result["summary"]["drivingTimeH"] == pytest.approx(200.0 / 50.0, rel=0.03)
     blob = " ".join(result["summary"]["assumptions"]).lower()
     assert "measured" in blob and "gradient heuristic" not in blob
+
+
+# --------------------------------------------------------------------------- #
+# A2-1 — EU 561 extended 10 h driving day (opt-in, max 2x/week)
+# --------------------------------------------------------------------------- #
+# A 9.5 h flat trip (665 km @ 70 km/h, no geometry so drive time == distance/avg).
+_EXT_TRIP = dict(
+    distance_km=665.0, duration_s=665.0 / 70.0 * 3600.0, start_soc=100.0,
+    min_soc=0.0, payload_kg=5000.0, departure="2026-05-30T06:00",
+    model_path=DEFAULT_MODEL_PATH,
+)
+
+
+def test_extended_day_default_is_byte_identical():
+    """WHY (regression-safe): with the default allow_extended_days=0 the planner
+    must behave exactly as before this option existed — the 9 h cap, the 11 h rest
+    that splits a 9.5 h trip across two days, and no `extended` day. If the default
+    drifted, every existing plan would silently change."""
+    base = route_planner.plan_route(**_EXT_TRIP)
+    d = base["summary"]["driver"]
+    assert d["days"] == 2                                   # 9.5 h split across 2 days
+    assert d["dailyH"] <= route_planner.EU561_DAILY_MAX_DRIVE_H + 1e-6
+    assert sum(1 for s in base["segments"] if s.get("type") == "daily_rest") == 1
+    assert all(p["extended"] is False for p in d["perDay"])  # no day used the 10 h cap
+
+
+def test_extended_day_keeps_9_5h_trip_in_one_day():
+    """WHY: the headline of A2-1 — allowing one 10 h day must let a 9.5 h trip finish
+    in a single shift (no overnight rest), where the 9 h default forces a second day.
+    The day must be flagged `extended`, its driving must sit in (9, 10] h, and the
+    plan must still read EU 561-compliant (a 10 h day is legal up to 2x/week)."""
+    ext = route_planner.plan_route(allow_extended_days=1, **_EXT_TRIP)
+    d = ext["summary"]["driver"]
+    assert d["days"] == 1                                   # the 10 h cap absorbs it
+    assert sum(1 for s in ext["segments"] if s.get("type") == "daily_rest") == 0
+    assert 9.0 < d["dailyH"] <= route_planner.EU561_EXT_DAILY_MAX_DRIVE_H + 1e-6
+    assert d["perDay"][0]["extended"] is True              # the slot was consumed
+    assert d["eu561ok"] is True                            # 10 h day is legal
+
+
+def test_extended_days_allowance_is_clamped_and_spent_in_order():
+    """WHY: the allowance is a scarce, clamped resource — once spent, later days must
+    revert to the 9 h cap (EU 561 permits the 10 h day at most 2x/week). Over a trip
+    needing two long days, allow=1 must extend ONLY the first (the second reverts to
+    9 h and inserts its rest early); allow=2 extends both. A clamp above 2 must not
+    grant a third extended day."""
+    long_trip = dict(
+        distance_km=1330.0, duration_s=1330.0 / 70.0 * 3600.0, start_soc=100.0,
+        min_soc=0.0, payload_kg=5000.0, departure="2026-05-30T06:00",
+        model_path=DEFAULT_MODEL_PATH,
+    )
+    one = route_planner.plan_route(allow_extended_days=1, **long_trip)["summary"]["driver"]
+    ext_flags_one = [p["extended"] for p in one["perDay"]]
+    assert ext_flags_one[0] is True                        # first long day extended
+    assert ext_flags_one[1] is False                       # allowance spent -> 9 h cap
+    two = route_planner.plan_route(allow_extended_days=2, **long_trip)["summary"]["driver"]
+    assert sum(1 for p in two["perDay"] if p["extended"]) == 2  # both long days extended
+    # Clamp: asking for 5 cannot extend more days than the 2/week statutory ceiling.
+    clamped = route_planner.plan_route(allow_extended_days=5, **long_trip)["summary"]["driver"]
+    assert sum(1 for p in clamped["perDay"] if p["extended"]) <= route_planner.EU561_MAX_EXT_DAYS_PER_WEEK
+
+
+def test_extended_day_constants_match_eu561():
+    """WHY: downstream code and the assumptions panel key off these constants; they
+    must encode the statutory values (10 h extended cap, max 2 per week)."""
+    assert route_planner.EU561_EXT_DAILY_MAX_DRIVE_H == 10.0
+    assert route_planner.EU561_MAX_EXT_DAYS_PER_WEEK == 2
+
+
+# --------------------------------------------------------------------------- #
+# A2-4 — prior-week duty seed (mid-week driver closer to the 56 h weekly cap)
+# --------------------------------------------------------------------------- #
+# ~50 h of fresh driving (3500 km @ 70 km/h) — compliant on a fresh week.
+_WEEK_TRIP = dict(
+    distance_km=3500.0, duration_s=3500.0 / 70.0 * 3600.0, start_soc=100.0,
+    min_soc=0.0, payload_kg=5000.0, departure="2026-05-30T06:00",
+    model_path=DEFAULT_MODEL_PATH,
+)
+
+
+def test_prior_week_seed_default_is_unchanged():
+    """WHY (regression-safe): default hours_already_driven_this_week=0.0 must assume a
+    fresh week, leaving weeklyH and eu561ok exactly as before. A ~50 h trip is legal
+    on a fresh week and must stay so."""
+    fresh = route_planner.plan_route(**_WEEK_TRIP)["summary"]["driver"]
+    assert fresh["weeklyH"] <= route_planner.EU561_WEEKLY_MAX_DRIVE_H + 1e-6
+    assert fresh["eu561ok"] is True
+
+
+def test_prior_week_seed_pushes_driver_over_weekly_cap():
+    """WHY: the headline of A2-4 — a mid-week driver who already drove earlier this
+    week is closer to the 56 h cap. Seeding 20 h of prior duty into the heaviest
+    7-day window must push a ~50 h trip (legal fresh) over 56 h, flipping eu561ok to
+    False. Without the seed the same trip is compliant — proving the seed is what
+    moves the weekly judgement, not the trip alone."""
+    fresh = route_planner.plan_route(**_WEEK_TRIP)["summary"]["driver"]
+    seeded = route_planner.plan_route(
+        hours_already_driven_this_week=20.0, **_WEEK_TRIP
+    )["summary"]["driver"]
+    assert seeded["weeklyH"] > fresh["weeklyH"]                          # seed raises the window
+    assert seeded["weeklyH"] > route_planner.EU561_WEEKLY_MAX_DRIVE_H    # over the cap
+    assert seeded["eu561ok"] is False                                   # and now non-compliant
+    assert fresh["eu561ok"] is True                                     # vs legal fresh
+
+
+def test_prior_week_seed_is_clamped_non_negative():
+    """WHY (fail-safe): a negative prior-hours value is nonsensical and must not
+    SUBTRACT from the weekly window (which would optimistically hide a real breach).
+    A negative seed is clamped to 0 -> identical to a fresh week."""
+    fresh = route_planner.plan_route(**_WEEK_TRIP)["summary"]["driver"]
+    negative = route_planner.plan_route(
+        hours_already_driven_this_week=-50.0, **_WEEK_TRIP
+    )["summary"]["driver"]
+    assert negative["weeklyH"] == pytest.approx(fresh["weeklyH"])
+    assert negative["eu561ok"] == fresh["eu561ok"]
+
+
+# --------------------------------------------------------------------------- #
+# A2-5 — payload-drop placement on true ROAD distance (geometry mode)
+# --------------------------------------------------------------------------- #
+# A polyline that DETOURS far north between origin and the mid waypoint, then runs
+# straight to the final. Straight-line legs put the mid stop at ~50% of the route;
+# the actual road (the detour) only reaches it at ~88% of the driven distance.
+_DETOUR_GEO = [[52.0, 13.0], [53.0, 13.1], [53.0, 13.4], [52.0, 13.5], [52.0, 14.0]]
+_DETOUR_WPS = [
+    {"lat": 52.0, "lng": 13.0, "label": "O"},
+    {"lat": 52.0, "lng": 13.5, "label": "M", "dropWeightKg": 10000},
+    {"lat": 52.0, "lng": 14.0, "label": "F"},
+]
+
+
+def _flat_enrichment_for(total_km, n=6):
+    """A flat enrich_route() stub matching total_km, so plan_route enters geometry
+    mode deterministically (the snap logic reads the raw polyline, not this)."""
+    d = total_km / n
+    segs, cum = [], 0.0
+    for _ in range(n):
+        cum += d
+        segs.append({"distKm": d, "cumKm": round(cum, 3), "gradientPct": 0.0,
+                     "elevM": 0.0, "temperatureC": 15.0, "windMps": 3.0})
+    return {"segments": segs, "elevationProfile": [{"distKm": 0.0, "elevM": 0.0}],
+            "conditions": {"avgTempC": 15.0, "avgWindMps": 3.0, "windDirDeg": 0.0,
+                           "maxGradientPct": 0.0, "climbM": 0.0, "descentM": 0.0}}
+
+
+def test_snap_km_on_geometry_uses_along_polyline_arc_length():
+    """WHY (unit): the helper must return the ALONG-polyline arc length to the snapped
+    waypoint, not the straight-line distance. The mid waypoint sits at the straight
+    midpoint (great-circle frac 0.5) but, because the road detours north before
+    reaching it, its road arc length is a much larger fraction of the polyline. If
+    the snap returned the chord it would land the drop on the wrong half of the
+    route."""
+    M = (52.0, 13.5)
+    arc, total = route_planner._snap_km_on_geometry(M, _DETOUR_GEO)
+    assert total > 0
+    # The mid stop is reached LATE along the road (>75%), not at the chord's 50%.
+    assert arc / total > 0.75
+    # Final waypoint snaps to the polyline end (arc == total).
+    arc_f, total_f = route_planner._snap_km_on_geometry((52.0, 14.0), _DETOUR_GEO)
+    assert arc_f == pytest.approx(total_f)
+
+
+def test_payload_drop_placed_on_road_distance_with_geometry(monkeypatch):
+    """WHY (the A2-5 headline): a payload drop must be placed where the truck actually
+    REACHES the stop on the road, not where the straight origin->stop line guesses.
+    On a detouring route the road reaches the mid stop near the route's end; the
+    great-circle fallback places it at the midpoint. Same waypoints, same total km —
+    only the presence of geometry differs — must move the drop's distKm
+    substantially (here ~150 km -> ~263 km). This is the load-bearing guard that the
+    snap-to-road arc length actually reaches _build_stops."""
+    total_km = 300.0
+    monkeypatch.setattr(
+        route_planner.geodata, "enrich_route",
+        lambda geometry, departure_iso=None, leg_timings=None: _flat_enrichment_for(total_km),
+    )
+    common = dict(distance_km=total_km, duration_s=total_km / 70.0 * 3600.0,
+                  start_soc=100.0, min_soc=0.0, payload_kg=20000.0,
+                  waypoints=_DETOUR_WPS, model_path=DEFAULT_MODEL_PATH)
+    with_geo = route_planner.plan_route(geometry=_DETOUR_GEO, **common)
+    without_geo = route_planner.plan_route(**common)  # great-circle fallback
+
+    geo_mid = with_geo["stops"][0]["distKm"]
+    chord_mid = without_geo["stops"][0]["distKm"]
+    # Great-circle fallback unchanged: mid at ~half the route.
+    assert chord_mid == pytest.approx(150.0, abs=2.0)
+    # Road distance moves the drop far down-route (detour reached late).
+    assert geo_mid > chord_mid + 50.0
+    assert geo_mid > 0.75 * total_km
+    # Final stop still lands exactly at route end in both modes.
+    assert with_geo["stops"][-1]["distKm"] == pytest.approx(total_km, abs=0.1)
+
+
+def test_payload_drop_no_geometry_is_byte_identical():
+    """WHY (regression-safe): without geometry, stop placement must be the legacy
+    scaled-great-circle estimate, untouched by A2-5. A symmetric O-M-F line must put
+    the mid stop at exactly half the route, as before."""
+    total_km = 400.0
+    plan = route_planner.plan_route(
+        distance_km=total_km, duration_s=total_km / 70.0 * 3600.0, start_soc=100.0,
+        min_soc=0.0, payload_kg=20000.0, waypoints=_DETOUR_WPS,
+        model_path=DEFAULT_MODEL_PATH,
+    )
+    assert plan["stops"][0]["distKm"] == pytest.approx(200.0, abs=2.0)
+    assert plan["stops"][-1]["distKm"] == pytest.approx(total_km, abs=0.1)
