@@ -92,6 +92,23 @@ G: float = 9.81
 #: denominators would make MAPE explode meaninglessly.
 MAPE_FLOOR_KWH: float = 1.0
 
+#: Field-calibration factor mapping the first-principles STEADY-STATE energy
+#: (constant-speed, full-tractive-demand physics; ~1.265 kWh/km warm anchor at
+#: 40 t / 80 km/h / 20 C) DOWN to field-observed laden eActros 600 consumption on
+#: real mixed routes (cited 40 t tests span ~0.88-1.12 kWh/km: ADAC 0.88,
+#: Daimler 15,000 km tour 1.03, Commercial Motor 1.05-1.12; centre ~1.0, where
+#: 0.85 lands the steady-state anchor). Real driving (coasting, eco-driving, traffic flow)
+#: runs below constant-speed physics, a gap the steady-state model cannot capture;
+#: the calibration doc already attributes the steady-state-vs-field gap to exactly
+#: this. Applied ONLY to the DISPLAYED energy headline (summary.energyKwh /
+#: kwhPer100); the SOC walk and EVERY charging/reachability decision use the
+#: un-discounted conservative estimate, so the factor can never delay a charge or
+#: strand the truck. Clamped to (0, 1] at the call site (>1 cannot inflate energy);
+#: 1.0 disables it. REMOVAL CONDITION: retune or remove once the ML model is
+#: retrained against field (not steady-state) labels, or the energy-side speed
+#: model changes. [S3][S4][S5] (see docs/REAL_WORLD_CALIBRATION.md)
+FIELD_CALIBRATION_FACTOR: float = 0.85
+
 # --------------------------------------------------------------------------- #
 # Filesystem paths
 # --------------------------------------------------------------------------- #
@@ -118,6 +135,7 @@ __all__ = [
     "TRUCK",
     "AIR_DENSITY",
     "G",
+    "FIELD_CALIBRATION_FACTOR",
     "ROOT_DIR",
     "DATA_DIR",
     "MODELS_DIR",

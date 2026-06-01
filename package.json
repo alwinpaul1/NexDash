@@ -1,0 +1,14 @@
+{
+  "name": "nexdash",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NexDash — EV Truck Range Intelligence. `npm run dev` starts the FastAPI backend (:8000) and the Vite frontend (:5173) together and handles busy ports gracefully (the backend bumps to the next free port and Vite's /api proxy follows it; Vite auto-bumps its own port).",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:backend": "PYTHONPATH=src .venv/bin/python dashboard/server.py",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "preview": "npm --prefix frontend run preview",
+    "test": "PYTHONPATH=src .venv/bin/python -m pytest -q"
+  }
+}

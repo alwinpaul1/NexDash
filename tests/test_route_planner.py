@@ -235,6 +235,87 @@ def test_charging_stops_inserted_on_long_low_soc_route(monkeypatch):
     assert result["summary"]["chargingStops"] == len(result["chargingStops"])
 
 
+def test_field_calibration_scales_displayed_energy_only(monkeypatch):
+    """The field-calibration factor lowers the DISPLAYED energy headline but must
+    NOT change the SOC walk or any charging decision.
+
+    Safety contract: charging/reachability run on the conservative (un-discounted)
+    estimate, so a lower displayed figure can never delay a charge or strand the
+    truck. Verifies (1) energyKwh/kwhPer100 scale ~linearly with the factor, and
+    (2) on a charge-requiring route the chargingStops, arrival SOC, per-stop charge
+    kWh and the FULL SOC profile are byte-identical at factor 0.85 vs 1.0.
+    """
+    monkeypatch.setattr(
+        route_planner.geodata,
+        "enrich_route",
+        lambda geometry, departure_iso=None: _fake_enrichment(
+            gradient_pct=3.0, n_segments=16, dist_km_each=50.0
+        ),
+    )
+    common = dict(
+        distance_km=800.0,
+        duration_s=800.0 / 70.0 * 3600.0,
+        start_soc=60.0,
+        min_soc=15.0,
+        payload_kg=15000.0,
+        departure="2026-05-30T06:00",
+        geometry=GEOMETRY,
+        model_path=DEFAULT_MODEL_PATH,
+    )
+    full = route_planner.plan_route(field_calibration=1.0, **common)
+    cal = route_planner.plan_route(field_calibration=0.85, **common)
+
+    # (1) Displayed energy scales by the factor (small tolerance for rounding).
+    assert cal["summary"]["energyKwh"] == pytest.approx(
+        0.85 * full["summary"]["energyKwh"], rel=0.01
+    )
+    assert cal["summary"]["kwhPer100"] == pytest.approx(
+        0.85 * full["summary"]["kwhPer100"], rel=0.01
+    )
+    # (2) SAFETY: the charging plan and SOC trajectory are untouched by the factor.
+    assert cal["summary"]["chargingStops"] == full["summary"]["chargingStops"]
+    assert cal["summary"]["arrivalSoc"] == full["summary"]["arrivalSoc"]
+    assert [c["kWh"] for c in cal["chargingStops"]] == [
+        c["kWh"] for c in full["chargingStops"]
+    ]
+    assert cal["socProfile"] == full["socProfile"]
+
+
+def test_field_calibration_is_clamped_to_unit_interval(monkeypatch):
+    """The factor can only LOWER energy: values >1 clamp to 1.0 (no inflation),
+    and the default (None-equivalent) leaves the headline at the conservative
+    figure when set to 1.0."""
+    monkeypatch.setattr(
+        route_planner.geodata,
+        "enrich_route",
+        lambda geometry, departure_iso=None: _fake_enrichment(gradient_pct=0.0),
+    )
+    common = dict(
+        distance_km=200.0,
+        duration_s=200.0 / 70.0 * 3600.0,
+        start_soc=100.0,
+        min_soc=0.0,
+        payload_kg=12000.0,
+        departure="2026-05-30T08:00",
+        geometry=GEOMETRY,
+        model_path=DEFAULT_MODEL_PATH,
+    )
+    base = route_planner.plan_route(field_calibration=1.0, **common)
+    inflated = route_planner.plan_route(field_calibration=1.5, **common)
+    assert inflated["summary"]["energyKwh"] == base["summary"]["energyKwh"]
+    # Lower clamp: a positive value below 0.5 floors at 0.5 (no absurd headline).
+    floored = route_planner.plan_route(field_calibration=0.3, **common)
+    half = route_planner.plan_route(field_calibration=0.5, **common)
+    assert floored["summary"]["energyKwh"] == half["summary"]["energyKwh"]
+    # Module default: omitting the kwarg matches passing the configured default,
+    # so a drift in FIELD_CALIBRATION_FACTOR can't silently change behaviour.
+    default = route_planner.plan_route(**common)
+    explicit = route_planner.plan_route(
+        field_calibration=route_planner.FIELD_CALIBRATION_FACTOR, **common
+    )
+    assert default["summary"]["energyKwh"] == explicit["summary"]["energyKwh"]
+
+
 # --------------------------------------------------------------------------- #
 # Flat fallback (no geometry)
 # --------------------------------------------------------------------------- #
@@ -313,13 +394,15 @@ def test_geometry_energy_invariant_to_polyline_density(monkeypatch):
 def test_short_reachable_trip_inserts_no_charge():
     """A short trip that finishes above the hard floor must NOT force a charge.
 
-    WHY: the trigger used floor = min_soc + reserve and fired whenever any chunk
-    merely dipped into the reserve band, so a 30 km hop from 20% SOC got a full
-    ~76 min recharge AT THE ORIGIN even though it arrives ~15% — comfortably above
-    the 10% hard floor — directly contradicting check_reachability, which calls
-    the identical trip reachable. The planner now only charges if continuing would
-    breach the HARD min_soc before the destination. Fails if the look-ahead is
-    removed (the reserve band must be a soft cushion, not a hard origin trigger).
+    WHY: the en-route floor is max(min_soc, reserve) -- here max(10, 20) = 20% --
+    and a chunk dipping into the reserve band would naively trigger a charge. But a
+    30 km hop from 20% SOC arrives ~15%: BELOW the 20% reserve cushion yet ABOVE the
+    10% HARD min_soc, so it must NOT force a ~76 min recharge AT THE ORIGIN -- that
+    would contradict check_reachability, which calls the identical trip reachable.
+    The planner only charges if continuing would breach the HARD min_soc before the
+    destination. Fails if the look-ahead is removed (the reserve band is a soft
+    cushion, not a hard origin trigger) -- and pins that the floor is max(), not the
+    old min_soc + reserve sum (which would have reserved 30% here).
     """
     result = route_planner.plan_route(
         distance_km=30.0,
@@ -327,7 +410,7 @@ def test_short_reachable_trip_inserts_no_charge():
         start_soc=20.0,
         min_soc=10.0,
         payload_kg=0.0,
-        reserve_pct=10.0,
+        reserve_pct=20.0,   # reserve (20) > min_soc (10): a real soft band to dip into
         temperature_c=15.0,
         model_path=DEFAULT_MODEL_PATH,
     )
@@ -380,11 +463,19 @@ def test_payload_decay_makes_constant_payload_the_conservative_estimate():
 
 
 def test_per_stop_arrival_soc_and_eta_reported():
-    """Each destination must carry its own arrival SOC + ETA; SOC falls along route."""
-    plan = _multistop_plan()
+    """Each destination must carry its own arrival SOC + ETA; SOC falls along route.
+
+    Uses a 300 km route (~390 kWh < the 600 kWh battery) so it genuinely finishes
+    WITHOUT a charge -- only then is "arrival SOC non-increasing leg over leg" a
+    valid invariant. (The 500 km default needs >1 battery, so it charges mid-route,
+    which legitimately raises a later stop's SOC above an earlier one -- that path
+    is covered by the charging tests, not this leg-monotonicity check.)
+    """
+    plan = _multistop_plan(distance_km=300.0, duration_s=300.0 / 70.0 * 3600.0)
     stops = plan["stops"]
     assert len(stops) == 2  # two destinations (origin excluded)
     assert all("etaIso" in s and "arriveSoc" in s for s in stops)
+    assert not plan["chargingStops"], "300 km must finish without charging for this invariant"
     # No charging here, so arrival SOC must be non-increasing leg over leg.
     assert stops[0]["arriveSoc"] >= stops[1]["arriveSoc"]
     assert stops[-1]["isFinal"] is True and stops[0]["isFinal"] is False
@@ -426,17 +517,19 @@ def test_out_of_envelope_grade_is_flagged_low_confidence(monkeypatch):
     """A sustained steep/cold grade must trip the planner's physics cross-check.
 
     WHY (the dangerous direction): the data-driven model under-predicts energy on
-    terrain outside its training envelope (a sustained 6% grade never occurs in
-    the gradient-capped training data). Trusting that optimistic number would
-    delay a charge and risk stranding the truck. The planner must mirror
-    range.check_reachability: when physics exceeds the model beyond the divergence
-    band, use the conservative value AND surface a LOW CONFIDENCE assumption.
-    A normal flat route must NOT be flagged (no false alarms).
+    terrain outside its training envelope. Training caps gradient at +/-6% for a
+    ~25 km chunk (the 1500 m net-climb ceiling), so a sustained +10% grade is
+    beyond what the model has seen and it saturates below physics. Trusting that
+    optimistic number would delay a charge and risk stranding the truck. The
+    planner must mirror range.check_reachability: when physics exceeds the model
+    beyond the divergence band, use the conservative value AND surface a LOW
+    CONFIDENCE assumption. A normal flat route must NOT be flagged (no false
+    alarms).
     """
     monkeypatch.setattr(
         route_planner.geodata, "enrich_route",
         lambda geometry, departure_iso=None: _fake_enrichment(
-            gradient_pct=6.0, n_segments=6, dist_km_each=25.0, temp=-15.0, wind=9.0
+            gradient_pct=10.0, n_segments=6, dist_km_each=25.0, temp=-15.0, wind=9.0
         ),
     )
     steep = route_planner.plan_route(
@@ -511,25 +604,26 @@ def test_per_segment_speed_preserves_total_eta(monkeypatch):
     assert result["summary"]["drivingTimeH"] == pytest.approx(dur_s / 3600.0, rel=0.02)
 
 
-def test_adaptive_target_soc_tops_up_only_as_much_as_needed():
-    """WHY: the old gate always charged to a fixed 80%. Adaptive charging must (a) top
-    up only as high as the rest of the route needs when that's below the soft ceiling
-    (saving the slow tail), (b) dip INTO the tail (>ceiling) when one charge can still
-    finish the trip, and (c) cap at the soft ceiling when more than one charge is
-    needed — never exceeding 100% nor charging below the arrival SOC."""
+def test_adaptive_target_soc_charges_to_target_or_into_tail():
+    """WHY: the charge policy is 'charge UP TO the target' (the long-haul 'charge it
+    up' behaviour), NOT 'just enough'. A stop must (a) top to the soft-ceiling TARGET
+    even when the remaining route would need less (so it leaves a wide buffer), (b)
+    reach ABOVE the target into the slow 80->100% tail when one charge needs more to
+    finish the trip, and (c) when even 100% can't finish in one stop, charge to the
+    target and stop again later — never exceeding 100% nor charging below arrival."""
     batt = 600.0
     short = route_planner._adaptive_target_soc(
         remaining_energy_kwh=0.12 * batt, arrive_soc=15.0, battery_kwh=batt,
         charge_floor=20.0, soft_ceiling_soc=80.0)
-    assert 20.0 < short < 80.0                       # (a) only as high as needed
+    assert short == pytest.approx(80.0)              # (a) tops to the TARGET, not just-enough
     tail = route_planner._adaptive_target_soc(
         remaining_energy_kwh=0.70 * batt, arrive_soc=15.0, battery_kwh=batt,
         charge_floor=20.0, soft_ceiling_soc=80.0)
-    assert 80.0 < tail <= 100.0                      # (b) into the tail on demand
+    assert 80.0 < tail <= 100.0                      # (b) into the tail when one stop needs it
     multi = route_planner._adaptive_target_soc(
         remaining_energy_kwh=1.50 * batt, arrive_soc=15.0, battery_kwh=batt,
         charge_floor=20.0, soft_ceiling_soc=80.0)
-    assert multi == pytest.approx(80.0)              # (c) capped, finish later
+    assert multi == pytest.approx(80.0)              # (c) capped at target, finish later
     assert short >= 15.5 and tail >= 15.5            # never below arrival
 
 
@@ -591,9 +685,12 @@ def test_adaptive_target_soc_uncertainty_cushion_raises_depart():
     """#13: the forecast-uncertainty cushion must push the depart SOC strictly above
     the no-cushion target, so a charge does not aim to arrive exactly at the floor on
     the model's own (possibly optimistic) energy number."""
+    # Use a remaining-energy in the TAIL region (need_depart between the target and
+    # 100%), where the charge is sized by the route, so the cushion visibly raises
+    # it; below the target both pin to the ceiling and the cushion is (safely) moot.
     kw = dict(arrive_soc=15.0, battery_kwh=600.0, charge_floor=20.0, soft_ceiling_soc=80.0)
-    base = route_planner._adaptive_target_soc(0.30 * 600.0, **kw)
-    cushioned = route_planner._adaptive_target_soc(0.30 * 600.0, uncertainty_kwh=30.0, **kw)
+    base = route_planner._adaptive_target_soc(0.65 * 600.0, **kw)
+    cushioned = route_planner._adaptive_target_soc(0.65 * 600.0, uncertainty_kwh=30.0, **kw)
     assert cushioned > base
 
 

@@ -217,6 +217,7 @@ export default function PlannerForm({
   onReservePct,
   onMaxDetourKm,
   onMaxChargeKw,
+  onMinChargerKw,
   onSetOrigin,
   onAddDestination,
   onUpdateDestination,
@@ -382,6 +383,13 @@ export default function PlannerForm({
                 </FieldLabel>
                 <Slider value={planner.maxDetourKm} min={5} max={100} step={5} onChange={onMaxDetourKm}
                   ariaLabel="Maximum charging detour" ariaValueText={`${planner.maxDetourKm} kilometres`} />
+              </div>
+              <div>
+                <FieldLabel icon="ev_station" hint={`${planner.minChargerKw} kW`}>
+                  Min Charger Speed
+                </FieldLabel>
+                <Slider value={planner.minChargerKw ?? 150} min={50} max={350} step={50} onChange={onMinChargerKw}
+                  ariaLabel="Minimum charger power" ariaValueText={`${planner.minChargerKw ?? 150} kilowatts`} />
               </div>
               <div>
                 <FieldLabel icon="bolt" hint={`${planner.maxChargeKw} kW`}>

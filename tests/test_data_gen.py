@@ -136,7 +136,7 @@ def test_implied_net_climb_is_physically_bounded() -> None:
         net_climb_m = (
             d["distance_km"] * 1000.0 * np.sin(np.arctan(d["gradient_pct"] / 100.0))
         ).abs()
-        assert net_climb_m.max() <= 1010.0, (
+        assert net_climb_m.max() <= 1510.0, (
             f"seed {seed}: implied net climb {net_climb_m.max():.0f} m exceeds the cap"
         )
         # Physical sanity ceiling: above any real extreme (~800 kWh) but far below

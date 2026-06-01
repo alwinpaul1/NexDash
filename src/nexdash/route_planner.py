@@ -92,7 +92,7 @@ from pathlib import Path
 from typing import Any, Optional, Union
 
 from . import geodata
-from .config import DEFAULT_MODEL_PATH, TRUCK
+from .config import DEFAULT_MODEL_PATH, FIELD_CALIBRATION_FACTOR, TRUCK
 from .model import predict_energy
 from .physics import segment_energy_kwh
 from .range import _held_out_mae_kwh
@@ -104,10 +104,13 @@ from .range import _held_out_mae_kwh
 #: Distance of each simulation chunk (km). Smaller -> finer SOC profile.
 CHUNK_KM: float = 25.0
 
-#: Recharge target SOC (%) when a charging stop is inserted. Defaults to 80%:
-#: on-route DC fast-charge stops top to ~80% because the power-vs-SOC taper makes
-#: the 80->100% tail slow and driver-time-expensive (see ``_charge_minutes``).
-CHARGE_TARGET_SOC: float = 80.0
+#: Recharge target SOC (%) when a charging stop is inserted. Defaults to 95% — the
+#: long-haul "charge it up" target (matching how real corridor planners top up), so
+#: each stop leaves a large arrival buffer and the route needs fewer stops. This is
+#: ABOVE the ~80% power-vs-SOC taper knee, so the 80->95% tail charges slower (see
+#: ``_charge_minutes``): a deliberate trade of charge time for fewer stops + buffer.
+#: (The taper knee itself stays 80%; only the target SOC changed.)
+CHARGE_TARGET_SOC: float = 95.0
 
 #: Rated DC fast-charge power assumed for charge-time estimates (kW). The
 #: Mercedes-Benz eActros 600 charges at up to ~400 kW on CCS today; MCS (1 MW)
@@ -236,25 +239,34 @@ def _adaptive_target_soc(
     uncertainty_kwh: float = 0.0,
     headroom: float = CHARGE_HEADROOM_PCT,
 ) -> float:
-    """Lowest depart SOC that secures the rest of the route, capped at 100%.
+    """Depart SOC for a charging stop: charge UP TO the target, capped at 100%.
 
-    If the remaining route is reachable from this one charge, top up only as high
-    as needed to arrive at ``charge_floor`` — often well below the soft ceiling
-    (saving the slow 80->100% tail), or, when it removes a second stop, dipping
-    INTO the tail on demand. If a single charge cannot finish the route, top to
-    the soft ceiling and let the on-demand trigger insert another stop later.
+    Each stop tops up to the ``soft_ceiling_soc`` TARGET (default 95%) — the
+    "charge it up" long-haul policy — leaving a large arrival buffer and fewer
+    stops. It reaches ABOVE the target, into the slow 80->100% tail, only when a
+    single charge needs more than the target to finish the route in one stop
+    (``need_depart``). When even 100% cannot finish in one stop, it charges to the
+    target and the on-demand trigger inserts another stop later. It never charges
+    below the arrival SOC.
 
     ``uncertainty_kwh`` is a forecast-error cushion (the caller passes
     ``mae_band * sqrt(n_remaining_chunks)`` — the sqrt-of-n scaling for roughly
-    independent per-chunk errors) added to the energy still owed, so the target
-    absorbs sub-divergence-band model optimism instead of arriving exactly at the
-    floor on the model's own (possibly optimistic) number. Deterministic.
+    independent per-chunk errors) added to the energy still owed, so a one-stop
+    target in the tail absorbs sub-divergence-band model optimism rather than
+    sizing the charge on the model's own (possibly optimistic) number.
+    Deterministic.
     """
     if battery_kwh <= 0:
         return min(100.0, max(soft_ceiling_soc, arrive_soc))
     drop_to_dest_pct = ((remaining_energy_kwh + max(0.0, uncertainty_kwh)) / battery_kwh) * 100.0
     need_depart = charge_floor + drop_to_dest_pct + headroom
-    depart = need_depart if need_depart <= 100.0 else max(soft_ceiling_soc, charge_floor)
+    if need_depart <= 100.0:
+        # One charge can finish: top to the TARGET, or higher into the tail when
+        # finishing the route in a single stop needs more than the target.
+        depart = max(soft_ceiling_soc, need_depart)
+    else:
+        # One charge cannot finish: charge to the target and stop again later.
+        depart = soft_ceiling_soc
     return min(100.0, max(depart, arrive_soc + 0.5))
 
 
@@ -397,6 +409,7 @@ def plan_route(
     reserve_pct: float = 10.0,
     max_charge_kw: float = CHARGER_KW,
     charge_target_soc: float = CHARGE_TARGET_SOC,
+    field_calibration: float = FIELD_CALIBRATION_FACTOR,
     departure: Optional[str] = None,
     temperature_c: float = 15.0,
     waypoints: Optional[list[dict[str, Any]]] = None,
@@ -464,6 +477,14 @@ def plan_route(
     start_soc = min(100.0, max(0.0, float(start_soc)))
     min_soc = min(100.0, max(0.0, float(min_soc)))
     reserve_pct = max(0.0, min(100.0, float(reserve_pct)))
+    # Field-calibration factor: clamp to (0, 1] so it can ONLY lower the displayed
+    # energy headline (>1 cannot inflate; <=0 falls back to the conservative figure).
+    # It is applied solely to summary.energyKwh / kwhPer100 below — never to the SOC
+    # walk or charge trigger, which stay on the conservative estimate for safety.
+    field_calibration = float(field_calibration)
+    # <=0 means "disabled" (use the conservative figure); positive values are floored
+    # at 0.5 so an absurd knob value can't make the headline physically implausible.
+    field_calibration = 1.0 if field_calibration <= 0.0 else min(1.0, max(0.5, field_calibration))
     # EU 561 narrowings (opt-in; defaults reproduce today's output exactly).
     # allow_extended_days: how many days may use the 10 h cap (clamped [0, 2]).
     allow_extended_days = int(max(0, min(EU561_MAX_EXT_DAYS_PER_WEEK, int(allow_extended_days))))
@@ -673,7 +694,15 @@ def plan_route(
         # the reserve band (yet finishes well above min_soc) would trigger a spurious
         # full recharge at the origin, contradicting check_reachability, which calls
         # the very same trip reachable.
-        charge_floor = min_soc + max(0.0, reserve_pct)
+        #
+        # The en-route floor is the HIGHER of the two operator bounds, NOT their sum:
+        # ``min_soc`` ("arrive with at least") is the destination minimum, and
+        # ``reserve_pct`` ("safety reserve") is the cushion never to dip below en
+        # route. Holding ``max(min_soc, reserve_pct)`` keeps SOC above both without
+        # double-counting -- adding them (the old ``min_soc + reserve_pct``) reserved
+        # 35% for a 15%-arrival/20%-reserve trip, forcing premature/extra charges and
+        # disagreeing with check_reachability, which holds back reserve_pct ALONE.
+        charge_floor = max(min_soc, max(0.0, reserve_pct))
         remaining_energy_kwh = sum(chunk_energies[i:])
         soc_at_end_without_charge = soc - (remaining_energy_kwh / battery_kwh) * 100.0
         if projected_soc < charge_floor and soc_at_end_without_charge < min_soc:
@@ -942,7 +971,13 @@ def plan_route(
     )
     total_h = total_min / 60.0
 
-    kwh_per_100 = (total_energy_kwh / distance_km * 100.0) if distance_km > 0 else 0.0
+    # DISPLAYED energy is field-calibrated (see config.FIELD_CALIBRATION_FACTOR):
+    # the steady-state physics figure is mapped to real laden-route consumption.
+    # `total_energy_kwh` itself stays conservative (it drove the SOC walk + charge
+    # plan above); only the reported headline below is discounted, so charging and
+    # reachability are unaffected.
+    displayed_energy_kwh = total_energy_kwh * field_calibration
+    kwh_per_100 = (displayed_energy_kwh / distance_km * 100.0) if distance_km > 0 else 0.0
     charging_cost = sum(s["costEur"] for s in charging_stops)
 
     # EU 561 compliance is now judged on the REAL day/week split: the machine
@@ -1010,14 +1045,23 @@ def plan_route(
     if not enrichment:
         assumptions.append("Flat-route fallback: gradient assumed 0 (no per-segment terrain).")
     assumptions.append(
-        f"Charge stops top up adaptively — only as high as the rest of the route needs "
-        f"(arriving at your {round(reserve_pct)}% reserve), capped at 100%. Charge time follows "
-        f"a power-vs-SOC taper, so a stop dips into the slow 80->100% tail only when that secures "
-        f"the trip in one stop; otherwise it caps near {round(charge_target_soc)}% at "
-        f"~{round(max_charge_kw or CHARGER_KW)} kW CCS and charges again later. The target follows "
-        f"the model's own energy forecast, so it inherits that forecast's risk (the physics "
-        f"cross-check and min-SOC floor bound it)."
+        f"Charge stops top up to ~{round(charge_target_soc)}% at "
+        f"~{round(max_charge_kw or CHARGER_KW)} kW CCS (reaching toward 100% only when a single stop "
+        f"must to finish the route), leaving a wide buffer above your {round(reserve_pct)}% reserve and "
+        f"fewer stops. Charging past ~80% runs the slower power-vs-SOC taper, so a higher target trades "
+        f"charge time for fewer stops; energy follows the model's forecast, bounded by the physics "
+        f"cross-check and the min-SOC floor."
     )
+    if field_calibration < 1.0:
+        assumptions.append(
+            f"Displayed energy is scaled by a documented field-calibration factor of "
+            f"{field_calibration:.2f} so the headline matches observed laden eActros 600 "
+            f"consumption (cited 40 t tests span ~0.88-1.12 kWh/km, centre ~1.0) rather than the "
+            f"higher constant-speed steady-state physics (~1.27 kWh/km warm anchor). Charging and "
+            f"reachability decisions still use "
+            f"the un-discounted conservative estimate, so this only affects the displayed total, "
+            f"never whether or when the truck charges. See REAL_WORLD_CALIBRATION.md."
+        )
     if _speed_source == "measured":
         assumptions.append(
             "Per-segment speed is MEASURED from the routing engine's per-leg travel time "
@@ -1112,7 +1156,7 @@ def plan_route(
         "startSoc": round(float(start_soc), 1),
         "arrivalSoc": round(soc, 1),
         "minSoc": round(min_soc_seen, 1),
-        "energyKwh": round(total_energy_kwh, 1),
+        "energyKwh": round(displayed_energy_kwh, 1),
         "kwhPer100": round(kwh_per_100, 1),
         "chargingCostEur": round(charging_cost, 2),
         "chargingStops": len(charging_stops),

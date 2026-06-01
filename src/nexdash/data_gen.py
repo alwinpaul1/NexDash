@@ -66,10 +66,18 @@ _ENERGY_FLOOR_KWH: float = -50.0
 
 #: Maximum implied net elevation change (m) for a single segment. The gradient is
 #: capped per row so ``distance * sin(atan(gradient/100))`` never exceeds this,
-#: keeping labels geographically plausible (German Autobahn tops out ~1000 m) and
-#: preventing the impossible multi-kilometre climbs a naive sampler produces on
-#: long legs.
-_MAX_NET_CLIMB_M: float = 1000.0
+#: keeping labels geographically plausible and preventing the impossible
+#: multi-kilometre climbs a naive sampler produces on long legs.
+#:
+#: Set to 1500 m (was 1000): the route planner scores energy per ~25 km chunk, and
+#: a 25 km segment at the full +/-6 % documented grade implies a ~1500 m climb
+#: (realistic for Mittelgebirge / Alpine-foothill stretches). The old 1000 m
+#: ceiling capped a 25 km leg at only +/-4 %, so steep 25 km chunks NEVER appeared
+#: in training — the gradient-boosted model then saturated on the +4..+6 % grades
+#: that real mountain chunks hit. 1500 m lets short legs (<=~25 km) span the full
+#: +/-6 % envelope while still forcing long inter-hub legs near-flat (a 100 km leg
+#: stays <=1.5 %), matching docs/REAL_WORLD_CALIBRATION.md's -6..+6 % range.
+_MAX_NET_CLIMB_M: float = 1500.0
 
 
 def generate_dataset(

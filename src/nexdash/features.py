@@ -55,12 +55,19 @@ TARGET: str = "energy_kwh"
 #:   the square of speed, the dominant non-linearity at highway speeds.
 #: * ``payload_x_distance``  — payload x distance; rolling-resistance energy is
 #:   proportional to mass times distance travelled.
+#: * ``distance_x_gradient`` — distance x signed gradient; the gravitational work
+#:   term ``m*g*(distance*sin(slope))`` is ~proportional to ``distance*gradient``,
+#:   so this gives the model the energy-proportional climb/descent scaling
+#:   DIRECTLY (signed: positive on climbs adds energy, negative on descents credits
+#:   regen). Without it the gradient-boosted trees must reconstruct that linear
+#:   scaling from sparse joint splits and saturate on steep/long legs.
 _DERIVED_COLUMNS: list[str] = [
     "abs_gradient",
     "temp_dev_from_20",
     "payload_x_gradient",
     "speed_sq",
     "payload_x_distance",
+    "distance_x_gradient",
 ]
 
 #: Full engineered feature matrix column order: raw features then derived ones.
@@ -114,6 +121,9 @@ def _add_engineered(df: pd.DataFrame) -> pd.DataFrame:
     out["speed_sq"] = out["speed_kph"] ** 2
     # mass x distance: rolling-resistance energy proxy.
     out["payload_x_distance"] = out["payload_t"] * out["distance_km"]
+    # distance x signed gradient: gravity-work term, ~proportional to the climb/
+    # descent energy. Signed so descents (negative) directly drive regen credit.
+    out["distance_x_gradient"] = out["distance_km"] * out["gradient_pct"]
 
     # Guarantee canonical column order regardless of insertion order.
     return out[ENGINEERED_COLUMNS]

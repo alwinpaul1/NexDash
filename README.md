@@ -14,6 +14,15 @@ NexDash is a small but complete AI-engineering system:
 6. An **LLM dispatcher agent** that answers natural-language questions using tools — exposed over a **CLI**, an **MCP** server, and an `/api/chat` endpoint.
 7. A **FastAPI backend** plus a **bonus** Vite + React console (route planner + a floating chat widget). The chat UI is a *plus* per the brief; the CLI / MCP / `/api/chat` are the required Part-2 interface.
 
+### Scope — what the brief asks for, and what's a bonus
+
+The case study is **three things**, and they are the deliverable graded here:
+
+- **Part 1 (~70%) — the energy model + honest evaluation.** A data-driven model that predicts segment energy (kWh) from distance, payload, speed, gradient and temperature (plus wind), trained on justified synthetic data, with a candid evaluation and failure analysis. → see [Modeling approach](#modeling-approach) and [Evaluation](#evaluation); code in `physics.py`, `data_gen.py`, `features.py`, `model.py`, `evaluate.py`, `calibration.py`, `failure_miner.py`, `range.py`.
+- **Part 2 (~30%) — a simple LLM agent** that answers *"will it make it?"* by calling the model as a tool, over a CLI, an MCP server, and `/api/chat`. → see [Agent design](#agent-design); code in `tools.py`, `agent.py`, `mcp_server.py`, `cli.py`.
+
+Everything else — the **multi-stop route planner**, the **VRP stop-order optimiser** (`optimizer.py`), the **adaptive charging plan**, **EU-561 driver-hours**, the per-stop **charging cost**, and the **React console** — is a **deliberate extension beyond the brief**, built to show what the model *underpins* (the brief names routing and charging only as downstream uses, not as graded work). This layer is **feature-frozen** and **honest-but-approximate**: stop ordering uses a great-circle distance proxy (not road-accurate), charging cost is a flat €/kWh estimate, and the map's station cards are cosmetic (each such limit is surfaced where it's used). Treat it as a bonus, not the headline — **the model and its evaluation are the headline.**
+
 ---
 
 ## Why a model and not just the physics?
@@ -135,7 +144,8 @@ NexDash/
 │   ├── evaluate.py            # Metrics, failure-mode slicing, matplotlib plots
 │   ├── range.py               # check_reachability: SOC → reach/no-reach + margin
 │   ├── geodata.py             # Open-Meteo elevation/temperature/wind enrichment (fails soft, cached)
-│   ├── route_planner.py       # Plans a trip end-to-end (geodata → segments → predictions)
+│   ├── route_planner.py       # BONUS (beyond brief): plans a trip end-to-end (geodata → segments → predictions)
+│   ├── optimizer.py           # BONUS (beyond brief): single-vehicle VRP — cheapest stop order (Held-Karp / 2-opt)
 │   ├── model_info.py          # Headline model metrics for /api/model-info (fail-soft)
 │   ├── tools.py               # tool schemas + dispatch() (provider-agnostic)
 │   ├── mcp_server.py          # FastMCP server exposing the same tools
@@ -194,13 +204,13 @@ Full rationale, formulas and assumptions: **[docs/DESIGN.md](docs/DESIGN.md)**.
 
 `run_pipeline.py` writes `reports/evaluation_report.md` with **real, regenerated numbers** plus figures. The values below are the **actual results** from the committed run (`n=6000`, `seed=42`, 4,800 train / 1,200 held-out test). The truck spec and synthetic operating envelope are now **calibrated to real Mercedes-Benz eActros 600 figures** (German long-haul ops) — see [`docs/REAL_WORLD_CALIBRATION.md`](docs/REAL_WORLD_CALIBRATION.md) for every cited assumption.
 
-**Held-out test set (gradient-boosting primary, n=1,200):** MAE **5.970 kWh**, RMSE 9.133 kWh, MAPE 14.06 %, R² 0.9836.
+**Held-out test set (gradient-boosting primary, n=1,200):** MAE **6.018 kWh**, RMSE 9.509 kWh, MAPE 12.86 %, R² 0.9879.
 
-The headline metric is the **MAE in kWh (5.97)** — that is the number a dispatcher should reason about per segment. We also report a *fleet-intuitive* proxy: 5.97 kWh is **0.995 %** of the eActros 600's ~600 kWh usable battery (the energy it spends across its ~500 km real-world range). This proxy is flattering on long segments (whose absolute energies are large), so treat the per-kWh MAE — and the per-regime failure table below — as the real accuracy signal, not the percentage.
+The headline metric is the **MAE in kWh (6.02)** — that is the number a dispatcher should reason about per segment. We also report a *fleet-intuitive* proxy: 6.02 kWh is **1.00 %** of the eActros 600's ~600 kWh usable battery (the energy it spends across its ~500 km real-world range). This proxy is flattering on long segments (whose absolute energies are large), so treat the per-kWh MAE — and the per-regime failure table below — as the real accuracy signal, not the percentage.
 
 **Read these numbers honestly.** Two framings keep them grounded:
 
-- **Per-SEGMENT, not per-trip.** Every figure above is the error on a *single leg*. A real route is many segments and the errors accumulate (roughly with the number of legs), so the **trip-level** error is several times larger than any single-segment figure and is **not** bounded by the 0.995 % proxy. Treat that percentage as a per-leg sanity scale, never a promise that a whole route lands inside a 10 % reserve.
+- **Per-SEGMENT, not per-trip.** Every figure above is the error on a *single leg*. A real route is many segments and the errors accumulate (roughly with the number of legs), so the **trip-level** error is several times larger than any single-segment figure and is **not** bounded by the 1.00 % proxy. Treat that percentage as a per-leg sanity scale, never a promise that a whole route lands inside a 10 % reserve.
 - **Circular evaluation.** These metrics measure how faithfully the ML model reproduces our own `nexdash.physics.segment_energy_kwh` — the *same* function that generated the labels. They bound model-vs-PHYSICS error, **not** model-vs-REALITY error, which is unknown until real eActros telematics arrive. A low MAE proves the model re-learned our physics, not that the physics matches a real truck.
 
 **Verified uncertainty + auto-discovered failures (report Section 5).** Beyond the point metrics, the pipeline now *proves* its confidence rather than asserting it (`nexdash.calibration`): it calibrates **split-conformal** prediction intervals on a held-out half and audits their realized coverage on a disjoint half at 80/90/95%, flagging a band **FAIL** only when it *under*-covers (the over-confident, dangerous direction) and **CONSERVATIVE** when it over-covers — with a per-gradient-regime (Mondrian) breakdown and an Expected Calibration Error. A companion auto-miner (`nexdash.failure_miner`) fits a shallow tree on the held-out error to surface the worst multi-feature pockets the hand-picked slices miss (e.g. very long legs → ~3× MAE), each gated by a support floor and a bootstrapped lift CI so flukes don't ship. Both are deterministic, offline, and disclosed under the same circular-evaluation caveat (coverage-of-physics, not of-reality).
@@ -209,21 +219,25 @@ The model-vs-baseline comparison is computed on the **same 1,200-row held-out te
 
 | Metric              | Gradient Boosting (primary) | Linear baseline |
 | ------------------- | --------------------------- | --------------- |
-| MAE (kWh)           | 5.970                       | 25.120          |
-| RMSE (kWh)          | 9.133                       | 33.490          |
-| MAPE (%)            | 14.06                       | 95.08           |
-| R²                  | 0.9836                      | 0.7794          |
+| MAE (kWh)           | 6.018                       | 11.854          |
+| RMSE (kWh)          | 9.509                       | 17.425          |
+| MAPE (%)            | 12.86                       | 46.16           |
+| R²                  | 0.9879                      | 0.9595          |
 
-The gradient-boosting model cuts MAE several-fold versus the linear baseline (5.97 vs 25.12 kWh). Three diagnostic figures are saved to `reports/figures/`: **predicted-vs-actual**, **residual-vs-temperature**, and **error-by-payload**.
+The gradient-boosting model roughly halves MAE versus the linear baseline (6.02 vs 11.85 kWh). The signed `distance_x_gradient` engineered feature (the gravity-work term) lifts *both* models — it gives even the linear baseline the energy-proportional climb/descent scaling, which is why the baseline is far stronger than a raw-feature OLS would be. Three diagnostic figures are saved to `reports/figures/`: **predicted-vs-actual**, **residual-vs-temperature**, and **error-by-payload**.
 
 ### Where it fails and why
 
 A model is only trustworthy if you know its blind spots. `failure_mode_report(...)` slices error by operating regime, ranked by **absolute MAE (kWh)** — what actually strands a truck — not MAPE, which explodes on near-zero-denominator downhill slices. The two most decision-relevant failures are **steep uphill** and **heavy payload**:
 
-- **Steep climbs (gradient > +4 %).** This is the dangerous slice. Held-out MAE here is **8.05 kWh** (n=20) versus the overall 5.97 kWh. Steep *climbs* convert payload mass into potential energy fastest, so any miss is a large *absolute* kWh miss — exactly the regime that can strand a truck. (Small sample: n=20 < 30, so treat as indicative, not precise.)
-- **Heavy payload (> 15 t).** MAE **7.25 kWh** (n=378) — the worst-error payload bin. Payload scales rolling resistance and gradient potential energy linearly, so heavy loads both consume the most and leave the most room to be wrong in absolute terms.
-- **Steep descents (gradient < −4 %).** Small absolute error (MAE 2.70 kWh, n=18) but a now-genuine failure regime: these net-regen segments carry **real negative labels** (no zero-clamp), so the regen signal is preserved and the slice is no longer artificially flattering. Its *percentage* error is loud (MAPE 31.24 %) because regen drives net energy near zero and the denominator collapses — which is precisely why we rank by MAE, not MAPE. (Small sample: n=18 < 30.)
-- **Temperature.** Cold is **not** the hardest regime to *predict*, even though the upgraded physics makes it the most *expensive*: the cold consumption channels (denser air + cold tyres + reduced regen) are smooth and learnable, so the error slices stay flat — cold MAE 5.58 (n=166), mild 6.06 (n=979), hot 5.60 (n=55). The `mild (0–30 °C)` slice actually carries the largest *absolute* error simply because it holds the most rows and the biggest-energy segments. A winter run costs more energy (see below) but is not meaningfully harder to predict than a mild one; don't conflate the two.
+- **Steep climbs (gradient > +4 %).** This is the dangerous slice. Held-out MAE here is **7.46 kWh** (n=36) versus the overall 6.02 kWh. Steep *climbs* convert payload mass into potential energy fastest, so any miss is a large *absolute* kWh miss — exactly the regime that can strand a truck. The signed `distance_x_gradient` feature plus letting short legs sample the full ±6 % grade (1500 m net-climb ceiling) sharply reduced this slice's error and removed the old climb *saturation* — at a realistic ~25 km chunk the model now tracks physics to within ~10 % across ±6 %.
+- **Heavy payload (> 15 t).** MAE **6.76 kWh** (n=378) — the worst-error payload bin. Payload scales rolling resistance and gradient potential energy linearly, so heavy loads both consume the most and leave the most room to be wrong in absolute terms.
+- **Steep descents (gradient < −4 %).** Small absolute error (MAE 2.18 kWh, n=33) and a genuine regime: these net-regen segments carry **real negative labels** (no zero-clamp), so the regen signal is preserved. The signed gravity-work feature means the model now **credits regen** here (e.g. a 25 km / −6 % chunk: physics −35 kWh, model −32 kWh) instead of flooring near zero. Its *percentage* error is loud (MAPE 23.22 %) because regen drives net energy near zero and the denominator collapses — which is precisely why we rank by MAE, not MAPE.
+- **Temperature.** Cold is **not** the hardest regime to *predict*, even though the upgraded physics makes it the most *expensive*: the cold consumption channels (denser air + cold tyres + reduced regen) are smooth and learnable, so the error slices stay flat — cold MAE 6.53 (n=166), mild 5.90 (n=979), hot 6.53 (n=55). A winter run costs more energy (see below) but is not meaningfully harder to predict than a mild one; don't conflate the two.
+
+**Direct physics-vs-ML check at the tail.** Running the trained model against its own physics teacher on representative segments makes the failure boundary concrete. At the **scale the planner actually scores energy** — ~25 km chunks — the two now agree closely across the full ±6 % grade range, climbs and descents alike: a 25 km / +6 % chunk reads 172 vs physics 188 kWh (−9 %), a 25 km / −6 % regen chunk −32 vs −35 kWh. This is the payoff of the signed `distance_x_gradient` feature (the gravity-work term the trees previously had to reconstruct from sparse joint splits) plus raising the net-climb ceiling to 1500 m so 25 km legs sample the full ±6 % envelope in training — together they removed the old climb *saturation* (the model used to flat-line at ~245 kWh/100 km above +2.5 %) and the old regen-blindness.
+
+What remains out-of-envelope is **physically impossible as a single long segment**: e.g. a sustained 50 km × +5 % leg implies ~2500 m of net climb — higher than the 1500 m generator ceiling and steeper than any real ~25 km planner chunk — so it sits outside the training set and the model still under-predicts it (~322 kWh physics vs ~220 model, −32 %). A gradient-boosting tree is piecewise-constant and **cannot predict above the energy labels it saw** in a feature region, so the optimistic miss is structural, not a tuning gap. The planner never *builds* such a chunk (it walks the route in ~25 km windows), and for any residual divergence `range.check_reachability` and the per-chunk planner cross-check both run the first-principles physics on **every** verdict and fall back to the conservative (higher) physics estimate, flagging `confidence: "low"`, whenever the two diverge by more than ~15 %. So the cross-check, not the model, is the final safety net at the extreme tail — but within the realistic operating envelope the model itself is now physics-faithful.
 
 The reachability service exposes uncertainty on every verdict in two ways. First, `range.check_reachability` reads the model's **real held-out MAE** (~6 kWh) straight from the artifact (`metrics.hgb.mae_kwh`) and reports it in the `confidence_note` — no more hardcoded band. Second, it runs a **first-principles physics cross-check** on every call: if the data-driven model and the physics estimate disagree by more than ~3 error-bands (or 15%), it returns `confidence: "low"`, uses the conservative (higher) value for the GO/NO-GO, and the note explains the segment is outside the trained envelope. New result keys: `confidence`, `model_kwh`, `physics_kwh`. The route console surfaces the verdict in **red** when the margin is within the error band rather than pretending a knife-edge result is safe.
 

@@ -34,6 +34,7 @@ const initialPlanner = {
   reservePct: 10,
   maxDetourKm: 50,
   maxChargeKw: 400,
+  minChargerKw: 150,
   origin: null,
   destinations: [newDest()],
   departure: nowLocalISO(),
@@ -51,6 +52,7 @@ export default function RoutesView() {
   const setReservePct = useCallback((v) => setPlanner((p) => ({ ...p, reservePct: v })), []);
   const setMaxDetourKm = useCallback((v) => setPlanner((p) => ({ ...p, maxDetourKm: v })), []);
   const setMaxChargeKw = useCallback((v) => setPlanner((p) => ({ ...p, maxChargeKw: v })), []);
+  const setMinChargerKw = useCallback((v) => setPlanner((p) => ({ ...p, minChargerKw: v })), []);
   const setOrigin = useCallback(
     (o) => setPlanner((p) => ({ ...p, origin: o })),
     []
@@ -111,10 +113,10 @@ export default function RoutesView() {
   // Waypoints (origin + valid destinations) for the map pins.
   const waypoints = [];
   if (planner.origin?.lat != null) {
-    waypoints.push({ label: planner.origin.label || "Origin", lat: planner.origin.lat, lng: planner.origin.lng });
+    waypoints.push({ kind: "origin", label: planner.origin.label || "Origin", lat: planner.origin.lat, lng: planner.origin.lng });
   }
   for (const d of planner.destinations) {
-    if (d.lat != null) waypoints.push({ label: d.label || "Destination", lat: d.lat, lng: d.lng });
+    if (d.lat != null) waypoints.push({ kind: "dest", label: d.label || "Destination", lat: d.lat, lng: d.lng });
   }
 
   return (
@@ -152,6 +154,7 @@ export default function RoutesView() {
             onReservePct={setReservePct}
             onMaxDetourKm={setMaxDetourKm}
             onMaxChargeKw={setMaxChargeKw}
+            onMinChargerKw={setMinChargerKw}
             onSetOrigin={setOrigin}
             onAddDestination={addDestination}
             onUpdateDestination={updateDestination}
