@@ -521,6 +521,7 @@ def plan_route(
     total_charge_min = 0.0
     total_unload_min = 0.0
     n_breaks = 0
+    charge_satisfied_break = False  # True once a >=45-min charge is credited as the Art 7 break
 
     # EU 561 multi-day accounting: a calendar "day" of driving caps at 9 h, after
     # which an 11 h daily rest is inserted and the day resets; weekly driving
@@ -839,18 +840,22 @@ def plan_route(
             # gaining charge while it drives.
             soc_profile.append({"distKm": round(cum_km, 1), "soc": round(arrive_soc, 2)})
             soc_profile.append({"distKm": round(cum_km, 1), "soc": round(depart_soc, 2)})
-            # EU 561 (BULLETPROOF posture, matching NexOS): a >= 45-min charge dwell is
-            # COUNTED as a break (the driver does rest at the plug) but does NOT satisfy
-            # the mandatory 4.5 h break -- we deliberately do NOT reset the continuous-
-            # driving clock on a charge. A DEDICATED 45-min rest is always inserted at
-            # 4.5 h of driving (see the break check below), so compliance never leans on
-            # the "charging counts as the break" reading -- which is CORTE *guidance*,
-            # not codified in Reg. 561/2006, and carries an unresolved move-after-charge
-            # wrinkle. This mirrors NexOS: a separate Rest Stop for compliance AND the
-            # charge counted (2 breaks). A short top-up (< 45 min) is neither.
+            # EU 561 Art 7: a >= 45-min charge dwell, taken WITHIN the 4.5 h continuous-
+            # driving window with the driver resting (no other work), SATISFIES the
+            # mandatory 45-min break (Art 4(d): a period used exclusively for
+            # recuperation). So a qualifying charge RESETS the continuous-driving clock
+            # and no redundant dedicated rest is inserted -- honouring "charging is a
+            # break" under CORTE enforcement guidance. The charge block runs BEFORE the
+            # 4.5 h break check below, and a charge is only inserted while SOC is low
+            # (always before 4.5 h of driving completes), so driving never runs past
+            # 4.5 h without a >= 45-min rest (charge or dedicated). A short top-up
+            # (< 45 min) is conservatively credited as NEITHER a break nor a partial
+            # 15+30 split: the clock keeps running and the dedicated rest still fires.
             if charge_min >= EU561_BREAK_MIN:
                 n_breaks += 1
                 day_breaks += 1
+                drive_since_break_min = 0.0  # qualifying charge satisfies the Art 7 break
+                charge_satisfied_break = True
             # Reopen a fresh drive segment after the charge.
             seg_open = True
             seg_soc_start = soc
@@ -1169,6 +1174,17 @@ def plan_route(
         )
     else:
         assumptions.append("Single average speed applied to every segment (flat fallback).")
+    if charge_satisfied_break:
+        assumptions.append(
+            "A charging stop of 45 min or more is credited as the EU 561 Art 7 break "
+            "(Art 4(d): a period used exclusively for recuperation) — valid ONLY if the driver "
+            "rests during it and does no other work (no charge supervision, paperwork or cargo "
+            "handling). It is taken within the 4.5 h driving window, so driving never runs past "
+            "4.5 h without a ≥45-min rest (charge or dedicated). This relies on CORTE enforcement "
+            "guidance, not yet codified in Reg. 561/2006 and possibly read differently by national "
+            "authorities; a charge under 45 min does not count, and a dedicated 45-min rest is "
+            "inserted instead."
+        )
     # With BOTH defaults (allow_extended_days=0, hours_already_driven_this_week=0.0)
     # this caveat is emitted verbatim — byte-identical to before these options
     # existed. When an option is opted into, the corresponding "not modelled"
