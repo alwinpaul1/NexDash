@@ -415,6 +415,7 @@ def plan_route(
     waypoints: Optional[list[dict[str, Any]]] = None,
     geometry: Optional[list[list[float]]] = None,
     leg_timings: Optional[list[dict[str, Any]]] = None,
+    speed_limits: Optional[list[dict[str, Any]]] = None,
     allow_extended_days: int = 0,
     hours_already_driven_this_week: float = 0.0,
     model_path: Union[str, Path] = DEFAULT_MODEL_PATH,
@@ -599,6 +600,34 @@ def plan_route(
 
     chunk_payloads = [_payload_t_at(c0) for c0 in chunk_start_km]
 
+    # Per-chunk posted speed limit (km/h) from the routing engine's speedLimit
+    # sections: the distance-weighted HARMONIC mean of the posted limits over the
+    # chunk's span (harmonic = the speed reproducing the travel time across a mixed
+    # autobahn/town/village span). None where no limit data covers the chunk.
+    def _chunk_speed_limit_kph(start_km: float, end_km: float) -> Optional[float]:
+        if not speed_limits or end_km <= start_km:
+            return None
+        covered = 0.0
+        time_h = 0.0
+        for sl in speed_limits:
+            try:
+                f = max(start_km, float(sl.get("fromKm", 0.0)))
+                t = min(end_km, float(sl.get("toKm", 0.0)))
+                kmh = float(sl.get("kmh", 0.0))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if t > f and kmh > 0:
+                covered += t - f
+                time_h += (t - f) / kmh
+        if covered <= 0 or time_h <= 0:
+            return None
+        return covered / time_h
+
+    chunk_speed_limits = [
+        _chunk_speed_limit_kph(chunk_start_km[i], chunk_start_km[i] + chunks[i][0])
+        for i in range(len(chunks))
+    ]
+
     # Per-segment speed (geometry mode): redistribute the route-average speed by
     # gradient — slower on climbs, capped on descents — then ANCHOR so the total
     # drive time still equals the routing engine's measured duration (speed moves
@@ -606,7 +635,27 @@ def plan_route(
     # (the model's training domain); drive time uses the UNCLAMPED anchored speed
     # so the ETA stays exact. Flat-fallback mode has no per-segment gradient, so
     # every chunk keeps the single average exactly as before.
-    if enrichment and chunks and all(m is not None for m in chunk_measured_speeds):
+    if (
+        enrichment
+        and chunks
+        and speed_limits
+        and avg_speed_kph > 0
+        and all(s is not None and s > 0 for s in chunk_speed_limits)
+    ):
+        # Tier S — shape per-segment speed by the REAL posted limits (autobahn 80,
+        # town 50, village 30), then ANCHOR so the total drive time still equals the
+        # routing engine's measured duration: relative road speeds are preserved and
+        # the overall ETA is unchanged. This replaces one flat average with a
+        # road-aware speed profile. Energy uses the clamped speed (training domain).
+        _shapes = [float(s) for s in chunk_speed_limits]
+        _dists = [c[0] for c in chunks]
+        _tot_d = sum(_dists)
+        _weighted = sum(d / s for d, s in zip(_dists, _shapes) if s > 0)
+        _base = avg_speed_kph * (_weighted / _tot_d) if _tot_d > 0 else avg_speed_kph
+        drive_speeds = [max(1e-6, _base * s) for s in _shapes]  # unclamped -> exact ETA
+        chunk_speeds = [min(SEG_SPEED_MAX_KPH, max(SEG_SPEED_MIN_KPH, v)) for v in drive_speeds]
+        _speed_source = "speed-limit"
+    elif enrichment and chunks and all(m is not None for m in chunk_measured_speeds):
         # Tier A — REAL per-leg speed measured from the routing engine's travel time
         # is available for every chunk: use it directly (traffic/road-class aware).
         # ETA from these speeds already equals the engine's duration (same source),
@@ -1040,14 +1089,17 @@ def plan_route(
         )
     else:
         assumptions.append(
-            "Payload held constant for the whole trip — conservative (over-estimates later legs)."
+            "Payload held constant for the whole trip (no drop-offs set) — conservative, so later "
+            "legs may be over-estimated. Set a stop's drop-off weight to model the truck lightening: "
+            "after that stop the payload becomes the remaining load (previous payload minus the "
+            "unloaded weight), and the legs after it cost less energy."
         )
     if not enrichment:
         assumptions.append("Flat-route fallback: gradient assumed 0 (no per-segment terrain).")
     assumptions.append(
         f"Charge stops top up to ~{round(charge_target_soc)}% at "
-        f"~{round(max_charge_kw or CHARGER_KW)} kW CCS (reaching toward 100% only when a single stop "
-        f"must to finish the route), leaving a wide buffer above your {round(reserve_pct)}% reserve and "
+        f"~{round(max_charge_kw or CHARGER_KW)} kW CCS (reaching toward 100% only when one stop "
+        f"must top up that high to finish the route), leaving a wide buffer above your {round(reserve_pct)}% reserve and "
         f"fewer stops. Charging past ~80% runs the slower power-vs-SOC taper, so a higher target trades "
         f"charge time for fewer stops; energy follows the model's forecast, bounded by the physics "
         f"cross-check and the min-SOC floor."
@@ -1056,13 +1108,21 @@ def plan_route(
         assumptions.append(
             f"Displayed energy is scaled by a documented field-calibration factor of "
             f"{field_calibration:.2f} so the headline matches observed laden eActros 600 "
-            f"consumption (cited 40 t tests span ~0.88-1.12 kWh/km, centre ~1.0) rather than the "
-            f"higher constant-speed steady-state physics (~1.27 kWh/km warm anchor). Charging and "
+            f"consumption (real-world laden 40 t tests cluster at ~0.96-1.03 kWh/km — Daimler tour "
+            f"1.03, Vandijck 0.96, ADAC 0.88) rather than the higher constant-speed steady-state "
+            f"physics (~1.27 kWh/km warm anchor). Charging and "
             f"reachability decisions still use "
             f"the un-discounted conservative estimate, so this only affects the displayed total, "
             f"never whether or when the truck charges. See REAL_WORLD_CALIBRATION.md."
         )
-    if _speed_source == "measured":
+    if _speed_source == "speed-limit":
+        assumptions.append(
+            "Per-segment speed follows the route's POSTED speed limits (e.g. ~30 km/h in a "
+            "village, 50 in town, 80 on the autobahn — capped at the 80 km/h truck limit), then "
+            "scaled uniformly so the total drive time equals the routing engine's measured "
+            "(traffic-aware) duration — so road-by-road speeds vary while the overall ETA is exact."
+        )
+    elif _speed_source == "measured":
         assumptions.append(
             "Per-segment speed is MEASURED from the routing engine's per-leg travel time "
             "(traffic / road-class aware); within a leg, variation is still distributed by gradient."
@@ -1155,7 +1215,12 @@ def plan_route(
         "etaIso": _iso(arrival_dt),
         "startSoc": round(float(start_soc), 1),
         "arrivalSoc": round(soc, 1),
+        # `minSoc` is the LOWEST SOC actually reached on the trip (the true low
+        # point); `minSocFloor` is the operator's "arrive with at least" SETTING
+        # (the floor the plan must stay above). The gauge shows the floor (matching
+        # the slider the user set); the achieved low stays available for detail views.
         "minSoc": round(min_soc_seen, 1),
+        "minSocFloor": round(float(min_soc), 1),
         "energyKwh": round(displayed_energy_kwh, 1),
         "kwhPer100": round(kwh_per_100, 1),
         "chargingCostEur": round(charging_cost, 2),

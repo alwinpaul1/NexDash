@@ -12,7 +12,7 @@ const KEY = (env.match(/VITE_TOMTOM_API_KEY=(.+)/) || [])[1]?.trim();
 if (!KEY) throw new Error('no TomTom key');
 
 const COUNTRY_SET = 'DE,AT,CH,NL,BE,FR,PL,CZ,DK';
-const TRUCK = { weightKg: 40000, axleWeightKg: 11500, numberOfAxles: 5, lengthM: 16.5, widthM: 2.55, heightM: 4.0, maxSpeedKph: 89 };
+const TRUCK = { weightKg: 40000, axleWeightKg: 11500, numberOfAxles: 5, lengthM: 16.5, widthM: 2.55, heightM: 4.0, maxSpeedKph: 80 };
 const API = 'http://localhost:8000';
 
 async function geocode(q) {
@@ -62,7 +62,7 @@ const body = {
   durationS: route.durationS,
   startSoc: 100,
   minSoc: 15,
-  payloadKg: 18000,
+  payloadKg: Number(process.env.PAYLOAD_KG) || 18000,
   reservePct: 20,
   maxChargeKw: 400,
   departure: '2026-06-01T21:05',

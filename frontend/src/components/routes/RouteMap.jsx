@@ -195,7 +195,7 @@ function incidentIcon(inc) {
 }
 
 // Map the SOC profile onto the geometry and emit colored sub-segments.
-function buildSocSegments(geometry, socProfile, totalKm) {
+function buildSocSegments(geometry, socProfile, totalKm, chargingStops) {
   if (!geometry || geometry.length < 2) return [];
   if (!socProfile || socProfile.length < 2 || !totalKm) {
     return [{ positions: geometry, color: "#00d166" }];
@@ -214,7 +214,55 @@ function buildSocSegments(geometry, socProfile, totalKm) {
     cum.push(cum[i - 1] + 2 * R * Math.asin(Math.sqrt(h)));
   }
   const geomTotal = cum[cum.length - 1] || totalKm;
-  const scale = totalKm / geomTotal;
+
+  // Map a geometry-cumulative-distance -> socProfile distance. By default this is
+  // a uniform scale (totalKm / geomTotal). But the displayed route DETOURS into
+  // each charging station, adding geometry length the socProfile (computed on the
+  // direct route) doesn't have — a uniform scale would smear that, painting the
+  // post-charge stretch with the pre-charge colour. So we ANCHOR each station's
+  // nearest geometry vertex to its socProfile distance and interpolate piecewise,
+  // making the charge SOC jump land exactly at the station regardless of detour.
+  const hav = (a, b) => {
+    const R = 6371;
+    const dLat = toRad(b[0] - a[0]);
+    const dLng = toRad(b[1] - a[1]);
+    const h =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(a[0])) * Math.cos(toRad(b[0])) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  };
+  const anchors = [{ g: 0, s: 0 }];
+  if (Array.isArray(chargingStops)) {
+    for (const st of chargingStops) {
+      if (!Number.isFinite(st?.lat) || !Number.isFinite(st?.lng) || !Number.isFinite(st?.distKm)) continue;
+      let bi = 0;
+      let bd = Infinity;
+      for (let i = 0; i < geometry.length; i++) {
+        const d = hav(geometry[i], [st.lat, st.lng]);
+        if (d < bd) { bd = d; bi = i; }
+      }
+      anchors.push({ g: cum[bi], s: st.distKm });
+    }
+  }
+  anchors.push({ g: geomTotal, s: totalKm });
+  anchors.sort((a, b) => a.g - b.g);
+  // Keep anchors strictly increasing in g and non-decreasing in s (drop dupes).
+  const mono = [anchors[0]];
+  for (let i = 1; i < anchors.length; i++) {
+    const prev = mono[mono.length - 1];
+    if (anchors[i].g > prev.g + 1e-6 && anchors[i].s >= prev.s) mono.push(anchors[i]);
+  }
+  const mapToSocDist = (g) => {
+    for (let i = 1; i < mono.length; i++) {
+      if (g <= mono[i].g) {
+        const a = mono[i - 1];
+        const b = mono[i];
+        const f = (g - a.g) / ((b.g - a.g) || 1);
+        return a.s + f * (b.s - a.s);
+      }
+    }
+    return mono[mono.length - 1].s;
+  };
 
   const socAt = (km) => {
     if (km <= socProfile[0].distKm) return socProfile[0].soc;
@@ -234,12 +282,12 @@ function buildSocSegments(geometry, socProfile, totalKm) {
   // Break a new sub-segment whenever the bucket color changes OR the rounded
   // battery percentage ticks down by 1, so each hoverable piece carries a tight
   // "X% → Y%" transition (matching the reference battery-level tooltip).
-  const soc0 = socAt(0);
+  const soc0 = socAt(mapToSocDist(0));
   const segs = [];
   let cur = { positions: [geometry[0]], color: socColor(soc0), startSoc: soc0, endSoc: soc0 };
   let curBand = Math.round(soc0);
   for (let i = 1; i < geometry.length; i++) {
-    const km = cum[i] * scale;
+    const km = mapToSocDist(cum[i]);
     const soc = socAt(km);
     const color = socColor(soc);
     const band = Math.round(soc);
@@ -552,8 +600,8 @@ export default function RouteMap({ plan, waypoints = [] }) {
 
   const geometry = plan?.geometry || [];
   const socSegs = useMemo(
-    () => buildSocSegments(geometry, plan?.socProfile, plan?.summary?.distanceKm),
-    [geometry, plan?.socProfile, plan?.summary?.distanceKm]
+    () => buildSocSegments(geometry, plan?.socProfile, plan?.summary?.distanceKm, plan?.chargingStops),
+    [geometry, plan?.socProfile, plan?.summary?.distanceKm, plan?.chargingStops]
   );
 
   // Identify origin/destinations by ROLE, not array position: when the user
