@@ -7,27 +7,20 @@ reviewing and extending the route planner (backend + frontend). Newest entries o
 
 ## Context / current state (2026-06-02)
 
-The route planner is mature. Recently merged (PR #23) and live:
-- **Energy recalibration**: `cd 0.55 → 0.50` (eActros 600 ProCabin −9% cW, CdA 5.0),
-  `FIELD_CALIBRATION_FACTOR 0.80 → 0.83` (anchored to Daimler 103 kWh/100km),
-  `WIND_MPS 3.0 → 0.0` (removed unphysical constant headwind). Berlin→Munich now
-  shows ~108 kWh/100km display, raw ~130 (down from 140).
-- **Fastest-free charger selection** (`rankChargersByTime`): picks the time-optimal
-  station (charge time at effective power + detour penalty) that is free, not merely
-  the nearest. 400 kW IONITY/AUTOSTROM over 150 kW Allego.
-- **Charge-as-break**: a charge dwell ≥45 min counts as the EU-561 break.
+The route planner is mature, and **all of this session's work is merged to `main`
+(PRs #18–#25)** — nothing is uncommitted. The arc, in order:
+- **#18** field-calibration baseline + eActros 600 spec card.
+- **#19** per-road speed limits (Tier S) + visible per-leg km/h + 80 km/h truck cap + SOC-colour anchor + `minSocFloor` gauge.
+- **#20** plain-language hints under the two SOC sliders.
+- **#21** per-stop charging cost (€).
+- **#22** charge-time/ETA reconciled to the matched station's real power.
+- **#23** aero recalibration **cd 0.55 → 0.50** (ProCabin −9%, CdA 5.0), `FIELD_CALIBRATION_FACTOR 0.80 → 0.83`, `WIND_MPS 3.0 → 0.0`, **fastest-free charger selection** (`rankChargersByTime`).
+- **#24** **Speed Limit Profile** chart + exact break placement (4:30/4:30) + read-only-audit fixes (stale anchor text, reconcile epsilon, gauge label, list key).
+- **#25** **bulletproof EU-561 breaks** (a charge is COUNTED as a break but a dedicated 45-min rest is ALWAYS inserted for compliance — matches NexOS; we no longer treat a charge as *the* mandatory break) + docs recalibration for cd=0.50.
 
-Uncommitted (this session, validated, tests green):
-- **Break-precision (4:30/4:30)**: the 4.5 h break now splits the chunk exactly at
-  the cap instead of stopping at the previous ~25 km boundary. ETA-neutral.
-- **Speed Limit Profile (D1, DONE)**: new `SpeedProfile.jsx` step chart of posted
-  limits vs distance (capped at 80), charging stops marked, hover readout. Wired in
-  `RoutesView` after the elevation profile; `routePlanner.js` now forwards
-  `plan.speedLimits`. Makes 30/50 km/h zones visible. Display-only — ETA untouched.
-  Builds clean.
+Net result (Berlin→Munich, 18 t): **~108 kWh/100 km** display (raw ~130, was 140), a **400 kW free charger**, **2 breaks** (dedicated rest + charge), EU 561 compliant.
 
-A read-only audit workflow (backend + frontend) is running in the background to
-surface remaining bugs/gaps; findings will be triaged and fixed, logged here.
+> The **earlier-engagement history** (PRs #8/#9 + the Pass-2 VRP optimiser exploration, 2026-05-31/06-01) lives in **`implementation-notes.html`**. Several items there are **superseded**: the VRP stop-order optimiser is now **dormant** (stop order follows the typed sequence — no auto-reorder), and its energy figures (cd 0.55, ~132 kWh/100 km) predate the cd 0.50 recalibration.
 
 ---
 
@@ -109,10 +102,11 @@ full test suite passing.
 
 ## Tradeoffs considered
 
-- **Charge-as-break vs always a dedicated rest.** We let a ≥45-min charge satisfy the
-  EU-561 break (CORTE-guidance-backed) — faster than NexOS, which always adds a separate
-  rest. The conservative (legally-bulletproof) alternative is to never rely on
-  charge-as-break. See Open Questions.
+- **Charge-as-break vs always a dedicated rest → chose bulletproof (#25).** We initially
+  let a ≥45-min charge *satisfy* the EU-561 break (CORTE-guidance-backed, faster). After the
+  NexOS comparison we switched to the legally-bulletproof posture: the charge is COUNTED as
+  a break but a dedicated 45-min rest is ALWAYS inserted for compliance — never relying on
+  the un-codified charge-as-break reading. Matches NexOS. (OQ1 resolved.)
 
 ---
 
