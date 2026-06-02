@@ -871,6 +871,9 @@ export async function optimizeRoute(planner) {
       chargingStops,
       // Enriched real-world layers from the backend (Open-Meteo).
       elevationProfile: sim.elevationProfile || [],
+      // Posted speed-limit spans (capped at the truck max) -> the Speed Limit Profile
+      // chart. Display-only; the ETA is the backend's TomTom-anchored driving time.
+      speedLimits: Array.isArray(speedLimits) ? speedLimits : [],
       conditions: sim.conditions || {},
       summary,
       optimization: opt || null,
@@ -1137,7 +1140,7 @@ export function reconcileChargeDurations({ segments, stops, summary, chargingSto
   // recompute the deliver-by verdict against the later arrival.
   for (const stop of stops || []) {
     const sh = chargeDeltas
-      .filter((c) => c.distKm <= (Number(stop.distKm) || 0) + 1e-6)
+      .filter((c) => c.distKm <= (Number(stop.distKm) || 0) + 0.01)
       .reduce((a, c) => a + c.deltaMin, 0);
     if (sh <= 0 || !stop.etaIso) continue;
     const d = new Date(stop.etaIso);

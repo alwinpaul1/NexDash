@@ -901,6 +901,33 @@ def plan_route(
 
         # --- EU 561 break check: 4.5h continuous driving cap. ---
         if drive_since_break_min + chunk_drive_min > EU561_MAX_DRIVE_BEFORE_BREAK_MIN:
+            # Drive the slice of THIS chunk that still fits before the 4.5 h cap so the
+            # break lands EXACTLY on the limit (4:30 / 4:30), not at the previous
+            # ~25 km chunk boundary (which left a few minutes of allowance unused).
+            # ETA-neutral: partial + remainder = the same chunk, plus the same 45 min
+            # break -- only WHERE in the chunk the break sits moves. The chunk is then
+            # shrunk to its remainder, driven normally by the block below.
+            t_until = EU561_MAX_DRIVE_BEFORE_BREAK_MIN - drive_since_break_min
+            if 0.0 < t_until < chunk_drive_min:
+                frac = t_until / chunk_drive_min
+                p_km = chunk_km * frac
+                p_soc = chunk_soc_drop * frac
+                p_energy = chunk_energy * frac
+                soc -= p_soc
+                min_soc_seen = min(min_soc_seen, soc)
+                cum_km += p_km
+                clock = clock + timedelta(minutes=t_until)
+                seg_km += p_km
+                seg_drive_min += t_until
+                total_drive_min += t_until
+                day_drive_min += t_until
+                total_energy_kwh += p_energy
+                # Remainder of the chunk -> driven after the break by the block below.
+                chunk_km -= p_km
+                chunk_soc_drop -= p_soc
+                chunk_energy -= p_energy
+                chunk_drive_min -= t_until
+                projected_soc = soc - chunk_soc_drop
             if seg_open:
                 _close_drive_segment()
             br_start = clock
@@ -1118,7 +1145,7 @@ def plan_route(
             f"{field_calibration:.2f} so the headline matches observed laden eActros 600 "
             f"consumption (real-world laden 40 t tests cluster at ~0.96-1.03 kWh/km — Daimler tour "
             f"1.03, Vandijck 0.96, ADAC 0.88) rather than the higher constant-speed steady-state "
-            f"physics (~1.27 kWh/km warm anchor). Charging and "
+            f"physics (~1.22 kWh/km warm anchor at the calibrated CdA 5.0). Charging and "
             f"reachability decisions still use "
             f"the un-discounted conservative estimate, so this only affects the displayed total, "
             f"never whether or when the truck charges. See REAL_WORLD_CALIBRATION.md."

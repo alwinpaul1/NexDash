@@ -23,7 +23,7 @@ export default function ChargingStopsList({ stops = [] }) {
       <ul className="space-y-2.5">
         {list.map((s, i) => (
           <li
-            key={`cs-${i}`}
+            key={Number.isFinite(s?.lat) && Number.isFinite(s?.lng) ? `cs-${s.lat},${s.lng}` : `cs-${i}`}
             className="flex items-start gap-3 rounded-xl bg-surface-low border border-outline-variant/50 px-3 py-2.5"
           >
             <span

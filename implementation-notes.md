@@ -1,0 +1,138 @@
+# NexDash Route Planner — Implementation Notes
+
+Running log of design decisions, deviations, tradeoffs, and open questions while
+reviewing and extending the route planner (backend + frontend). Newest entries on top.
+
+---
+
+## Context / current state (2026-06-02)
+
+The route planner is mature. Recently merged (PR #23) and live:
+- **Energy recalibration**: `cd 0.55 → 0.50` (eActros 600 ProCabin −9% cW, CdA 5.0),
+  `FIELD_CALIBRATION_FACTOR 0.80 → 0.83` (anchored to Daimler 103 kWh/100km),
+  `WIND_MPS 3.0 → 0.0` (removed unphysical constant headwind). Berlin→Munich now
+  shows ~108 kWh/100km display, raw ~130 (down from 140).
+- **Fastest-free charger selection** (`rankChargersByTime`): picks the time-optimal
+  station (charge time at effective power + detour penalty) that is free, not merely
+  the nearest. 400 kW IONITY/AUTOSTROM over 150 kW Allego.
+- **Charge-as-break**: a charge dwell ≥45 min counts as the EU-561 break.
+
+Uncommitted (this session, validated, tests green):
+- **Break-precision (4:30/4:30)**: the 4.5 h break now splits the chunk exactly at
+  the cap instead of stopping at the previous ~25 km boundary. ETA-neutral.
+- **Speed Limit Profile (D1, DONE)**: new `SpeedProfile.jsx` step chart of posted
+  limits vs distance (capped at 80), charging stops marked, hover readout. Wired in
+  `RoutesView` after the elevation profile; `routePlanner.js` now forwards
+  `plan.speedLimits`. Makes 30/50 km/h zones visible. Display-only — ETA untouched.
+  Builds clean.
+
+A read-only audit workflow (backend + frontend) is running in the background to
+surface remaining bugs/gaps; findings will be triaged and fixed, logged here.
+
+---
+
+## Audit triage (2026-06-02) — 5-agent read-only audit + lead synthesis
+
+**Fixed (real, low-risk, verified):**
+- **Stale dispatcher-facing anchor** — `route_planner.py` assumptions text said
+  "~1.27 kWh/km warm anchor" (cd=0.55 era); now "~1.22 … at the calibrated CdA 5.0".
+- **Reconcile match epsilon** — `routePlanner.js` stop-shift used `+1e-6` against
+  0.1 km-rounded distances, which could drop a legit charge-before-stop match; widened
+  to `+0.01` (10 m).
+- **Gauge label** — SocGauge "Min" → "Min floor" (it shows the operator's *set* floor,
+  not the achieved trip low — the exact ambiguity that confused earlier this session).
+- **Stable list key** — ChargingStopsList keyed by lat/lng instead of array index.
+
+**Dropped as FALSE POSITIVE (verified against code + screenshots):**
+- "ChargeCard shows 0 kWh / no cost" — the re-label is `{ ...seg, station }`; `...seg`
+  already preserves `kWh`/`costEur` from the backend segment, and live screenshots show
+  "450 kWh · ≈€202" in the timeline card. The audit misread the `station` sub-object as
+  the whole return. Not a bug.
+- "Divergent `ci`/`cj` counters in reconcile / segment relabel" — both loops walk
+  `segments` in identical order, so they stay aligned. The synthesis itself re-adjudicated
+  and dropped these.
+
+**Deferred / documented (not fixed, with reason):**
+- `/api/optimize` contract gaps (no `chargeTargetSoc`/`fieldCalibration`/`departure`
+  forwarding, weak `origin`/matrix validation). **The endpoint is DORMANT** — the
+  frontend hard-codes `const opt = null` (VRP never auto-invoked, per the earlier
+  typed-order decision). Real gaps, zero current impact. Fix only if the VRP is ever
+  wired to a UI action. (See OQ3.)
+- Docs staleness — README / REAL_WORLD_CALIBRATION.md still cite cd=0.55-era anchors
+  (1.265 / 1.47 / 1.55 kWh/km). The app-facing text is fixed (above); the docs need a
+  recalibration pass (warm ~1.216, recompute cold) — deferred to avoid shipping a
+  hand-guessed cold figure. (See OQ4.)
+- `legTimings`/`speedLimits` lack Pydantic structural validation — current code degrades
+  gracefully (drops to heuristic speed) on malformed input; low risk. Deferred.
+- Multi-day midnight-rollover in `absFromHhmm` reconcile — only bites 3+ day trips with
+  large charge deltas; edge case, deferred. (OQ5)
+
+## Design decisions
+
+### D1 — Per-zone speed display + ETA source (2026-06-02)
+**Decision:** ETA stays anchored to **TomTom's measured truck duration** (traffic +
+posted-limit aware). Separately, add a **speed-limit profile** (speed vs distance,
+capped at the 80 km/h truck limit) so slow zones (30/50 km/h) are *visible* — the
+prior caveat was that a 4 km 30-zone is diluted into a ~73 km/h leg average.
+
+**Why:** The user deferred ("decide yourself … depend on TomTom"). Driving at exactly
+each posted limit everywhere would make the ETA ~30 min *faster* than TomTom's real
+measured time (real trucks lose ~6% to ramps/accel/hills/traffic) — re-introducing the
+optimism the user explicitly ruled out one turn earlier. So: trust TomTom for time,
+surface the posted limits as a profile for visibility. The drive-leg averages (~73–76)
+stay realistic; the profile shows the road's limits (the truck's *target*, which it
+averages just under). This mirrors how a sat-nav shows limit signs while the ETA
+assumes you average below them.
+
+**Verified earlier this turn (live probe):** our driving time == TomTom's traffic-aware
+duration exactly (8.05 h, 73 km/h), all segments ≤ 80 km/h, posted mix on this route
+is 567 km @ 80 + 13 @ 50 + 4 @ 30 + 3 @ 60 + 1 @ 40.
+
+### D2 — Break placement precision (2026-06-02)
+**Decision:** split the chunk at the exact 4.5 h point so the break lands on the cap
+(4:30/4:30) rather than at the previous ~25 km chunk boundary (~4:27).
+**Why / tradeoff:** ETA-neutral by construction (partial + remainder = same chunk +
+same 45-min break). Pure precision/parity with NexOS. Cost: a small split inside the
+safety-critical SOC walk — mitigated by conservation (km/energy/time preserved) and the
+full test suite passing.
+
+---
+
+## Deviations from a naive spec
+
+- **Speeds are anchored to TomTom, not driven at posted limits.** A naive reading of
+  "truck speed = the zone's limit" would set 80 on the autobahn and 30 in towns and let
+  the ETA fall out of that. We deliberately do NOT, because it makes the ETA optimistic
+  vs real measured time. See D1.
+
+---
+
+## Tradeoffs considered
+
+- **Charge-as-break vs always a dedicated rest.** We let a ≥45-min charge satisfy the
+  EU-561 break (CORTE-guidance-backed) — faster than NexOS, which always adds a separate
+  rest. The conservative (legally-bulletproof) alternative is to never rely on
+  charge-as-break. See Open Questions.
+
+---
+
+## Open questions (for later confirmation — not blocking)
+
+- **OQ1 — Charge-as-break legality.** Counting a charge as the mandatory break is
+  *defensible* per CORTE enforcement guidance ("charging counts as rest/break where the
+  driver is free and not working") but **not codified** in Reg. 561/2006, and there's an
+  unresolved "uninterrupted rest / move-after-charge" wrinkle. The bulletproof posture is
+  NexOS's (always a dedicated 45-min rest, charge extra). Currently we lean on the
+  CORTE reading for efficiency. Flag for a compliance call.
+- **OQ2 — Charge target = 95% soft ceiling.** We over-charge (arrive 33–52%) like NexOS
+  (61%). A "charge only what's needed + cushion" policy would be faster but trades away
+  buffer. Left as the conservative long-haul default.
+- **OQ3 — `/api/optimize` (VRP stop-order) is dormant.** `optimizeRoute` hard-codes
+  `opt = null`, so stop order always follows the typed sequence (your earlier explicit
+  rule). The endpoint still exists with contract gaps. Confirm whether the VRP should
+  ever be wired to an explicit "suggest a better order" action; until then it's dead code.
+- **OQ4 — Docs recalibration.** README + REAL_WORLD_CALIBRATION.md still quote cd=0.55-era
+  anchors. Want me to recompute and update them for cd=0.50 / CdA 5.0 (warm ~1.216)?
+- **OQ5 — Multi-day reconcile clock.** For 3+ day routes the HH:MM-based rollover in
+  charge-time reconciliation could misdate a shifted segment; switching to absolute
+  timestamps would harden it. Low priority.

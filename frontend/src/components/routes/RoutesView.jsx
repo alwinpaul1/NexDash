@@ -4,6 +4,7 @@ import PlannerForm from "./PlannerForm.jsx";
 import RouteMap from "./RouteMap.jsx";
 import RouteResults from "./RouteResults.jsx";
 import ElevationProfile from "./ElevationProfile.jsx";
+import SpeedProfile from "./SpeedProfile.jsx";
 import ConditionsPanel from "./ConditionsPanel.jsx";
 
 function nowLocalISO() {
@@ -178,6 +179,11 @@ export default function RoutesView() {
             <>
               <ConditionsPanel conditions={plan.conditions} />
               <ElevationProfile profile={plan.elevationProfile} chargingStops={plan.chargingStops} />
+              <SpeedProfile
+                speedLimits={plan.speedLimits}
+                totalKm={plan.summary?.distanceKm}
+                chargingStops={plan.chargingStops}
+              />
             </>
           )}
 
