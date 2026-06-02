@@ -48,6 +48,10 @@ function DriveRow({ seg }) {
   const start = seg.socStart ?? 0;
   const end = seg.socEnd ?? 0;
   const limit = seg.limitMin || 270;
+  // Average speed over this drive leg (km/h). With per-road posted limits
+  // (Tier S) this varies leg-to-leg — autobahn legs near 80, legs through
+  // towns/30-zones lower. The total still equals TomTom's measured time.
+  const speedKph = seg.durationMin > 0 ? (seg.km || 0) / (seg.durationMin / 60) : 0;
   return (
     <div className="flex-1 rounded-xl bg-surface-low border border-outline-variant/50 px-3 py-2.5">
       <div className="flex items-center justify-between">
@@ -58,9 +62,21 @@ function DriveRow({ seg }) {
             · {Math.round(seg.km || 0)} km · {fmtDur(seg.durationMin)}
           </span>
         </p>
-        <p className="text-[11px] text-on-surface-variant tabular-nums">
-          {fmtDur(seg.durationMin)} / {fmtDur(limit)}
-        </p>
+        <div className="flex items-center gap-2 shrink-0 ml-2">
+          {speedKph > 0 && (
+            <span
+              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium tabular-nums"
+              style={{ background: "#0059bb14", color: "#0059bb" }}
+              title="Average speed over this leg (varies by posted road limits)"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: "13px" }}>speed</span>
+              {Math.round(speedKph)} km/h
+            </span>
+          )}
+          <span className="text-[11px] text-on-surface-variant tabular-nums">
+            {fmtDur(seg.durationMin)} / {fmtDur(limit)}
+          </span>
+        </div>
       </div>
       <div className="mt-2 flex items-center gap-2">
         <span className="text-[11px] tabular-nums" style={{ color: socColor(start) }}>

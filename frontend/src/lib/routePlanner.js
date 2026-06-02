@@ -26,7 +26,12 @@ const TRUCK_SPEC = {
   lengthM: 16.5,
   widthM: 2.55,
   heightM: 4.0,
-  maxSpeedKph: 89,
+  // German Lkw autobahn legal limit is 80 km/h for trucks > 7.5 t. The eActros 600
+  // is electronically limited to ~89 km/h, but routing at that exceeds the legal
+  // (and realistic) truck speed and makes ETAs too optimistic, so we cap routing at
+  // the 80 km/h limit. Real averages then land ~75-78 km/h once ramps / Landstrasse
+  // / traffic are mixed in — consistent with field data and the reference planner.
+  maxSpeedKph: 80,
 };
 
 // Resilient fetch for TomTom calls: a per-request timeout (AbortController) plus
@@ -181,7 +186,10 @@ async function tomtomRoute(waypoints) {
     `&vehicleLength=${TRUCK_SPEC.lengthM}` +
     `&vehicleWidth=${TRUCK_SPEC.widthM}` +
     `&vehicleHeight=${TRUCK_SPEC.heightM}` +
-    `&vehicleCommercial=true`;
+    `&vehicleCommercial=true` +
+    // Posted speed-limit sections along the route, so per-segment speed can follow
+    // the real road (autobahn vs town vs 30-zone) instead of one flat average.
+    `&sectionType=speedLimit`;
 
   const res = await tomtomFetch(url);
   if (!res.ok) throw new Error(`TomTom routing ${res.status}`);
@@ -190,10 +198,15 @@ async function tomtomRoute(waypoints) {
   if (!route) throw new Error("no route returned");
 
   const geometry = [];
+  const cumKm = []; // cumulative distance (km) at each geometry point
   const legTimings = [];
+  let _cum = 0;
   for (const leg of route.legs || []) {
     for (const p of leg.points || []) {
-      geometry.push([p.latitude, p.longitude]);
+      const pt = [p.latitude, p.longitude];
+      if (geometry.length) _cum += haversineKm(geometry[geometry.length - 1], pt);
+      geometry.push(pt);
+      cumKm.push(_cum);
     }
     // Per-leg measured timing -> the backend derives a REAL per-segment speed
     // (traffic/road-class aware) from it instead of the gradient heuristic.
@@ -203,10 +216,23 @@ async function tomtomRoute(waypoints) {
       travelTimeS: ls.travelTimeInSeconds || 0,
     });
   }
+  // Posted speed limits -> distance spans (km), capped at the truck's legal max.
+  // The backend uses these as the per-segment speed SHAPE (30 in a village, 80 on
+  // the autobahn), anchored to the measured leg time so the total ETA is unchanged.
+  const speedLimits = [];
+  for (const sec of route.sections || []) {
+    if (sec.sectionType && sec.sectionType !== "SPEED_LIMIT") continue;
+    const kmh = Number(sec.maxSpeedLimitInKmh);
+    const a = cumKm[sec.startPointIndex];
+    const b = cumKm[sec.endPointIndex];
+    if (!Number.isFinite(kmh) || kmh <= 0 || !Number.isFinite(a) || !Number.isFinite(b) || b <= a) continue;
+    speedLimits.push({ fromKm: a, toKm: b, kmh: Math.min(kmh, TRUCK_SPEC.maxSpeedKph) });
+  }
   const summary = route.summary || {};
   return {
     geometry,
     legTimings,
+    speedLimits,
     distanceKm: (summary.lengthInMeters || 0) / 1000,
     durationS: summary.travelTimeInSeconds || 0,
     // Live-traffic delay baked into travelTime (routeType=fastest + traffic=true
@@ -337,7 +363,7 @@ async function fetchIncidents(geometry) {
 // Backend SOC simulation
 // --------------------------------------------------------------------------- //
 
-async function backendPlan({ waypoints, geometry, legTimings, distanceKm, durationS, planner }) {
+async function backendPlan({ waypoints, geometry, legTimings, speedLimits, distanceKm, durationS, planner }) {
   const body = {
     // Carry per-stop delivery data so the backend can run the per-leg simulation
     // (payload decay after each drop, unload dwell in the ETA, deliver-by check).
@@ -354,6 +380,9 @@ async function backendPlan({ waypoints, geometry, legTimings, distanceKm, durati
     geometry: Array.isArray(geometry) ? geometry : [],
     // Per-leg measured travel time -> backend derives REAL per-segment speed.
     legTimings: Array.isArray(legTimings) ? legTimings : [],
+    // Posted speed-limit distance spans (capped at the truck limit) -> backend
+    // shapes per-segment speed by road, anchored to the measured time.
+    speedLimits: Array.isArray(speedLimits) ? speedLimits : [],
     distanceKm,
     durationS,
     startSoc: planner?.startSoc ?? 100,
@@ -687,6 +716,7 @@ export async function optimizeRoute(planner) {
   let durationS;
   let trafficDelayS = 0;
   let legTimings = [];
+  let speedLimits = [];
   try {
     const r = await tomtomRoute(waypoints);
     geometry = r.geometry;
@@ -694,6 +724,7 @@ export async function optimizeRoute(planner) {
     durationS = r.durationS;
     trafficDelayS = r.trafficDelayS || 0;
     legTimings = r.legTimings || [];
+    speedLimits = r.speedLimits || [];
   } catch {
     const fb = straightLineRoute(waypoints);
     geometry = fb.geometry;
@@ -704,7 +735,7 @@ export async function optimizeRoute(planner) {
   // 2. SOC simulation from the backend. Fall back to a local linear drain.
   try {
     const [sim, incidents] = await Promise.all([
-      backendPlan({ waypoints, geometry, legTimings, distanceKm, durationS, planner: activePlanner }),
+      backendPlan({ waypoints, geometry, legTimings, speedLimits, distanceKm, durationS, planner: activePlanner }),
       fetchIncidents(geometry),
     ]);
     // Swap simulated hubs for real nearby TomTom charging stations.

@@ -163,10 +163,34 @@ function DestinationRow({
       {/* Per-stop delivery options — these feed the backend per-leg simulation. */}
       {open && (
         <div className="px-3 pb-3 pt-1 space-y-3 border-t border-outline-variant/50 bg-surface-lowest/40">
+          {/* Drop-off Weight: editable kg box + slider. The backend subtracts this
+              from the payload for every leg AFTER this stop (payload decay). */}
           <div>
-            <FieldLabel icon="package_2" hint={`drop ${(dest.dropWeightKg / 1000).toFixed(1)} t`}>
-              Drop-off Weight
-            </FieldLabel>
+            <div className="flex items-center justify-between mb-2">
+              <label className="flex items-center gap-1.5 text-[11px] font-medium text-on-surface-variant uppercase tracking-wide">
+                <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: "16px" }}>
+                  package_2
+                </span>
+                Drop-off Weight
+              </label>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="number"
+                  min={0}
+                  max={MAX_PAYLOAD_KG}
+                  step={500}
+                  value={dest.dropWeightKg}
+                  aria-label={`Drop-off weight at stop ${index + 1} in kilograms`}
+                  onChange={(e) =>
+                    onUpdate(dest.id, {
+                      dropWeightKg: Math.max(0, Math.min(MAX_PAYLOAD_KG, Math.round(Number(e.target.value) || 0))),
+                    })
+                  }
+                  className="w-24 px-2 py-1 rounded-lg bg-surface-low border border-outline-variant/60 text-sm text-on-surface text-right outline-none focus:ring-2 focus:ring-primary/40 transition"
+                />
+                <span className="text-xs text-on-surface-variant">kg</span>
+              </div>
+            </div>
             <Slider
               value={dest.dropWeightKg}
               min={0}
@@ -177,29 +201,37 @@ function DestinationRow({
               onChange={(v) => onUpdate(dest.id, { dropWeightKg: v })}
             />
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <FieldLabel icon="timer">Unloading (min)</FieldLabel>
+          {/* Unloading Time: editable min box. */}
+          <div className="flex items-center justify-between">
+            <label className="flex items-center gap-1.5 text-[11px] font-medium text-on-surface-variant uppercase tracking-wide">
+              <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: "16px" }}>
+                timer
+              </span>
+              Unloading Time
+            </label>
+            <div className="flex items-center gap-1.5">
               <input
                 type="number"
                 min={0}
                 step={5}
                 value={dest.unloadMin}
                 aria-label={`Unloading minutes at stop ${index + 1}`}
-                onChange={(e) => onUpdate(dest.id, { unloadMin: Number(e.target.value) })}
-                className="w-full px-3 py-2 rounded-xl bg-surface-low border border-outline-variant/60 text-sm text-on-surface outline-none focus:ring-2 focus:ring-primary/40 transition"
+                onChange={(e) => onUpdate(dest.id, { unloadMin: Math.max(0, Math.round(Number(e.target.value) || 0)) })}
+                className="w-24 px-2 py-1 rounded-lg bg-surface-low border border-outline-variant/60 text-sm text-on-surface text-right outline-none focus:ring-2 focus:ring-primary/40 transition"
               />
+              <span className="text-xs text-on-surface-variant">min</span>
             </div>
-            <div>
-              <FieldLabel icon="event_available">Deliver by</FieldLabel>
-              <input
-                type="datetime-local"
-                value={dest.deliverBy}
-                aria-label={`Deliver-by deadline for stop ${index + 1}`}
-                onChange={(e) => onUpdate(dest.id, { deliverBy: e.target.value })}
-                className="w-full px-2 py-2 rounded-xl bg-surface-low border border-outline-variant/60 text-sm text-on-surface outline-none focus:ring-2 focus:ring-primary/40 transition"
-              />
-            </div>
+          </div>
+          {/* Deliver by. */}
+          <div>
+            <FieldLabel icon="event_available">Deliver by</FieldLabel>
+            <input
+              type="datetime-local"
+              value={dest.deliverBy}
+              aria-label={`Deliver-by deadline for stop ${index + 1}`}
+              onChange={(e) => onUpdate(dest.id, { deliverBy: e.target.value })}
+              className="w-full px-2 py-2 rounded-xl bg-surface-low border border-outline-variant/60 text-sm text-on-surface outline-none focus:ring-2 focus:ring-primary/40 transition"
+            />
           </div>
         </div>
       )}
@@ -398,9 +430,31 @@ export default function PlannerForm({
                 <Slider value={planner.maxChargeKw} min={100} max={400} step={10} onChange={onMaxChargeKw} />
               </div>
               <div>
-                <FieldLabel icon="scale" hint={`${planner.payloadKg} / ${MAX_PAYLOAD_KG} kg`}>
-                  Payload
-                </FieldLabel>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="flex items-center gap-1.5 text-[11px] font-medium text-on-surface-variant uppercase tracking-wide">
+                    <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: "16px" }}>
+                      scale
+                    </span>
+                    Payload
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number"
+                      min={0}
+                      max={MAX_PAYLOAD_KG}
+                      step={500}
+                      value={planner.payloadKg}
+                      aria-label="Payload in kilograms"
+                      onChange={(e) =>
+                        onPayloadKg(
+                          Math.max(0, Math.min(MAX_PAYLOAD_KG, Math.round(Number(e.target.value) || 0)))
+                        )
+                      }
+                      className="w-24 px-2 py-1 rounded-lg bg-surface-low border border-outline-variant/60 text-sm text-on-surface text-right outline-none focus:ring-2 focus:ring-primary/40 transition"
+                    />
+                    <span className="text-xs text-on-surface-variant">kg</span>
+                  </div>
+                </div>
                 <Slider
                   value={planner.payloadKg}
                   min={0}
@@ -408,6 +462,9 @@ export default function PlannerForm({
                   step={250}
                   onChange={onPayloadKg}
                 />
+                <p className="mt-1 text-[10px] text-on-surface-variant/70">
+                  {(planner.payloadKg / 1000).toFixed(1)} t / {MAX_PAYLOAD_KG / 1000} t max
+                </p>
               </div>
             </div>
           )}

@@ -63,6 +63,10 @@ export default function RouteResults({ plan }) {
   const s = plan.summary;
   const d = s.driver || {};
   const stops = plan.stops || [];
+  // Average DRIVING speed (excludes breaks/charging) — the truck's effective
+  // cruising speed, comparable to the figure NexOS shows (~75 km/h).
+  const driveH = s.drivingTimeH ?? d.drivingH ?? 0;
+  const avgSpeed = driveH > 0 ? (s.distanceKm || 0) / driveH : 0;
   // Show the per-stop panel only when it adds information (multi-stop, or any
   // stop carries delivery data) — a lone final stop with no data is noise.
   const showStops =
@@ -75,7 +79,7 @@ export default function RouteResults({ plan }) {
       {/* SOC gauge + badges */}
       <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm p-5">
         <div className="flex flex-col items-center">
-          <SocGauge arrivalSoc={s.arrivalSoc} startSoc={s.startSoc} minSoc={s.minSoc} />
+          <SocGauge arrivalSoc={s.arrivalSoc} startSoc={s.startSoc} minSoc={s.minSocFloor ?? s.minSoc} />
           <div className="flex items-center gap-2 mt-3">
             <span className="px-2.5 py-1 rounded-full bg-surface-low text-on-surface-variant text-xs font-medium ring-1 ring-outline-variant/60">
               eActros 600
@@ -246,7 +250,19 @@ export default function RouteResults({ plan }) {
 
       {/* Trip timeline */}
       <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm p-5">
-        <h3 className="text-[11px] uppercase tracking-wide font-medium text-on-surface-variant mb-3">Trip Timeline</h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-[11px] uppercase tracking-wide font-medium text-on-surface-variant">Trip Timeline</h3>
+          {avgSpeed > 0 && (
+            <span
+              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium tabular-nums"
+              style={{ background: "#0059bb14", color: "#0059bb" }}
+              title="Average driving speed (excludes breaks &amp; charging)"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: "13px" }}>speed</span>
+              Ø {Math.round(avgSpeed)} km/h
+            </span>
+          )}
+        </div>
         <TripTimeline segments={plan.segments} />
       </div>
 

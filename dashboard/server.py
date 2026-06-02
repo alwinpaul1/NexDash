@@ -101,6 +101,16 @@ class RoutePlanRequest(BaseModel):
             "heuristic; absent, the heuristic is used."
         ),
     )
+    speedLimits: Optional[list[dict[str, Any]]] = Field(
+        None,
+        description=(
+            "Optional posted speed-limit distance spans [{fromKm, toKm, kmh}] along "
+            "the route, capped at the truck's legal max. When present the backend "
+            "shapes the per-segment speed by road (e.g. 30 in a village, 80 on the "
+            "autobahn), anchored to the measured travel time so the total ETA is "
+            "unchanged."
+        ),
+    )
 
 
 def _load_model_if_present(app: FastAPI) -> None:
@@ -247,6 +257,7 @@ async def route_plan(req: RoutePlanRequest):
             waypoints=req.waypoints,
             geometry=req.geometry,
             leg_timings=req.legTimings,
+            speed_limits=req.speedLimits,
             model_path=DEFAULT_MODEL_PATH,
         )
     except Exception as exc:  # pragma: no cover - surfaces unexpected failures
