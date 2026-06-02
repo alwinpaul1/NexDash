@@ -77,7 +77,7 @@ export default function SocGauge({ arrivalSoc = 0, startSoc = 100, minSoc = 15 }
           <p className="text-sm font-headline font-semibold text-on-surface">{Math.round(startSoc)}%</p>
         </div>
         <div className="text-center">
-          <p className="text-[11px] uppercase tracking-wide font-medium text-on-surface-variant">Min</p>
+          <p className="text-[11px] uppercase tracking-wide font-medium text-on-surface-variant">Min floor</p>
           <p className="text-sm font-headline font-semibold text-on-surface">{Math.round(minSoc)}%</p>
         </div>
       </div>
