@@ -401,6 +401,9 @@ export default function PlannerForm({
                 </FieldLabel>
                 <Slider value={planner.minSoc} min={0} max={50} onChange={onMinSoc}
                   ariaLabel="Minimum SOC floor" ariaValueText={`${planner.minSoc} percent`} />
+                <p className="mt-1 text-[10px] leading-snug text-on-surface-variant/70">
+                  Charge left in the battery when you reach the destination.
+                </p>
               </div>
               <div>
                 <FieldLabel icon="shield" hint={`${planner.reservePct}%`}>
@@ -408,6 +411,19 @@ export default function PlannerForm({
                 </FieldLabel>
                 <Slider value={planner.reservePct} min={0} max={25} onChange={onReservePct}
                   ariaLabel="Safety reserve" ariaValueText={`${planner.reservePct} percent`} />
+                <p className="mt-1 text-[10px] leading-snug text-on-surface-variant/70">
+                  The floor the truck never dips below at any point en route.
+                </p>
+                <p className="mt-1 flex items-start gap-1 text-[10px] leading-snug text-on-surface-variant/60">
+                  <span className="material-symbols-outlined shrink-0" style={{ fontSize: "12px", lineHeight: "1.3" }}>
+                    info
+                  </span>
+                  <span>
+                    Your battery never drops below the higher of the two —{" "}
+                    <span className="font-medium">{Math.max(planner.minSoc ?? 0, planner.reservePct ?? 0)}% now</span>{" "}
+                    — they aren't added together.
+                  </span>
+                </p>
               </div>
               <div>
                 <FieldLabel icon="alt_route" hint={`${planner.maxDetourKm} km`}>
