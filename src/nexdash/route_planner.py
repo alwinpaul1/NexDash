@@ -839,17 +839,16 @@ def plan_route(
             # gaining charge while it drives.
             soc_profile.append({"distKm": round(cum_km, 1), "soc": round(arrive_soc, 2)})
             soc_profile.append({"distKm": round(cum_km, 1), "soc": round(depart_soc, 2)})
-            # A charge satisfies the EU 561 45-min break ONLY if its dwell is itself
-            # >= 45 min; a short adaptive top-up must NOT reset the continuous-driving
-            # clock, else a ~4-min splash would suppress a legally-owed break and
-            # under-state the ETA.
+            # EU 561 (BULLETPROOF posture, matching NexOS): a >= 45-min charge dwell is
+            # COUNTED as a break (the driver does rest at the plug) but does NOT satisfy
+            # the mandatory 4.5 h break -- we deliberately do NOT reset the continuous-
+            # driving clock on a charge. A DEDICATED 45-min rest is always inserted at
+            # 4.5 h of driving (see the break check below), so compliance never leans on
+            # the "charging counts as the break" reading -- which is CORTE *guidance*,
+            # not codified in Reg. 561/2006, and carries an unresolved move-after-charge
+            # wrinkle. This mirrors NexOS: a separate Rest Stop for compliance AND the
+            # charge counted (2 breaks). A short top-up (< 45 min) is neither.
             if charge_min >= EU561_BREAK_MIN:
-                drive_since_break_min = 0.0
-                # The dwell is itself a valid EU 561 break (>= 45 min off the wheel),
-                # so count it alongside dedicated rest breaks: the driver rested here
-                # even though the stop's purpose was charging. Without this a route
-                # whose break need is met by a long charge under-reports the breaks
-                # actually taken (showed 1 where the driver took 2 — a rest + a charge).
                 n_breaks += 1
                 day_breaks += 1
             # Reopen a fresh drive segment after the charge.
