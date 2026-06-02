@@ -128,8 +128,9 @@ CHARGE_TAPER_FLOOR_FRAC: float = 0.2
 #: Flat energy tariff used for charging-cost estimates (EUR/kWh).
 PRICE_EUR_PER_KWH: float = 0.45
 
-#: Assumed steady headwind component (m/s).
-WIND_MPS: float = 3.0
+#: Assumed steady headwind component (m/s). Zero: no unphysical constant headwind
+#: baked into the flat-fallback / per-segment energy (steady-state anchor is still-air).
+WIND_MPS: float = 0.0
 
 #: Assumed net road gradient (percent). Flat-route approximation.
 GRADIENT_PCT: float = 0.0
@@ -844,6 +845,13 @@ def plan_route(
             # under-state the ETA.
             if charge_min >= EU561_BREAK_MIN:
                 drive_since_break_min = 0.0
+                # The dwell is itself a valid EU 561 break (>= 45 min off the wheel),
+                # so count it alongside dedicated rest breaks: the driver rested here
+                # even though the stop's purpose was charging. Without this a route
+                # whose break need is met by a long charge under-reports the breaks
+                # actually taken (showed 1 where the driver took 2 — a rest + a charge).
+                n_breaks += 1
+                day_breaks += 1
             # Reopen a fresh drive segment after the charge.
             seg_open = True
             seg_soc_start = soc
