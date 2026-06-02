@@ -845,12 +845,16 @@ def plan_route(
             # mandatory 45-min break (Art 4(d): a period used exclusively for
             # recuperation). So a qualifying charge RESETS the continuous-driving clock
             # and no redundant dedicated rest is inserted -- honouring "charging is a
-            # break" under CORTE enforcement guidance. The charge block runs BEFORE the
-            # 4.5 h break check below, and a charge is only inserted while SOC is low
-            # (always before 4.5 h of driving completes), so driving never runs past
-            # 4.5 h without a >= 45-min rest (charge or dedicated). A short top-up
-            # (< 45 min) is conservatively credited as NEITHER a break nor a partial
-            # 15+30 split: the clock keeps running and the dedicated rest still fires.
+            # break" under CORTE enforcement guidance. Compliance is GUARANTEED by the
+            # break check below, which splits each chunk EXACTLY at the 4.5 h cap and
+            # inserts a rest -- so driving never runs past 4.5 h without a >= 45-min
+            # rest. This charge block runs BEFORE that check, so when a qualifying
+            # charge resets the clock the check sees the reset and adds no redundant
+            # dedicated rest; the same invariant (drive_since_break_min <= 4.5 h on
+            # entry to every chunk) means a charge always falls within the window. A
+            # short top-up (< 45 min) is conservatively credited as NEITHER a break nor
+            # a partial 15+30 split: the clock keeps running and the dedicated rest
+            # still fires.
             if charge_min >= EU561_BREAK_MIN:
                 n_breaks += 1
                 day_breaks += 1
