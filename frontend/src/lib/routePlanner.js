@@ -476,7 +476,29 @@ async function fetchAvailability(availabilityId) {
 //   maxPowerKw:   number | null         — max ratedPowerKW across connectors
 //   availability: { available, total } | null  — live "X of Y free" (best-effort)
 //   openingHours: string | null         — short human string
-async function enrichStations(stops, radiusKm = 30, minChargerKw = 150) {
+// Rank charging candidates by TOTAL added time = charge time (at the station's
+// real power, capped at the truck's max) + a round-trip detour penalty. The
+// energy to add is identical for every candidate at a given stop, so this ranks a
+// faster charger a little further off-route ABOVE a slow one right on the line —
+// which is what actually minimises trip time. Pure + exported for tests. Returns
+// [{ c, score }] sorted fastest-first (lowest added time).
+export function rankChargersByTime(candidates, { energyKwh = 400, maxChargeKw = 400, detourKph = 60 } = {}) {
+  const cap = Number.isFinite(maxChargeKw) && maxChargeKw > 0 ? maxChargeKw : 400;
+  const e = Number.isFinite(energyKwh) && energyKwh > 0 ? energyKwh : 400;
+  const powerOf = (c) =>
+    (c?.chargingPark?.connectors || []).reduce((mx, x) => Math.max(mx, Number(x.ratedPowerKW) || 0), 0);
+  const scoreOf = (c) => {
+    const eff = Math.min(cap, powerOf(c)); // truck can't pull more than its own cap
+    const chargeMin = eff > 0 ? (e / (eff * 0.9)) * 60 : Infinity; // unknown power -> last
+    const detourMin = ((Number(c?.dist) || 0) / 1000 / detourKph) * 60 * 2; // out-and-back
+    return chargeMin + detourMin;
+  };
+  return (Array.isArray(candidates) ? candidates : [])
+    .map((c) => ({ c, score: scoreOf(c) }))
+    .sort((a, b) => a.score - b.score);
+}
+
+async function enrichStations(stops, radiusKm = 30, minChargerKw = 150, maxChargeKw = 400) {
   if (!TOMTOM_KEY || !Array.isArray(stops) || stops.length === 0) return stops || [];
   const radius = Math.max(1000, Math.round((radiusKm || 30) * 1000));
   // A 40 t eActros charges on high-power DC (CCS Combo / MCS), NOT the slow AC
@@ -494,7 +516,7 @@ async function enrichStations(stops, radiusKm = 30, minChargerKw = 150) {
       try {
         const base =
           `https://api.tomtom.com/search/2/categorySearch/EV%20charging.json` +
-          `?key=${TOMTOM_KEY}&lat=${s.lat}&lon=${s.lng}&radius=${radius}&categorySet=7309&limit=5` +
+          `?key=${TOMTOM_KEY}&lat=${s.lat}&lon=${s.lng}&radius=${radius}&categorySet=7309&limit=12` +
           `&openingHours=nextSevenDays&relatedPois=child`;
         const nearestList = async ({ minPowerKW = 0, connectorSet = "" } = {}) => {
           let u = base;
@@ -510,21 +532,29 @@ async function enrichStations(stops, radiusKm = 30, minChargerKw = 150) {
         if (!candidates.length) candidates = await nearestList();
         if (!candidates.length) return s;
 
-        // Prefer the nearest CURRENTLY-AVAILABLE station. TomTom returns candidates
-        // nearest-first; take the first with a free plug, falling back to the nearest
-        // if none report one (or none expose live availability). Availability is a
-        // planning-time snapshot — the truck arrives later — so it only breaks ties
-        // between nearby stations; it never blocks a stop (you'd strand otherwise).
-        let r = candidates[0];
-        let availability = await fetchAvailability(r.dataSources?.chargingAvailability?.id);
-        if (!(availability && availability.available > 0)) {
-          for (const cand of candidates.slice(1)) {
-            const a = await fetchAvailability(cand.dataSources?.chargingAvailability?.id);
-            if (a && a.available > 0) {
-              r = cand;
-              availability = a;
-              break;
-            }
+        // Choose the TIME-OPTIMAL station (fastest stop overall), not merely the
+        // nearest: a higher-power charger a little further off-route finishes the
+        // stop sooner, which is what actually minimises trip time. (Picking nearest
+        // is why we used to land a slow 150 kW site when a 300 kW one was close by.)
+        const cap = Number.isFinite(maxChargeKw) && maxChargeKw > 0 ? maxChargeKw : 400;
+        const ranked = rankChargersByTime(candidates, { energyKwh: s.kWh, maxChargeKw: cap });
+        // "Fastest FREE charger on the route." `ranked` is already ordered by total
+        // added time (charge time at effective power + detour), so we check the top
+        // few for a free slot — in parallel — and take the FASTEST one that has one.
+        // Availability is a planning-time snapshot (the truck arrives hours later), so
+        // if none of the top candidates report a free slot we fall back to the fastest
+        // overall rather than strand the stop on a stale "busy".
+        const topK = ranked.slice(0, 6);
+        const avails = await Promise.all(
+          topK.map(({ c }) => fetchAvailability(c.dataSources?.chargingAvailability?.id))
+        );
+        let r = ranked[0].c;
+        let availability = avails[0] || null;
+        for (let i = 0; i < topK.length; i += 1) {
+          if (avails[i] && avails[i].available > 0) {
+            r = topK[i].c;
+            availability = avails[i];
+            break;
           }
         }
 
@@ -560,9 +590,12 @@ async function enrichStations(stops, radiusKm = 30, minChargerKw = 150) {
         // SOC (a flat estimate would read optimistically fast). Null when we
         // lack either the planned kWh or the station's power.
         const powerKw = maxPowerKw > 0 ? maxPowerKw : null;
+        // Charge time uses the EFFECTIVE power — the station's rating capped at the
+        // truck's max charge power (a 600 kW post can't push the eActros past ~400 kW).
+        const effPowerKw = powerKw ? Math.min(cap, powerKw) : null;
         const chargeMinutes =
-          powerKw && Number.isFinite(s.kWh) && s.kWh > 0
-            ? Math.round((s.kWh / (powerKw * 0.9)) * 60)
+          effPowerKw && Number.isFinite(s.kWh) && s.kWh > 0
+            ? Math.round((s.kWh / (effPowerKw * 0.9)) * 60)
             : null;
 
         return {
@@ -739,7 +772,7 @@ export async function optimizeRoute(planner) {
       fetchIncidents(geometry),
     ]);
     // Swap simulated hubs for real nearby TomTom charging stations.
-    const chargingStops = await enrichStations(sim.chargingStops || [], planner?.maxDetourKm, planner?.minChargerKw);
+    const chargingStops = await enrichStations(sim.chargingStops || [], planner?.maxDetourKm, planner?.minChargerKw, planner?.maxChargeKw);
 
     // Re-route the DISPLAYED polyline THROUGH the real charging stations so the
     // drawn route visibly detours off the road into each station, instead of the
@@ -1047,10 +1080,13 @@ export function reconcileChargeDurations({ segments, stops, summary, chargingSto
     if (delta > 0) {
       anyDelta = true;
       seg.durationMin = reconciled;
-      if (station) {
-        station.durationMin = reconciled;
-        station.chargeMinutes = reconciled; // keep the Charging-Stops card in sync
-      }
+    }
+    // Always mirror the Charging-Stops card to the timeline's charge duration —
+    // even when the station meets the truck's cap (delta 0) — so the card estimate
+    // and the segment never disagree (they previously differed by the taper margin).
+    if (station) {
+      station.durationMin = reconciled;
+      station.chargeMinutes = reconciled;
     }
     chargeDeltas.push({
       distKm: station && Number.isFinite(station.distKm) ? station.distKm : Infinity,

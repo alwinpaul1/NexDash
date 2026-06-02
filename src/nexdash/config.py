@@ -54,7 +54,7 @@ class Truck:
     max_payload_t: float = 22.0  # ~22 t with std EU semitrailer; GCW up to 44 t. [S1][S2]
     kerb_mass_kg: float = 18000.0  # loaded-rig baseline (tractor ~11.7 t + empty trailer); +22 t = 40 t GCW. [S3]
     frontal_area_m2: float = 10.0  # literature value for EU tractor-semitrailer (not published). [S3][S8]
-    cd: float = 0.55  # std aero tractor-trailer drag; consistent with ProCabin -9% cW claim. [S1][S6]
+    cd: float = 0.50  # ProCabin: generic 0.55 tractor-trailer x 0.91 (-9% cW). CdA 5.0. [S1][S6]
     crr: float = 0.0055  # long-haul LRR truck tyres ~0.005-0.007; tuned to the measured band. [S2][S8]
     drivetrain_eff: float = 0.85  # battery-to-wheel for 800 V e-axle at cruise. [S1]
     regen_eff: float = 0.60  # ~50-70% braking capture, ~25% favourable-stage recovery. [S4][S5][S11]
@@ -93,12 +93,13 @@ G: float = 9.81
 MAPE_FLOOR_KWH: float = 1.0
 
 #: Field-calibration factor mapping the first-principles STEADY-STATE energy
-#: (constant-speed, full-tractive-demand physics; ~1.265 kWh/km warm anchor at
-#: 40 t / 80 km/h / 20 C) DOWN to field-observed laden eActros 600 consumption on
-#: real mixed routes. Real-world laden tests cluster at ~0.96-1.03 kWh/km (Daimler
-#: 15,000 km European tour 1.03 at 40 t; Vandijck 0.96; ADAC German-roads 0.88),
-#: vs Mercedes' ~1.19 spec estimate. 0.80 x the ~1.265 steady-state anchor ~= 1.01
-#: kWh/km -- mid that band; a lighter ~36 t German autobahn run then lands ~0.96.
+#: (constant-speed, full-tractive-demand physics; ~1.216 kWh/km warm anchor at
+#: 40 t / 80 km/h / 20 C with the calibrated CdA 5.0) DOWN to field-observed laden
+#: eActros 600 consumption on real mixed routes. Real-world laden tests cluster at
+#: ~0.96-1.03 kWh/km (Daimler 15,000 km European tour 1.03 at 40 t; Vandijck 0.96;
+#: ADAC German-roads 0.88), vs Mercedes' ~1.19 spec estimate. 0.83 x the ~1.216
+#: steady-state anchor ~= 1.01 kWh/km -- on the Daimler tour anchor; a lighter ~36 t
+#: German autobahn run then lands ~0.93, between ADAC 0.88 and Daimler 1.03.
 #: Real driving (coasting, eco-driving, traffic flow)
 #: runs below constant-speed physics, a gap the steady-state model cannot capture;
 #: the calibration doc already attributes the steady-state-vs-field gap to exactly
@@ -109,7 +110,7 @@ MAPE_FLOOR_KWH: float = 1.0
 #: 1.0 disables it. REMOVAL CONDITION: retune or remove once the ML model is
 #: retrained against field (not steady-state) labels, or the energy-side speed
 #: model changes. [S3][S4][S5] (see docs/REAL_WORLD_CALIBRATION.md)
-FIELD_CALIBRATION_FACTOR: float = 0.80
+FIELD_CALIBRATION_FACTOR: float = 0.83
 
 # --------------------------------------------------------------------------- #
 # Filesystem paths
