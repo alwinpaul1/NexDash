@@ -13,7 +13,7 @@
 // On ANY failure (missing key, network, backend down, no model) it returns a
 // best-effort local fallback so the UI still renders something sensible.
 
-const TOMTOM_KEY = import.meta.env.VITE_TOMTOM_API_KEY;
+const TOMTOM_KEY = import.meta.env?.VITE_TOMTOM_API_KEY;
 
 // Single source of truth for the routed vehicle, so what TomTom routes matches
 // the eActros 600 the backend simulates (kerb ~18 t + 22 t payload = 40 t GCW,
@@ -67,7 +67,7 @@ async function tomtomFetch(url, { timeoutMs = 8000, retries = 2 } = {}) {
 
 // Backend base URL. In dev the Vite proxy / same-origin usually works; allow an
 // explicit override via VITE_API_BASE if the API runs elsewhere.
-const API_BASE = import.meta.env.VITE_API_BASE || "";
+const API_BASE = import.meta.env?.VITE_API_BASE || "";
 
 // Flat fallback charging tariff (mirrors backend PRICE_EUR_PER_KWH). A real
 // per-station tariff overrides this when the station data carries one — see
@@ -782,7 +782,7 @@ export async function optimizeRoute(planner) {
         const e = chargingStops[ci++];
         return { ...seg, station: { name: e.name, lat: e.lat, lng: e.lng, address: e.address } };
       }
-      return seg;
+      return { ...seg };
     });
     const summary = { ...(sim.summary || {}) };
     // Honest caveats surfaced in the existing assumptions block (RouteResults reads it).
@@ -809,13 +809,32 @@ export async function optimizeRoute(planner) {
     }
     summary.assumptions = assumptions;
     summary.destinationCharger = opt?.destinationCharger || null;
+
+    // Per-destination arrivals (SOC/ETA/deliver-by) from the per-leg sim — must
+    // be forwarded or the "Delivery Stops" panel never renders. Copied so the
+    // charge-time reconciliation below can re-stamp their ETAs without mutating sim.
+    const stops = (sim.stops || []).map((s) => ({ ...s }));
+
+    // Reconcile each planned charge time (the backend computes it at the truck's
+    // max charge power) with the REAL matched station's rated power: a station
+    // that can't deliver full power charges slower, so the charge — and the ETA,
+    // total time and every later segment / stop — move later. Display-only; the
+    // SOC walk, kWh and energy headline are unchanged (same electrons, more
+    // minutes at the plug).
+    reconcileChargeDurations({
+      segments,
+      stops,
+      summary,
+      chargingStops,
+      maxChargeKw: activePlanner?.maxChargeKw,
+      departure: activePlanner?.departure,
+    });
+
     return {
       geometry,
       socProfile: sim.socProfile || [],
       segments,
-      // Per-destination arrivals (SOC/ETA/deliver-by) from the per-leg sim — must
-      // be forwarded or the "Delivery Stops" panel never renders.
-      stops: sim.stops || [],
+      stops,
       chargingStops,
       // Enriched real-world layers from the backend (Open-Meteo).
       elevationProfile: sim.elevationProfile || [],
@@ -995,3 +1014,121 @@ function hhmm(d) {
 
 const round1 = (n) => Math.round(n * 10) / 10;
 const round2 = (n) => Math.round(n * 100) / 100;
+
+// --------------------------------------------------------------------------- //
+// Charge-time reconciliation (real station power)
+// --------------------------------------------------------------------------- //
+
+// The backend plans each charge at the truck's max charge power (`maxChargeKw`,
+// ~400 kW). The frontend then matches a REAL station, which may only deliver
+// e.g. 300 kW — so the charge actually takes longer, and so do the ETA, total
+// time, and every segment / delivery stop AFTER it. This re-stamps all of those.
+//
+// Scaling is one-directional (a charge is never made SHORTER): we multiply the
+// planned minutes by `cap / stationKw` only when the station sits below the cap,
+// which preserves the backend's taper model while correcting for the power
+// deficit and can't introduce new optimism. Display-only — SOC, kWh and the
+// energy headline are untouched. Mutates the passed plan objects in place.
+export function reconcileChargeDurations({ segments, stops, summary, chargingStops, maxChargeKw, departure }) {
+  const cap = Number.isFinite(maxChargeKw) && maxChargeKw > 0 ? maxChargeKw : 400;
+  const chargeDeltas = []; // { distKm, deltaMin } per charge, in route order
+  let ci = 0;
+  let anyDelta = false;
+  for (const seg of segments || []) {
+    if (seg.type !== "charge") continue;
+    const station = chargingStops?.[ci];
+    const planned = Number(seg.durationMin) || 0;
+    const kw = station ? Number(station.maxPowerKw) : NaN;
+    let reconciled = planned;
+    if (Number.isFinite(kw) && kw > 0 && kw < cap) {
+      reconciled = Math.round(planned * (cap / kw));
+    }
+    const delta = Math.max(0, reconciled - planned);
+    if (delta > 0) {
+      anyDelta = true;
+      seg.durationMin = reconciled;
+      if (station) {
+        station.durationMin = reconciled;
+        station.chargeMinutes = reconciled; // keep the Charging-Stops card in sync
+      }
+    }
+    chargeDeltas.push({
+      distKm: station && Number.isFinite(station.distKm) ? station.distKm : Infinity,
+      deltaMin: delta,
+    });
+    ci += 1;
+  }
+  if (!anyDelta) return;
+
+  // Re-stamp every segment's clock: reconstruct the backend's absolute times from
+  // their HH:MM (anchored to the departure date, tracking midnight rollover) and
+  // add the cumulative charge delta accrued up to each point. Walking `prevEnd`
+  // on the ORIGINAL timeline keeps rollover reconstruction exact.
+  const depart = parseDeparture(departure);
+  depart.setSeconds(0, 0);
+  let prevEnd = new Date(depart);
+  let cumShift = 0; // minutes added by reconciled charges seen so far
+  let cj = 0;
+  let etaAbs = new Date(depart);
+  for (const seg of segments) {
+    const startAbs = absFromHhmm(prevEnd, seg.startTime);
+    const endAbs = absFromHhmm(startAbs, seg.endTime);
+    seg.startTime = hhmm(new Date(startAbs.getTime() + cumShift * 60000));
+    if (seg.type === "charge") {
+      cumShift += chargeDeltas[cj] ? chargeDeltas[cj].deltaMin : 0;
+      cj += 1;
+    }
+    const newEnd = new Date(endAbs.getTime() + cumShift * 60000);
+    seg.endTime = hhmm(newEnd);
+    prevEnd = endAbs;
+    etaAbs = newEnd;
+  }
+
+  // Summary: ETA + total time move by the full delta; charging time grows.
+  const totalDelta = chargeDeltas.reduce((a, c) => a + c.deltaMin, 0);
+  summary.etaLabel = hhmm(etaAbs);
+  summary.etaIso = localIso(etaAbs);
+  summary.totalTimeH = round2((etaAbs.getTime() - depart.getTime()) / 3600000);
+  summary.chargingTimeMin = Math.round((Number(summary.chargingTimeMin) || 0) + totalDelta);
+  if (Array.isArray(summary.assumptions)) {
+    summary.assumptions.push(
+      "Charge time reflects each matched station's real rated power; where that is below the truck's max " +
+        "charge power the charge — and the ETA — run longer than a full-power estimate."
+    );
+  }
+
+  // Delivery-stop ETAs after a reconciled charge shift by the deltas before them;
+  // recompute the deliver-by verdict against the later arrival.
+  for (const stop of stops || []) {
+    const sh = chargeDeltas
+      .filter((c) => c.distKm <= (Number(stop.distKm) || 0) + 1e-6)
+      .reduce((a, c) => a + c.deltaMin, 0);
+    if (sh <= 0 || !stop.etaIso) continue;
+    const d = new Date(stop.etaIso);
+    if (Number.isNaN(d.getTime())) continue;
+    const nd = new Date(d.getTime() + sh * 60000);
+    stop.etaIso = localIso(nd);
+    stop.etaLabel = hhmm(nd);
+    if (stop.deliverBy) {
+      const dl = new Date(stop.deliverBy);
+      if (!Number.isNaN(dl.getTime())) stop.onTime = nd.getTime() <= dl.getTime();
+    }
+  }
+}
+
+// First datetime >= `notBefore` whose wall-clock is `hh:mm` (handles the segment
+// crossing midnight from the previous one). Anchored to notBefore's calendar day.
+function absFromHhmm(notBefore, hhmmStr) {
+  const [h, m] = String(hhmmStr || "0:0").split(":").map((x) => Number(x));
+  const d = new Date(notBefore);
+  d.setHours(h || 0, m || 0, 0, 0);
+  if (d.getTime() < notBefore.getTime()) d.setDate(d.getDate() + 1);
+  return d;
+}
+
+// Local (not UTC) "YYYY-MM-DDTHH:MM" — matches the naive ISO the rest of the app
+// uses, so a later `new Date(iso)` re-parses in the same local frame.
+function localIso(d) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
