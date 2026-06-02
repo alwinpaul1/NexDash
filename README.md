@@ -250,7 +250,7 @@ The reachability service exposes uncertainty on every verdict in two ways. First
 - **Regen** is tapered on descents by temperature and grade (`0.60 · g_temp · g_grade`, floors 0.45 cold / 0.70 steep; was a flat 60%). The steep-grade floor is 0.70 (not a lower value) so that recovered energy stays **monotonically non-decreasing in |grade|** — a steeper descent must never return *less* charge.
 - **Temperature** therefore acts through *four* channels — cold-air drag, cold-tyre roll, reduced regen and the U-shaped HVAC aux — not HVAC alone.
 
-The combined winter signal is visible end-to-end: a flat 40 t / 80 km/h segment costs **~1.265 kWh/km at 20 °C** but **~1.47 kWh/km at −10 °C** (a ~+16% swing; a faster, lighter 22 t / 85 km/h flat run reaches **~1.55 kWh/km** in the cold, where the higher speed and warmer-anchor split push the aero share up), the explicit-channel counterpart of the field-observed +25% winter penalty.
+The combined winter signal is visible end-to-end: a flat 40 t / 80 km/h segment (at the calibrated cd = 0.50 / CdA 5.0) costs **~1.216 kWh/km at 20 °C** but **~1.42 kWh/km at −10 °C** (a ~+17% swing; the same laden truck at 85 km/h in the cold reaches **~1.49 kWh/km** as the higher speed lifts the aero share), the explicit-channel counterpart of the field-observed +25% winter penalty.
 
 **The honest residual limitations that remain** — fixing the big four does not make the model perfect:
 

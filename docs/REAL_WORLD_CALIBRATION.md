@@ -28,7 +28,7 @@ mixed long-haul envelope, not laboratory WLTP conditions.
 | `max_payload_t` | 22.0 | **22.0** (keep) | ~22 t payload with a standard EU semitrailer; GVW 22 t, GCW up to 44 t. [S1][S2] |
 | `kerb_mass_kg` | 18000.0 | **18000.0** (keep, re-documented) | This is the **loaded-rig baseline** (tractor + empty semitrailer), NOT the bare tractor. The bare 4×2 tractor kerb mass is ~11.7 t (hylane: 11,546 kg chassis+cab). 18 t base + 22 t payload = 40 t GCW, the reference combination weight for the official 500 km range and all field tests. Keeping 18 t makes "payload_t = 0" mean "empty trailer attached" (~18 t) and "payload_t = 22" mean a fully loaded 40 t rig — the correct operating span. [S3] |
 | `frontal_area_m2` | 10.0 | **10.0** (keep) | Not published by Daimler. 10 m² is the standard literature value for a European tractor-semitrailer frontal area (cab width ~2.48 m × height ~3.9 m gives ~9–10 m² effective). Defensible class value. [S3][S8] |
-| `cd` | 0.55 | **0.55** (keep) | No absolute Cd is published; Daimler states only the new ProCabin lowers the cW value **9% vs the current series Actros** (front extended +80 mm, wheel infills, no MirrorCam) for a ~2–3% efficiency gain. 0.55 is a standard literature drag coefficient for a modern aero tractor-trailer and is consistent with the relative-improvement claim. [S1][S6] |
+| `cd` | 0.55 | **0.50** (apply ProCabin −9%) | No absolute Cd is published; Daimler states the new ProCabin lowers the cW value **9% vs the current series Actros** (front extended +80 mm, wheel infills, no MirrorCam). 0.55 is the standard modern aero tractor-trailer drag coefficient; applying the cited −9% to it gives **0.55 × 0.91 ≈ 0.50** (so CdA = 0.50 × 10 = **5.0**). This models *this* aero-optimised ProCabin truck rather than a generic combo, and lands the raw steady-state in the field band without leaning on the display calibration. [S1][S6] |
 | `crr` | 0.006 | **0.0055** (BASE value) | Not published. Long-haul truck tyres on good asphalt sit ~0.005–0.007; the eActros uses low-rolling-resistance 315/70 R22.5 drive / 385/55 R22.5 steer tyres. 0.0055 is a defensible mid value that, combined with the Cd/area above, reproduces the real-world consumption band (see §3). **This is now a BASE coefficient**: `physics.py` multiplies it by a speed factor `f_speed` and a temperature factor `f_temp` (`Crr_eff = Crr0 · f_speed · f_temp`), both normalised to 1.0 at the 80 km/h / 20 °C reference so this anchor is unchanged. See "New physics-module constants" below and §3. [S2][S8] |
 | `drivetrain_eff` | 0.87 | **0.85** | Not published. 0.85 is a standard battery-to-wheel efficiency for an 800 V e-axle drivetrain (motor + inverter + 4-speed gearbox) under steady cruise; slightly lower than 0.87 to better hit the measured ~1.1–1.3 kWh/km band. [S1] |
 | `regen_eff` | 0.60 | **0.60** (BASE value) | Well-supported. eActros regen is 400 kW continuous / 600 kW peak with 5 recuperation levels. Field evidence: ~10% of battery recovered on the Drackensteiner Hang descent; up to ~25% of total energy recovered on favourable stages; capture efficiency ~60–70% of a braking event; ~51% on a steady 6% downhill in a comparable BEV-truck study. 0.60 is a sound central value. **This is now a BASE fraction**: on descents `physics.py` tapers it by a temperature factor `g_temp` and a grade factor `g_grade` (`regen_eff_eff = 0.60 · g_temp · g_grade`); mild descents in mild weather keep the full 0.60. See "New physics-module constants" below and §3. [S4][S5][S11] |
@@ -74,10 +74,10 @@ reference.
 ### Target baseline consumption band
 The recalibrated generator should reproduce, for a **40 t combination on the
 flat at 80 km/h, 20 °C, no wind**, a battery-side warm anchor of
-**~1.265 kWh/km** (the pure-physics, no-route-regen figure, referenced at
-`rho(20 °C) = 1.204`), rising to **~1.47 kWh/km at −10 °C** on the same segment
-once the temperature-dependent air-density and cold-tyre channels engage (15 °C
-is the pivot at the old 1.225 density). On *real mixed routes* (which include
+**~1.216 kWh/km** (the pure-physics, no-route-regen figure at the calibrated
+**cd = 0.50 / CdA 5.0**, `rho(20 °C) = 1.204`), rising to **~1.42 kWh/km at −10 °C**
+on the same segment once the temperature-dependent air-density and cold-tyre
+channels engage (15 °C is the pivot at the old 1.225 density). On *real mixed routes* (which include
 descents that feed regen) the warm figure averages down toward the
 field-measured **~0.95–1.05 kWh/km**:
 
@@ -86,51 +86,47 @@ field-measured **~0.95–1.05 kWh/km**:
 - Vandijck 1,530 km long-haul: **0.963 kWh/km**; aero-kit truck **0.934 kWh/km**. [S7]
 - WLTP declared: **1.19 kWh/km**; spec-implied (600 kWh / 500 km): **~1.20 kWh/km**. [S2]
 
-With the §1 values (`crr=0.0055, cd=0.55, A=10, dt=0.85`) and the now
-temperature-dependent air density, the model yields a **warm anchor of
-~1.265 kWh/km** at 40 t / 80 km/h flat / **20 °C** — referenced at
-`rho(20 °C) = 1.204` (the old constant 1.225 lowered the warm aero share, so the
-anchor moved down ~0.025 kWh/km from the previous ~1.29). **15 °C remains the
-pivot**: `rho(15 °C) = 1.225` exactly, continuous with the old constant, so the
-calibration is unchanged at the reference temperature. The same 40 t / 80 km/h
-flat segment **in the cold rises to ~1.47 kWh/km at −10 °C** (denser air +
-cold-tyre stiffening), a ~+16% winter swing on this physics-only segment and the
-explicit-channel counterpart of the field-observed +25% winter penalty. (A
-faster, lighter 22 t / 85 km/h flat run reaches **~1.55 kWh/km** in the cold,
-where the higher speed lifts the aero share.) Both
-figures sit inside the WLTP/spec-implied band at the warm end and the field
-"cold + unpaved" envelope (up to 1.40 measured, higher on the steady-state
-physics-only run) at the cold end. Empty-rig (18 t) flat at 80 km/h / 20 °C
-falls to **~0.90 kWh/km**; mid-load (29 t) to **~1.09 kWh/km**. The empty→full
-span (~0.90 → ~1.265) is ~+40% gross, consistent with the +0.6–0.8% per tonne
-field sensitivity over a 22 t payload swing. [S8][S5]
+With the §1 values (`crr=0.0055, cd=0.50, A=10` → **CdA 5.0**, `dt=0.85`) and the
+now temperature-dependent air density, the model yields a **warm anchor of
+~1.216 kWh/km** at 40 t / 80 km/h flat / **20 °C** (`rho(20 °C) = 1.204`).
+**15 °C remains the pivot**: `rho(15 °C) = 1.225` exactly, continuous with the old
+constant. The same 40 t / 80 km/h flat segment **in the cold rises to ~1.42 kWh/km
+at −10 °C** (denser air + cold-tyre stiffening), a ~+17% winter swing on this
+physics-only segment and the explicit-channel counterpart of the field-observed
++25% winter penalty. (The same laden 40 t at **85 km/h in the cold reaches
+~1.49 kWh/km**, the higher speed lifting the aero share.) Both figures sit inside
+the WLTP/spec-implied band at the warm end and the field "cold + unpaved" envelope
+(up to 1.40 measured, higher on the steady-state physics-only run) at the cold end.
+Empty-rig (18 t) flat at 80 km/h / 20 °C falls to **~0.83 kWh/km**; mid-load (29 t)
+to **~1.02 kWh/km**. The empty→full span (~0.83 → ~1.22) is ~+47% gross, consistent
+with the +0.6–0.8% per tonne field sensitivity over a 22 t payload swing. [S8][S5]
 
 ### Field-calibration factor (displayed energy vs steady-state physics)
 The physics above is a **constant-speed, full-tractive-demand steady-state**
 model. On a real, gently-rolling Autobahn run it reproduces the *spec/WLTP* end
 of consumption, **not** the field-measured average. Worked example — a 36 t
-(18 t payload) Munich→Berlin run (~591 km, ~1104 m climb but **net downhill**:
-Munich ~520 m → Berlin ~34 m, so net gradient ≈ −0.08%), 15 °C, ~83 km/h: the
-first-principles figure is **~122–126 kWh/100 km** (≈ the manufacturer
-spec-implied 600 kWh ÷ 500 km ≈ 120). The field tests above for the *same* class
+(18 t payload) Munich→Berlin run (~590 km, ~1.6 km cumulative climb but **net
+downhill**: Munich ~520 m → Berlin ~34 m), 15 °C, ~73 km/h: the first-principles
+(raw steady-state) figure is **~130 kWh/100 km** (the route's real climbs cost
+energy that net-flat physics misses). The field tests above for the *same* class
 of run land **lower** — ADAC 88, Daimler tour 1.03, Commercial Motor 1.05–1.12 —
 because real driving (coasting, eco-driving, traffic flow, mixed-route regen) runs
 below constant-speed physics, a gap the steady-state model structurally cannot
 close on a net-flat route.
 
 To make the **displayed** energy headline track field reality, NexDash applies a
-single documented multiplier `config.FIELD_CALIBRATION_FACTOR = 0.80` to
+single documented multiplier `config.FIELD_CALIBRATION_FACTOR = 0.83` to
 `summary.energyKwh` / `summary.kwhPer100` only:
 
-- 708 kWh (steady-state) × 0.80 = **~566 kWh = ~95.8 kWh/100 km** — mid the
-  real-world laden band (**~0.96–1.03 kWh/km**: Daimler 15,000 km European tour
-  1.03 at 40 t, Vandijck 0.96, ADAC German-roads 0.88), and right for this **36 t**
-  (sub-40 t) German-autobahn run. 0.80 maps the ~1.265 kWh/km steady-state anchor
-  to ~1.01 kWh/km — the field centre — vs Mercedes' optimistic ~1.19 spec. (This
-  worked example is the geometry-enriched, net-downhill run; the flat-fallback
-  variant lands ~107 kWh/100 km after the factor.) [S4][S5]
+- For the run above: raw ~130 kWh/100 km × 0.83 = **~108 kWh/100 km displayed** —
+  inside the real-world laden band for a hilly run (**~0.88–1.03 kWh/km**: Daimler
+  15,000 km European tour 1.03 at 40 t, Vandijck 0.96, ADAC German-roads 0.88).
+  More generally, 0.83 maps the **~1.216 kWh/km** flat warm anchor to **~1.01
+  kWh/km** — the field centre — vs Mercedes' optimistic ~1.19 spec. (0.83 was
+  re-anchored from the prior 0.80: 0.80 mapped the old cd=0.55 anchor ~1.265; 0.83
+  maps the new cd=0.50 anchor ~1.216 to the same ~1.01.) [S4][S5]
 - **It is NOT a physics change.** The locked `Cd / Crr / drivetrain_eff / A`
-  anchors and the 1.265 / 1.47 / 1.55 kWh/km steady-state figures above are
+  anchors and the 1.22 / 1.42 / 1.49 kWh/km steady-state figures above are
   unchanged. The factor only reconciles the *reported* number with field data.
 - **It never touches safety.** The SOC walk, charge-trigger look-ahead, charge
   sizing and reachability all run on the **un-discounted** steady-state estimate,

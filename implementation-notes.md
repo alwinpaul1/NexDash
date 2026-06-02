@@ -118,12 +118,14 @@ full test suite passing.
 
 ## Open questions (for later confirmation — not blocking)
 
-- **OQ1 — Charge-as-break legality.** Counting a charge as the mandatory break is
-  *defensible* per CORTE enforcement guidance ("charging counts as rest/break where the
-  driver is free and not working") but **not codified** in Reg. 561/2006, and there's an
-  unresolved "uninterrupted rest / move-after-charge" wrinkle. The bulletproof posture is
-  NexOS's (always a dedicated 45-min rest, charge extra). Currently we lean on the
-  CORTE reading for efficiency. Flag for a compliance call.
+- **OQ1 — Charge-as-break legality. RESOLVED → bulletproof.** Per the NexOS screenshot,
+  NexOS keeps a *dedicated* rest for the 4.5 h compliance AND counts the charge as a 2nd
+  break (2 breaks). We now match: a ≥45-min charge is **counted** as a break but **no
+  longer resets the 4.5 h clock**, so a dedicated 45-min rest is always inserted for
+  compliance — we never lean on the CORTE-only "charging = the break" reading. Verified
+  live (Berlin→Munich: dedicated rest at 4:30 + charge counted = 2 breaks, EU 561 ok).
+  Edge case: when a charge and the 4.5 h mark nearly coincide, the dedicated rest can land
+  a few minutes of driving after the charge (legal, slightly redundant; rare).
 - **OQ2 — Charge target = 95% soft ceiling.** We over-charge (arrive 33–52%) like NexOS
   (61%). A "charge only what's needed + cushion" policy would be faster but trades away
   buffer. Left as the conservative long-haul default.
@@ -131,8 +133,13 @@ full test suite passing.
   `opt = null`, so stop order always follows the typed sequence (your earlier explicit
   rule). The endpoint still exists with contract gaps. Confirm whether the VRP should
   ever be wired to an explicit "suggest a better order" action; until then it's dead code.
-- **OQ4 — Docs recalibration.** README + REAL_WORLD_CALIBRATION.md still quote cd=0.55-era
-  anchors. Want me to recompute and update them for cd=0.50 / CdA 5.0 (warm ~1.216)?
+- **OQ4 — Docs recalibration. RESOLVED.** Recomputed every anchor at cd=0.50 / CdA 5.0
+  (via `artifacts/doc_anchors.py`) and updated README.md + REAL_WORLD_CALIBRATION.md:
+  warm 1.265→**1.216**, cold (−10 °C) 1.47→**1.42** (+17%), the questionable "22 t/85 =
+  1.55" replaced with the correct same-laden-truck high-speed cold **1.49**, empty-rig
+  0.90→**0.83**, mid-load 1.09→**1.02**, and the factor note 0.80/1.265 → **0.83 × 1.216
+  ≈ 1.01** (config docstring was already updated in #23). The worked example now uses the
+  live-verified Berlin→Munich raw ~130 × 0.83 = ~108 kWh/100 km.
 - **OQ5 — Multi-day reconcile clock.** For 3+ day routes the HH:MM-based rollover in
   charge-time reconciliation could misdate a shifted segment; switching to absolute
   timestamps would harden it. Low priority.
