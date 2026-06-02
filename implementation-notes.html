@@ -55,7 +55,7 @@
     <span class="kv"><b>Project:</b> NexDash EV Truck Range Intelligence (Mercedes-Benz eActros 600)</span>
     <span class="kv"><b>Started:</b> 2026-05-31</span>
     <span class="kv"><b>Base branch:</b> <code>fix/model-audit-and-dashboard-removal</code> (PR&nbsp;#8)</span>
-    <span class="kv"><b>Status:</b> <span class="status">Shipped — PR #9 open (165 tests pass)</span></span>
+    <span class="kv"><b>Status:</b> <span class="status" style="color:var(--warn)">Early-engagement log (PRs #8/#9 + Pass-2 VRP) — partly SUPERSEDED; current notes in <code>implementation-notes.md</code></span></span>
   </div>
   <p class="legend" style="margin-top:14px">
     <span class="pill graded">graded</span> aligns with a brief grading criterion &nbsp;
@@ -63,6 +63,11 @@
     <span class="pill dev">deviation</span> &nbsp;
     <span class="pill open">open question</span>
   </p>
+
+  <div class="card" style="border-color:var(--warn);background:#1c1a10">
+    <h3 style="color:var(--warn);margin-top:0">⚠ Early-engagement log — partly superseded (read this first)</h3>
+    <p>This file records the <b>2026-05-31 → 06-01</b> passes: PRs&nbsp;#8/#9 (route planner / UI / APIs / long-term) and the <b>Pass-2 VRP optimiser</b> exploration. The <b>current route-planner notes</b> (2026-06-02, PRs&nbsp;#18–#25) live in <code>implementation-notes.md</code> — energy recalibration to <b>cd&nbsp;0.50 / CdA&nbsp;5.0</b>, fastest-free charging, charge-time/ETA reconciliation, the Speed&nbsp;Limit Profile, and <b>bulletproof EU-561 breaks</b>. Known supersessions of what's below: the <b>Pass-2 VRP optimiser is now DORMANT</b> (stop order follows the typed sequence — no auto-reorder); the energy figures here (e.g. ~132&nbsp;kWh/100&nbsp;km at cd&nbsp;0.55) predate the cd&nbsp;0.50 recalibration; the charge target settled at <b>95%</b>; PR&nbsp;#9 is long since merged.</p>
+  </div>
 
   <hr/>
   <h2 style="border-color:var(--primary)">★ Pass 2 · All-factors route optimiser <span class="pill open" style="background:var(--accent);color:#042330;border-color:var(--accent)">2026-06-01 · current</span></h2>
