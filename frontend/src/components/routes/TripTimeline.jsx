@@ -136,6 +136,9 @@ function ChargeCard({ seg }) {
         </span>
         <span className="text-on-surface tabular-nums">
           {Math.round(seg.kWh || 0)} kWh
+          {Number.isFinite(seg.costEur) && seg.costEur > 0 ? (
+            <span className="text-on-surface-variant"> · ≈€{Math.round(seg.costEur)}</span>
+          ) : null}
         </span>
       </div>
     </div>
