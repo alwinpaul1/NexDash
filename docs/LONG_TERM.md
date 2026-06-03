@@ -74,7 +74,7 @@ Truck (FMS/CAN) ──► Telematics gateway ──► Streaming ingest (Kafka/K
   always re-derive labels when the labeling logic improves.
 - **Schema contract & validation:** each ingested batch passes schema + range checks
   (a Great Expectations / Pandera suite) mirroring the bounds already encoded in
-  `data_gen.py` (distance 1–350 km, payload 0–22 t, speed 30–85 kph, gradient ±6%
+  `data_gen.py` (distance 1–350 km, payload 0–22 t, speed 20–90 kph, gradient ±6%
   capped per segment, temperature −15..40 °C, wind −12..12 m/s). Out-of-contract rows are quarantined, not
   silently dropped — quarantine volume is itself a monitored signal.
 

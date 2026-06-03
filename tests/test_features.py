@@ -9,6 +9,8 @@ direction-agnostic gradient, mass-on-slope interaction).
 
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 import pytest
 
@@ -169,6 +171,11 @@ def test_interaction_and_power_features_are_exact():
     # mass x distance rolling-resistance proxy.
     assert out["payload_x_distance"] == pytest.approx(
         SAMPLE["payload_t"] * SAMPLE["distance_km"]
+    )
+    # net_climb_km: the EXACT gravitational-work driver = distance * sin(atan(grad/100)).
+    assert "net_climb_km" in ENGINEERED_COLUMNS
+    assert out["net_climb_km"] == pytest.approx(
+        SAMPLE["distance_km"] * math.sin(math.atan(SAMPLE["gradient_pct"] / 100.0))
     )
 
 

@@ -110,8 +110,11 @@ def generate_dataset(
     payload_t = rng.uniform(0.0, TRUCK.max_payload_t, size=n_samples)
 
     # Average segment speed: German Lkw Autobahn limit 80 km/h, limiter 90 (not
-    # legally driveable loaded). Cluster 70-80 on Autobahn, bounded 30-85 kph.
-    speed_kph = np.clip(rng.normal(loc=72.0, scale=12.0, size=n_samples), 30.0, 85.0)
+    # legally driveable loaded). Cluster 70-80 on Autobahn. Bounded 20-90 kph to
+    # MATCH the planner's inference envelope (route_planner.py clamps per-segment
+    # speed to [20, 90]); training on the same range stops the model extrapolating
+    # at the slow (urban/ramp) and fast tails it is asked to predict at run time.
+    speed_kph = np.clip(rng.normal(loc=72.0, scale=12.0, size=n_samples), 20.0, 90.0)
 
     # Road gradient is symmetric about flat; most segments are gentle.
     #

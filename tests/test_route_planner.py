@@ -192,6 +192,42 @@ def test_steep_uphill_uses_more_energy_than_flat(monkeypatch):
     assert flat["summary"]["elevationGainM"] == pytest.approx(0.0, abs=1.0)
 
 
+def test_descent_route_clamps_soc_and_floors_displayed_energy(monkeypatch):
+    """Regression for the two regen blockers.
+
+    A sustained steep descent credits regen (negative per-chunk energy), which
+    (1) must NOT push SOC above 100% — the pack cannot charge past full — and
+    (2) must NOT surface a negative energy headline: the DISPLAYED total is
+    floored at 0 for a net-downhill trip, while the signed value still drove the
+    conservative SOC walk. Before the fix this exact -6% route reported
+    socProfile max ~122% and kwhPer100 ~-108.
+    """
+    monkeypatch.setattr(
+        route_planner.geodata,
+        "enrich_route",
+        lambda geometry, departure_iso=None: _fake_enrichment(
+            gradient_pct=-6.0, n_segments=16, dist_km_each=50.0
+        ),
+    )
+
+    result = route_planner.plan_route(
+        distance_km=800.0,
+        duration_s=800.0 / 70.0 * 3600.0,
+        start_soc=95.0,  # high: descent regen would overflow 100% without the clamp
+        min_soc=15.0,
+        payload_kg=15000.0,
+        departure="2026-05-30T06:00",
+        geometry=GEOMETRY,
+        model_path=DEFAULT_MODEL_PATH,
+    )
+
+    socs = [p["soc"] for p in result["socProfile"]]
+    assert max(socs) <= 100.0 + 1e-6, f"SOC must never exceed 100%; saw {max(socs):.2f}"
+    assert result["summary"]["arrivalSoc"] <= 100.0 + 1e-6
+    assert result["summary"]["energyKwh"] >= 0.0, "displayed energy must be floored at >= 0"
+    assert result["summary"]["kwhPer100"] >= 0.0, "displayed kWh/100km must be floored at >= 0"
+
+
 # --------------------------------------------------------------------------- #
 # Charging insertion
 # --------------------------------------------------------------------------- #

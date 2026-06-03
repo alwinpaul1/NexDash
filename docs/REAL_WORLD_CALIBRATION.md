@@ -62,7 +62,7 @@ reference.
 |---|---|---|---|
 | `distance_km` | 1–120 | **1–350** (skewed toward 20–150; long right tail) | Inter-stop charger legs run 250–350 km; EU 561/2006 caps driving at 4.5 h before a 45-min break (~9 h/day). A right-skewed gamma with a tail to ~350 km matches mixed regional + inter-hub Autobahn legs better than a 120 km cap. Keep a short-distance mass for urban/regional pickup-delivery. [S3-de][S13] |
 | `payload_t` | 0–22 | **0–22** (keep) | Full legal span; frequent empty/part-load runs. 0 = empty trailer (18 t rig), 22 = fully loaded 40 t rig. [S1] |
-| `speed_kph` | 30–90 | **30–85** (centre ~72; cluster 70–80 Autobahn) | German Lkw Autobahn limit is **80 km/h** (>7.5 t); limiter 90 km/h; Landstrasse 60, urban 50. Realistic moving averages: 70–80 km/h Autobahn, 55–65 km/h mixed. Cap at **85** (eActros legal/operating window) rather than 90 — 90 km/h is not legally driveable for a loaded truck on German roads. [S3-de][S2] |
+| `speed_kph` | 30–90 | **20–90** (centre ~72; cluster 70–80 Autobahn) | German Lkw Autobahn limit is **80 km/h** (>7.5 t); the eActros is electronically limited at **90 km/h**; Landstrasse 60, urban 50. Realistic moving averages: 70–80 km/h Autobahn, 55–65 km/h mixed. Sample the full **20–90 km/h** mechanical/limiter window: the lower bound (20) covers congested-urban and steep-climb crawl segments, and the upper bound is the truck's hard limiter, not a legal cruise speed. The energy model's `SEG_SPEED` clamp in `route_planner.py` is held to **this same [20, 90] range** so the served model is never asked to extrapolate outside its training envelope — real telematics still records brief over-limit and downhill segments above the 80 km/h legal cruising limit, so the model must stay accurate there rather than being capped below where the truck actually runs. [S3-de][S2] |
 | `gradient_pct` | -6 .. +6 | **-6 .. +6** (keep; centre 0, σ small) | Autobahn design target ≤4%; German terrain ranges 0% (North German Plain) to ~6% (Alpine foothills / Mittelgebirge grades). Symmetric about flat, most segments gentle. [S3-de] |
 | `temperature_c` | -15 .. 40 | **-15 .. 40** (keep; seasonal mean ~10, wide σ) | German envelope: January mean ~-2.8 °C, cold snaps to -15 °C (record -29.4 °C); summer mean 20–28 °C, heatwaves >35 °C (record 41.2 °C). -15..40 °C captures the operating year. [S3-de][S9] |
 | `wind_mps` | 0–12 | **0–12** (keep; gamma, light-skewed) | German onshore mean wind 4–6 m/s, sheltered 3–4 m/s; 0–12 m/s (0–43 km/h) spans calm to strong gusts. Modelled as headwind (conservative). At 12 m/s pure headwind the apparent air speed gains >40 km/h — a large single-leg penalty. [S3-de][S12] |
@@ -106,25 +106,29 @@ The physics above is a **constant-speed, full-tractive-demand steady-state**
 model. On a real, gently-rolling Autobahn run it reproduces the *spec/WLTP* end
 of consumption, **not** the field-measured average. Worked example — a 36 t
 (18 t payload) Munich→Berlin run (~590 km, ~1.6 km cumulative climb but **net
-downhill**: Munich ~520 m → Berlin ~34 m), 15 °C, ~73 km/h: the first-principles
-(raw steady-state) figure is **~130 kWh/100 km** (the route's real climbs cost
-energy that net-flat physics misses). The field tests above for the *same* class
-of run land **lower** — ADAC 88, Daimler tour 1.03, Commercial Motor 1.05–1.12 —
-because real driving (coasting, eco-driving, traffic flow, mixed-route regen) runs
-below constant-speed physics, a gap the steady-state model structurally cannot
-close on a net-flat route.
+downhill**: Munich ~520 m → Berlin ~34 m), 15 °C, ~73 km/h. The planner walks the
+route in ~25 km chunks, so each real climb costs full tractive energy while each
+descent only recovers the regen-capped fraction (~60%) — net, the *chunked*
+conservative steady-state basis the SOC walk runs on is **~112 kWh/100 km**
+(≈ 1.12 kWh/km), a touch above a single net-flat 36 t segment (~108 /100 km at
+73 km/h) because the climbs don't fully cancel. The field tests above for the
+*same* class of run land **lower** — ADAC 88, Daimler tour 1.03, Commercial
+Motor 1.05–1.12 — because real driving (coasting, eco-driving, traffic flow,
+mixed-route regen) runs below constant-speed physics, a gap the steady-state
+model structurally cannot close.
 
 To make the **displayed** energy headline track field reality, NexDash applies a
 single documented multiplier `config.FIELD_CALIBRATION_FACTOR = 0.83` to
 `summary.energyKwh` / `summary.kwhPer100` only:
 
-- For the run above: raw ~130 kWh/100 km × 0.83 = **~108 kWh/100 km displayed** —
-  inside the real-world laden band for a hilly run (**~0.88–1.03 kWh/km**: Daimler
-  15,000 km European tour 1.03 at 40 t, Vandijck 0.96, ADAC German-roads 0.88).
-  More generally, 0.83 maps the **~1.216 kWh/km** flat warm anchor to **~1.01
-  kWh/km** — the field centre — vs Mercedes' optimistic ~1.19 spec. (0.83 was
-  re-anchored from the prior 0.80: 0.80 mapped the old cd=0.55 anchor ~1.265; 0.83
-  maps the new cd=0.50 anchor ~1.216 to the same ~1.01.) [S4][S5]
+- For the run above: chunked conservative basis ~112 kWh/100 km × 0.83 =
+  **~93 kWh/100 km displayed** (≈ 0.93 kWh/km) — inside the real-world laden
+  field band (**~0.88–1.03 kWh/km**: ADAC German-roads 0.88, Daimler 15,000 km
+  European tour 1.03 at 40 t, Vandijck 0.96), between the ADAC and Daimler-tour
+  anchors. More generally, 0.83 maps the **~1.216 kWh/km** flat 40 t warm anchor
+  to **~1.01 kWh/km** — the field centre — vs Mercedes' optimistic ~1.19 spec.
+  (0.83 was re-anchored from the prior 0.80: 0.80 mapped the old cd=0.55 anchor
+  ~1.265; 0.83 maps the new cd=0.50 anchor ~1.216 to the same ~1.01.) [S4][S5]
 - **It is NOT a physics change.** The locked `Cd / Crr / drivetrain_eff / A`
   anchors and the 1.22 / 1.42 / 1.49 kWh/km steady-state figures above are
   unchanged. The factor only reconciles the *reported* number with field data.
@@ -205,12 +209,15 @@ bounds (BU-410 / industry sources), **not** eActros-specific measurements.
 
 ### Speed / aero
 Aerodynamic drag dominates at Autobahn speed (30–50%+ of tractive energy above
-60–70 km/h, >50% near the legal cap; drag ∝ v², aero power ∝ v³). The model
-reproduces ~+10–15% consumption from 60 → 85 km/h (1.06 → 1.35 kWh/km, +28% at
-40 t in the physics-only run), almost all aero — consistent with the ~0.7–1.3%
-per km/h heavy-truck figure and the ~3–6% aero-kit delta in the eActros tests.
-Capping the speed sample at 85 km/h keeps the dataset inside the legally
-driveable German window. [S6][S8]
+60–70 km/h, >50% near the limiter; drag ∝ v², aero power ∝ v³). The model
+reproduces a steep speed sensitivity: from 60 → 85 km/h consumption rises
+**~0.99 → ~1.28 kWh/km (+29%)** at 40 t in the physics-only run, and on to
+**~1.35 kWh/km (+37%)** at the 90 km/h limiter — almost all aero, consistent
+with the ~0.7–1.3% per km/h heavy-truck figure and the ~3–6% aero-kit delta in
+the eActros tests. The speed sample spans the full **20–90 km/h** mechanical
+window (legal Lkw cruise is 80 km/h; 90 is the limiter, not a cruise speed) so
+the energy model is trained across every speed the truck — and real telematics —
+actually produces, rather than being capped below the limiter. [S6][S8]
 
 ---
 

@@ -15,7 +15,7 @@ keywords = ["ev", "truck", "range", "energy", "ai", "eActros"]
 dependencies = [
     "numpy",
     "pandas",
-    "scikit-learn",
+    "scikit-learn==1.7.0",  # pinned: energy_model.joblib is pickled with 1.7.0
     "joblib",
     "matplotlib",
     "anthropic",

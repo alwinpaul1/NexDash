@@ -59,7 +59,7 @@ export default function ChargingStopsList({ stops = [] }) {
                         : "bg-surface text-on-surface-variant ring-1 ring-outline-variant/60"
                     }`}
                   >
-                    {s.availability.available} of {s.availability.total} free
+                    {s.availability.available} free
                   </span>
                 ) : null}
                 {Number.isFinite(s.kWh) ? (
