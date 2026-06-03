@@ -1,21 +1,22 @@
 """LLM dispatcher agent for the NexDash eActros 600 fleet.
 
-This module wires an Anthropic Claude model to the deterministic energy /
-reachability tools defined in :mod:`nexdash.tools`. The agent runs a
-classic tool-use loop: it sends the user's question together with the tool
-schemas, executes any requested tool calls locally via
-:func:`nexdash.tools.dispatch`, feeds the results back, and repeats until the
-model produces a final natural-language answer.
+This module wires the MiniMax (M3) LLM, via its OpenAI-compatible API, to the
+deterministic energy / reachability / route-planning tools defined in
+:mod:`nexdash.tools`. The agent runs a classic tool-use loop: it sends the
+user's question together with the tool schemas, executes any requested tool
+calls locally via :func:`nexdash.tools.dispatch`, feeds the results back, and
+repeats until the model produces a final natural-language answer.
 
 The :class:`DispatcherAgent` accepts an injected ``client`` so unit tests can
-pass a mock and run entirely offline. A real ``anthropic.Anthropic`` client is
-only created lazily (and only if no client was injected), which is the single
-point where a missing ``ANTHROPIC_API_KEY`` is surfaced as a clear error.
+pass a mock and run entirely offline. A real MiniMax client is created lazily
+(and only if no client was injected), which is the single point where a missing
+``MINIMAX_API_KEY`` is surfaced as a clear error.
 """
 
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from typing import Any, Optional
 
 from .config import DEFAULT_MODEL_PATH
@@ -23,12 +24,9 @@ from . import tools as nexdash_tools
 
 __all__ = ["DispatcherAgent", "SYSTEM_PROMPT", "MissingAPIKeyError", "AgentError"]
 
-# Default Claude model id for the dispatcher (latest Opus).
-DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
-
-# When MINIMAX_API_KEY is set the agent runs on MiniMax's OpenAI-compatible API
-# instead of Anthropic. The key is read from the environment — never hard-code
-# it. NEXDASH_LLM_MODEL overrides the default model.
+# The dispatcher runs on MiniMax (M3) by default, via its OpenAI-compatible API.
+# The key is read from the environment — never hard-code it. NEXDASH_LLM_MODEL
+# overrides the default model id.
 DEFAULT_LLM_MODEL = os.environ.get("NEXDASH_LLM_MODEL", "MiniMax-M3")
 MINIMAX_API_URL = "https://api.minimax.io/v1/chat/completions"
 
@@ -46,9 +44,37 @@ SYSTEM_PROMPT = (
     "1. ALWAYS use the provided tools to obtain any numeric estimate "
     "(energy needed, reachability, remaining range, state of charge). "
     "Never invent or guess numbers yourself.\n"
-    "2. When a dispatcher asks whether a trip is feasible, call "
-    "check_reachability; when they only ask how much energy a leg needs, "
-    "call predict_energy.\n"
+    "2. When a dispatcher describes a TRIP BETWEEN NAMED PLACES OR CITIES "
+    "(e.g. 'Berlin to Munich, 12 tonnes, cold morning') and wants the route, "
+    "energy and charging plan, call plan_route with the origin, destination, "
+    "payload_t, start_soc and temperature_c — it geocodes the places, computes "
+    "the real truck road route, simulates state-of-charge with charging stops, "
+    "and checks EU 561 driver hours.\n"
+    "   TIME HANDLING: If the dispatcher gives a DEPARTURE time (e.g. 'leaving "
+    "Friday 9pm', 'depart tomorrow 06:00') pass it as 'departure'. If they give "
+    "a DELIVERY DEADLINE (e.g. 'deliver by Friday 9pm', 'must arrive before "
+    "noon Monday') pass it as 'deliver_by'. Both must be FULL ISO 8601 local "
+    "datetimes like '2026-06-05T21:00'. Today's date is given to you in the "
+    "conversation context — resolve natural language relative to it: 'tomorrow' "
+    "= today+1; a bare weekday/time ('Friday 9pm') = the NEXT such datetime that "
+    "is at or after the departure (or after today if no departure is set); 'pm' "
+    "means 24h (9pm -> 21:00). If only a date is given with no time, assume "
+    "08:00 for a departure and 23:59 for a deadline. Do NOT invent a deadline or "
+    "departure the dispatcher did not state.\n"
+    "   Then narrate the plan: distance, energy and "
+    "kWh/100 km, arrival SOC, each charging stop (where, how much), driving and "
+    "total time, and the ETA. When a 'deliver_by' deadline was given, the tool "
+    "returns 'eta' / 'eta_iso', 'deliver_by' and 'on_time' (true=on time/early, "
+    "false=late) — state CLEARLY whether the truck arrives on time, comfortably "
+    "early, or late versus the deadline, and by roughly how long. Always state "
+    "whether the schedule is EU 561 compliant (the 'eu561_ok' field). If plan_route "
+    "returns an 'error' field, tell the dispatcher plainly what failed (e.g. a "
+    "place couldn't be found) and ask them to clarify. When a dispatcher instead "
+    "asks whether a single given segment is feasible, call check_reachability; "
+    "when they only ask how much energy one leg of known distance needs, call "
+    "predict_energy. Do NOT call plan_route for a single isolated segment or a "
+    "pure reachability question, and do NOT re-run plan_route if the conversation "
+    "already supplies the computed plan numbers — just summarize those.\n"
     "3. After the tools return, explain the result in plain, practical "
     "language a dispatcher can act on. State the bottom-line answer first "
     "(e.g. 'Yes, the truck reaches the destination'), then give the key "
@@ -81,7 +107,7 @@ class AgentError(RuntimeError):
 
 
 class DispatcherAgent:
-    """A tool-using Claude agent for eActros 600 fleet dispatch questions.
+    """A tool-using MiniMax agent for eActros 600 fleet dispatch questions.
 
     Parameters
     ----------
@@ -89,12 +115,12 @@ class DispatcherAgent:
         Filesystem path to the trained energy model. Passed through to the
         tool layer so predictions use the intended model artifact.
     client:
-        An optional pre-constructed Anthropic client (or any object exposing a
-        compatible ``messages.create`` API). When ``None`` a real
-        ``anthropic.Anthropic`` client is created lazily on first use. Inject a
-        mock here in tests to avoid any network access.
+        An optional pre-constructed LLM client (any object exposing a
+        compatible ``messages.create`` API). When ``None`` a real MiniMax
+        client is created lazily on first use. Inject a mock here in tests to
+        avoid any network access.
     model:
-        Claude model id to call. Defaults to ``"claude-opus-4-8"``.
+        LLM model id to call. Defaults to ``"MiniMax-M3"``.
     max_tokens:
         Maximum tokens per model response.
     """
@@ -103,7 +129,7 @@ class DispatcherAgent:
         self,
         model_path: Any = DEFAULT_MODEL_PATH,
         client: Optional[Any] = None,
-        model: str = DEFAULT_CLAUDE_MODEL,
+        model: str = DEFAULT_LLM_MODEL,
         *,
         max_tokens: int = 2048,
     ) -> None:
@@ -117,47 +143,53 @@ class DispatcherAgent:
     # ------------------------------------------------------------------ #
     @property
     def client(self) -> Any:
-        """Return the Anthropic client, creating a real one lazily if needed.
+        """Return the LLM client, creating a real one lazily if needed.
 
         Raises
         ------
         MissingAPIKeyError
-            If no client was injected and ``ANTHROPIC_API_KEY`` is not set.
-        ImportError
-            If the ``anthropic`` package is not installed.
+            If no client was injected and ``MINIMAX_API_KEY`` is not set.
         """
         if self._client is None:
             self._client = self._make_real_client()
         return self._client
 
     def _make_real_client(self) -> Any:
-        """Construct a real LLM client based on which API key is set.
+        """Construct a real MiniMax client (OpenAI-compatible) from the API key.
 
-        Prefers MiniMax (OpenAI-compatible) when ``MINIMAX_API_KEY`` is present —
-        switching the model to the MiniMax default unless the caller overrode it —
-        otherwise falls back to Anthropic. This is the only place a missing key is
-        surfaced, so tests that inject a client never touch the network or require
-        a key.
+        This is the only place a missing key is surfaced, so tests that inject a
+        client never touch the network or require a key.
         """
         if os.environ.get("MINIMAX_API_KEY"):
-            if self.model == DEFAULT_CLAUDE_MODEL:  # caller didn't override
-                self.model = DEFAULT_LLM_MODEL
             return _OpenAICompatClient(os.environ["MINIMAX_API_KEY"], MINIMAX_API_URL)
 
-        if os.environ.get("ANTHROPIC_API_KEY"):
-            try:
-                import anthropic  # noqa: WPS433 (local import keeps SDK optional)
-            except ImportError as exc:  # pragma: no cover - import-time guard
-                raise ImportError(
-                    "The 'anthropic' package is required to create a real client. "
-                    "Install it with `pip install anthropic`."
-                ) from exc
-            return anthropic.Anthropic()
-
         raise MissingAPIKeyError(
-            "No LLM API key set. Export MINIMAX_API_KEY (e.g. to use "
-            "MiniMax-M3) or ANTHROPIC_API_KEY, then restart the server."
+            "No LLM API key set. Export MINIMAX_API_KEY (MiniMax-M3), then "
+            "restart the server."
         )
+
+    # ------------------------------------------------------------------ #
+    # Date context (injected into the conversation, not the system prompt)
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _date_context_turn() -> dict[str, Any]:
+        """A leading user turn telling the model today's date/time.
+
+        The agent needs the current date to resolve natural-language departure /
+        delivery times (e.g. 'Friday 9pm') into the ISO datetimes plan_route
+        expects. We inject it as a conversation turn (rather than mutating the
+        system prompt) so SYSTEM_PROMPT stays stable and the date is always
+        current at call time.
+        """
+        now = datetime.now()
+        return {
+            "role": "user",
+            "content": (
+                f"[context] Today is {now.strftime('%A, %Y-%m-%d')}; the current "
+                f"local time is {now.strftime('%H:%M')}. Resolve any relative "
+                "departure or delivery times against this when planning routes."
+            ),
+        }
 
     # ------------------------------------------------------------------ #
     # Core loop
@@ -165,7 +197,7 @@ class DispatcherAgent:
     def ask(self, question: str) -> str:
         """Answer a dispatcher question, using tools as needed.
 
-        Runs the Anthropic tool-use loop: the model may request one or more
+        Runs the tool-use loop: the model may request one or more
         tool calls, which are executed locally via
         :func:`nexdash.tools.dispatch` (with ``model_path`` injected), and the
         results are fed back until the model returns a final text answer.
@@ -182,7 +214,8 @@ class DispatcherAgent:
             blocks). Empty model output yields an empty string.
         """
         messages: list[dict[str, Any]] = [
-            {"role": "user", "content": question}
+            self._date_context_turn(),
+            {"role": "user", "content": question},
         ]
 
         for _ in range(MAX_TURNS):
@@ -238,9 +271,13 @@ class DispatcherAgent:
         Returns
         -------
         dict
-            ``{"reply": str, "tools": [tool names used this turn]}``. The
+            ``{"reply": str, "tools": [...], "planRequest": dict|None}``. The
             ``tools`` list lets the UI show which deterministic tools the agent
-            invoked (e.g. ``check_reachability``).
+            invoked (e.g. ``check_reachability``). ``planRequest`` carries the
+            resolved origin/destination (with coords) + planner params of the
+            last ``plan_route`` call this turn, so the UI can fill the planner
+            form and run the same Optimize pipeline; it is ``None`` when
+            ``plan_route`` was not called (or did not resolve coordinates).
         """
         convo: list[dict[str, Any]] = []
         for m in messages or []:
@@ -249,7 +286,14 @@ class DispatcherAgent:
             if role in ("user", "assistant") and isinstance(content, str) and content:
                 convo.append({"role": role, "content": content})
         if not convo:
-            return {"reply": "", "tools": []}
+            return {"reply": "", "tools": [], "planRequest": None}
+
+        # Clear any plan_route request from a previous turn so we only surface a
+        # planRequest the agent actually produced this turn.
+        nexdash_tools.reset_last_plan_request()
+
+        # Prepend today's date so the agent can resolve 'Friday 9pm' etc.
+        convo.insert(0, self._date_context_turn())
 
         tools_used: list[str] = []
         for _ in range(MAX_TURNS):
@@ -265,7 +309,11 @@ class DispatcherAgent:
             convo.append({"role": "assistant", "content": _serialize_content(blocks)})
 
             if not tool_uses:
-                return {"reply": _extract_text(blocks), "tools": tools_used}
+                return {
+                    "reply": _extract_text(blocks),
+                    "tools": tools_used,
+                    "planRequest": nexdash_tools.get_last_plan_request(),
+                }
 
             results: list[dict[str, Any]] = []
             for block in tool_uses:
@@ -286,6 +334,7 @@ class DispatcherAgent:
                 "simplifying the question or giving the missing details."
             ),
             "tools": tools_used,
+            "planRequest": nexdash_tools.get_last_plan_request(),
         }
 
     # ------------------------------------------------------------------ #
@@ -367,7 +416,7 @@ def _extract_text(blocks: list[Any]) -> str:
 def _serialize_content(blocks: list[Any]) -> list[dict[str, Any]]:
     """Convert response content blocks into plain dicts for the next request.
 
-    The Anthropic API accepts the original block objects on round-trip, but
+    The tool-use API accepts the original block objects on round-trip, but
     normalizing to dicts keeps the loop robust against mock objects in tests
     and makes the conversation JSON-serializable.
     """
@@ -402,13 +451,13 @@ def _result_to_text(result: Any) -> str:
 # ---------------------------------------------------------------------- #
 # OpenAI-compatible client adapter (used for MiniMax)
 # ---------------------------------------------------------------------- #
-# Exposes the same ``client.messages.create(...)`` surface the Anthropic loop
-# above expects, translating Anthropic-style requests/responses to and from the
+# Exposes the same ``client.messages.create(...)`` surface the tool-use loop
+# above expects, translating tool-use-style requests/responses to and from the
 # OpenAI chat-completions schema. This lets the dispatcher run on any
 # OpenAI-compatible endpoint (MiniMax-M3 here) with ZERO changes to the
 # tool-use loop or the tool layer.
 class _CompatResponse:
-    """Minimal stand-in for an Anthropic response: just a ``.content`` block list."""
+    """Minimal stand-in for an tool-use response: just a ``.content`` block list."""
 
     def __init__(self, content: list[dict[str, Any]]) -> None:
         self.content = content
@@ -450,18 +499,18 @@ class _OpenAICompatMessages:
         choices = (resp.json() or {}).get("choices") or []
         if not choices:
             raise AgentError("Model provider returned no choices.")
-        return _CompatResponse(_to_anthropic_blocks(choices[0].get("message", {})))
+        return _CompatResponse(_to_tooluse_blocks(choices[0].get("message", {})))
 
 
 class _OpenAICompatClient:
-    """Anthropic-shaped facade over an OpenAI-compatible endpoint."""
+    """tool-use-shaped facade over an OpenAI-compatible endpoint."""
 
     def __init__(self, api_key: str, url: str) -> None:
         self.messages = _OpenAICompatMessages(api_key, url)
 
 
 def _to_openai_tools(tool_specs: list[Any]) -> list[dict[str, Any]]:
-    """Anthropic tool specs ({name, description, input_schema}) -> OpenAI funcs."""
+    """tool-use tool specs ({name, description, input_schema}) -> OpenAI funcs."""
     return [
         {
             "type": "function",
@@ -476,7 +525,7 @@ def _to_openai_tools(tool_specs: list[Any]) -> list[dict[str, Any]]:
 
 
 def _to_openai_messages(system: str, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Translate the Anthropic-style conversation into OpenAI chat messages.
+    """Translate the tool-use-style conversation into OpenAI chat messages.
 
     Handles plain-string turns, assistant turns carrying text + tool_use blocks
     (-> ``tool_calls``), and user turns carrying tool_result blocks (-> ``tool``
@@ -526,8 +575,8 @@ def _to_openai_messages(system: str, messages: list[dict[str, Any]]) -> list[dic
     return out
 
 
-def _to_anthropic_blocks(message: dict[str, Any]) -> list[dict[str, Any]]:
-    """Translate an OpenAI assistant message back into Anthropic content blocks."""
+def _to_tooluse_blocks(message: dict[str, Any]) -> list[dict[str, Any]]:
+    """Translate an OpenAI assistant message back into tool-use content blocks."""
     import json
 
     blocks: list[dict[str, Any]] = []

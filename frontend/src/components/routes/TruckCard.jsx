@@ -23,10 +23,10 @@ export default function TruckCard() {
   return (
     <div className="nx-card nx-hover-lift relative p-4">
       {/* Framed render box — truck blended onto a soft panel (matches the brief). */}
-      <div className="nx-card-inset relative overflow-hidden p-2">
+      <div className="relative overflow-hidden rounded-control border border-outline-variant/50 bg-gradient-to-br from-white to-slate-200 p-2">
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute inset-0 bg-gradient-to-b from-primary/[0.06] to-transparent"
+          className="pointer-events-none absolute inset-0 bg-gradient-to-b from-primary/[0.08] to-transparent"
         />
         <img
           src="/eactros-600.png"

@@ -1,12 +1,18 @@
 import ChatPanel from "./ChatPanel.jsx";
+import { useChat } from "../../context/ChatContext.jsx";
 
 /* ChatWidget — the Dispatcher Assistant as an on-demand floating widget.
  *
  * The panel stays mounted and animates in/out (scale + fade + slide from the
  * bottom-right) so BOTH opening and closing are smooth, and the conversation
  * persists while it's tucked away. A circular FAB toggles it.
+ *
+ * Open/close state lives in ChatContext so RoutesView can open the widget when
+ * it posts an optimize summary into the chat.
  */
-export default function ChatWidget({ open, onOpenChange }) {
+export default function ChatWidget() {
+  const { open, setOpen } = useChat();
+  const onOpenChange = setOpen;
   return (
     <>
       <div

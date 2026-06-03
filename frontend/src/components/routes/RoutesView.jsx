@@ -1,5 +1,6 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { optimizeRoute } from "../../lib/routePlanner.js";
+import { useChat } from "../../context/ChatContext.jsx";
 import PlannerForm from "./PlannerForm.jsx";
 import RouteMap from "./RouteMap.jsx";
 import RouteResults from "./RouteResults.jsx";
@@ -41,11 +42,55 @@ const initialPlanner = {
   departure: nowLocalISO(),
 };
 
+// A plan is the offline client-side fallback (backend SOC simulator unreachable)
+// when its first assumption is the fallback notice. We only narrate REAL plans.
+function isFallbackPlan(p) {
+  const a = p?.summary?.assumptions;
+  return Array.isArray(a) && typeof a[0] === "string" && a[0].startsWith("Client-side fallback estimate");
+}
+
+// Compose the one-shot message asking the agent to narrate the ALREADY-COMPUTED
+// plan from final numbers WITHOUT re-calling tools.
+function buildOptimizeSummaryPrompt({ planner, plan }) {
+  const s = plan.summary || {};
+  const fmt = (v, d = 1) => (Number.isFinite(v) ? Number(v).toFixed(d) : "—");
+  const origin = planner.origin?.label || "the origin";
+  const lastDest = [...(planner.destinations || [])].reverse().find((d) => d?.label);
+  const destination = lastDest?.label || "the destination";
+
+  const stops = Array.isArray(plan.chargingStops) ? plan.chargingStops : [];
+  const nStops = Number.isFinite(s.chargingStops) ? s.chargingStops : stops.length;
+  const firstStation = stops[0]?.name;
+  const eu561 = s.driver?.eu561ok;
+  const eu561Text = eu561 === true ? "compliant" : eu561 === false ? "NOT compliant" : "not evaluated";
+
+  const lines = [
+    `Origin: ${origin}`,
+    `Destination: ${destination}`,
+    `Distance: ${fmt(s.distanceKm)} km`,
+    `Energy: ${fmt(s.energyKwh)} kWh (${fmt(s.kwhPer100)} kWh/100km)`,
+    `Arrival battery (SOC): ${fmt(s.arrivalSoc)}%`,
+    `Minimum SOC along the route: ${fmt(s.minSoc)}%`,
+    `Charging stops: ${nStops}${firstStation ? ` (first: ${firstStation})` : ""}`,
+    `Total trip time: ${fmt(s.totalTimeH, 2)} h`,
+    `ETA: ${s.etaLabel || "—"}`,
+    `EU 561 driver-hours: ${eu561Text}`,
+    `Inputs — start SOC ${planner.startSoc}%, min SOC ${planner.minSoc}%, payload ${(planner.payloadKg ?? 0) / 1000} t, reserve ${planner.reservePct}%`,
+  ];
+
+  return (
+    "I just optimized this route — summarize it for the dispatcher in 2-4 sentences " +
+    "(do not call tools; these numbers are final):\n" +
+    lines.join("\n")
+  );
+}
+
 export default function RoutesView() {
   const [planner, setPlanner] = useState(initialPlanner);
   const [status, setStatus] = useState("idle"); // idle | computing | done | error
   const [error, setError] = useState(null);
   const [plan, setPlan] = useState(null);
+  const { postSummary, registerPlanRequestHandler } = useChat();
 
   const setStartSoc = useCallback((v) => setPlanner((p) => ({ ...p, startSoc: v })), []);
   const setMinSoc = useCallback((v) => setPlanner((p) => ({ ...p, minSoc: v })), []);
@@ -98,18 +143,104 @@ export default function RoutesView() {
     setError(null);
   }, []);
 
-  const onOptimize = useCallback(async () => {
-    setStatus("computing");
-    setError(null);
-    try {
-      const result = await optimizeRoute(planner);
-      setPlan(result);
-      setStatus("done");
-    } catch (err) {
-      setError(err?.message || "Could not plan the route.");
-      setStatus("error");
-    }
-  }, [planner]);
+  // Runs the full optimize pipeline and populates RouteResults + RouteMap.
+  //   plannerOverride — use this snapshot instead of the closed-over `planner`
+  //     (a chat-initiated plan sets state and passes the same object here, so
+  //     it need not wait a render for `planner` to update).
+  //   skipChatSummary — true for chat-initiated plans: the agent already
+  //     narrated the plan in chat, so we suppress the Optimize->chat post and
+  //     thereby also avoid any chat<->optimize loop.
+  const onOptimize = useCallback(
+    async (plannerOverride, skipChatSummary = false) => {
+      // Only honor an explicit planner snapshot — the button wires
+      // onClick={onOptimize}, which passes a SyntheticEvent (also an object),
+      // so we require the planner-shaped `destinations` array to disambiguate.
+      const isPlanner =
+        plannerOverride &&
+        typeof plannerOverride === "object" &&
+        Array.isArray(plannerOverride.destinations);
+      const activePlanner = isPlanner ? plannerOverride : planner;
+      setStatus("computing");
+      setError(null);
+      try {
+        const result = await optimizeRoute(activePlanner);
+        setPlan(result);
+        setStatus("done");
+
+        // Post an agent-narrated summary of the just-computed plan into the chat.
+        // Only for a REAL plan with a summary (not the offline fallback). The
+        // postSummary key de-dupes so one resolved plan narrates exactly once.
+        // Skipped for chat-initiated plans — the agent already narrated, and
+        // posting again would re-trigger the agent (loop).
+        if (!skipChatSummary && result?.summary && !isFallbackPlan(result)) {
+          const prompt = buildOptimizeSummaryPrompt({ planner: activePlanner, plan: result });
+          const key = [
+            result.summary.distanceKm,
+            result.summary.energyKwh,
+            result.summary.etaLabel,
+            result.summary.arrivalSoc,
+            result.summary.chargingStops,
+          ].join("|");
+          postSummary(prompt, key);
+        }
+      } catch (err) {
+        setError(err?.message || "Could not plan the route.");
+        setStatus("error");
+      }
+    },
+    [planner, postSummary]
+  );
+
+  // Apply a chat-initiated planRequest: fill the planner from the agent's
+  // resolved args (coords are already embedded — no geocode needed), then run
+  // Optimize with that same snapshot so RouteResults + RouteMap populate exactly
+  // like the button. We pass skipChatSummary=true so the chat-initiated plan
+  // does NOT post a fresh summary back into chat (no infinite loop).
+  const applyPlanRequest = useCallback(
+    (req) => {
+      if (!req || typeof req !== "object" || !req.origin || !req.destination) return;
+
+      const origin = {
+        label: req.origin.label || "",
+        lat: req.origin.lat ?? null,
+        lng: req.origin.lng ?? null,
+      };
+      const destination = {
+        id: `d${destSeq++}`,
+        label: req.destination.label || "",
+        lat: req.destination.lat ?? null,
+        lng: req.destination.lng ?? null,
+        dropWeightKg: 0,
+        unloadMin: 30,
+        deliverBy: req.deliverBy || "",
+      };
+
+      const num = (v, fallback) => (Number.isFinite(Number(v)) ? Number(v) : fallback);
+
+      const nextPlanner = {
+        ...initialPlanner,
+        origin,
+        destinations: [destination],
+        payloadKg: num(req.payloadKg, initialPlanner.payloadKg),
+        startSoc: num(req.startSoc, initialPlanner.startSoc),
+        minSoc: num(req.minSoc, initialPlanner.minSoc),
+        reservePct: num(req.reservePct, initialPlanner.reservePct),
+        maxChargeKw: num(req.maxChargeKw, initialPlanner.maxChargeKw),
+        temperatureC: req.temperatureC ?? initialPlanner.temperatureC,
+        departure: req.departure || initialPlanner.departure || nowLocalISO(),
+      };
+
+      setPlanner(nextPlanner);
+      onOptimize(nextPlanner, true);
+    },
+    [onOptimize]
+  );
+
+  // Register the handler so ChatContext can drive an optimize from a chat reply.
+  useEffect(() => {
+    const unsubscribe = registerPlanRequestHandler(applyPlanRequest);
+    return unsubscribe;
+  }, [registerPlanRequestHandler, applyPlanRequest]);
 
   // Waypoints (origin + valid destinations) for the map pins.
   const waypoints = [];

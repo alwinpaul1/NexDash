@@ -1,9 +1,9 @@
-"""Anthropic tool definitions and JSON-serializable dispatch layer.
+"""tool-use tool definitions and JSON-serializable dispatch layer.
 
 This module exposes the NexDash energy-prediction capabilities as
-Anthropic tool-use schemas (:data:`TOOL_SPECS`) together with thin Python
+tool-use tool-use schemas (:data:`TOOL_SPECS`) together with thin Python
 wrappers that the model-driven agents (and the MCP server) call when a
-tool-use block is returned by Claude.
+tool-use block is returned by the model.
 
 The wrappers are intentionally tolerant of *string* numeric inputs: tool
 arguments arriving from an LLM frequently come through as strings (or as
@@ -25,6 +25,7 @@ __all__ = [
     "TOOL_SPECS",
     "predict_energy_tool",
     "check_reach_tool",
+    "plan_route_tool",
     "dispatch",
 ]
 
@@ -60,7 +61,7 @@ def _to_float(value: Any, *, default: float | None = None, field: str = "value")
 
 
 # ---------------------------------------------------------------------------
-# Anthropic tool schemas
+# tool-use tool schemas
 # ---------------------------------------------------------------------------
 TOOL_SPECS: list[dict[str, Any]] = [
     {
@@ -174,7 +175,105 @@ TOOL_SPECS: list[dict[str, Any]] = [
             ],
         },
     },
+    {
+        "name": "plan_route",
+        "description": (
+            "Plan a COMPLETE road trip for a Mercedes-Benz eActros 600 electric "
+            "truck between two named places/cities. Geocodes the origin and "
+            "destination, computes the real TomTom truck road route (40 t, 5-axle "
+            "artic), then simulates state-of-charge drain, inserts DC fast-charging "
+            "stops as needed, and checks EU 561 driver hours. Use this whenever a "
+            "dispatcher describes a trip between places (e.g. 'Berlin to Munich, 12 "
+            "tonnes, cold morning') and wants the full route + energy + charging "
+            "plan. For a single isolated segment with a known distance, or a pure "
+            "'will it reach' question, use predict_energy / check_reachability "
+            "instead. Returns a compact JSON plan summary; on geocode/route failure "
+            "it returns an 'error' field instead of throwing."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "origin": {
+                    "type": "string",
+                    "description": "Start location name (e.g. 'Berlin', 'Hamburg Hafen').",
+                },
+                "destination": {
+                    "type": "string",
+                    "description": "Destination location name (e.g. 'Munich').",
+                },
+                "payload_t": {
+                    "type": "number",
+                    "description": "Cargo payload in tonnes (0-22). Defaults to 0.",
+                },
+                "start_soc": {
+                    "type": "number",
+                    "description": "Starting battery state of charge in percent (0-100). Defaults to 100.",
+                },
+                "temperature_c": {
+                    "type": "number",
+                    "description": "Ambient temperature in degrees Celsius. Defaults to 15.",
+                },
+                "departure": {
+                    "type": "string",
+                    "description": (
+                        "Departure datetime as an ISO 8601 local string "
+                        "(e.g. '2026-06-04T21:00'). Drives ETA, EU 561 breaks "
+                        "and on-time checks. Defaults to now if omitted."
+                    ),
+                },
+                "deliver_by": {
+                    "type": "string",
+                    "description": (
+                        "Delivery deadline at the destination as an ISO 8601 "
+                        "local datetime (e.g. '2026-06-05T12:00'). When set, the "
+                        "plan reports whether arrival is on time / early / late."
+                    ),
+                },
+                "min_soc": {
+                    "type": "number",
+                    "description": "SOC floor (%) never to dip below. Defaults to 15.",
+                },
+                "reserve_pct": {
+                    "type": "number",
+                    "description": "Safety-reserve buffer (%) above min SOC. Defaults to 10.",
+                },
+                "max_charge_kw": {
+                    "type": "number",
+                    "description": "Max charging power (kW). Defaults to 400.",
+                },
+            },
+            "required": ["origin", "destination"],
+        },
+    },
 ]
+
+
+# The resolved parameters + coordinates of the most recent plan_route_tool call.
+# The server surfaces this as a structured ``planRequest`` so the frontend can
+# fill the planner form and run the same Optimize pipeline. It is best-effort
+# (set on every successful geocode+route) and intentionally module-global so the
+# agent/server can read the last call without threading state through the loop.
+_PLAN_ROUTE_LAST: dict[str, Any] | None = None
+
+
+def get_last_plan_request() -> dict[str, Any] | None:
+    """Return the structured ``planRequest`` from the last successful plan_route.
+
+    Shape (per the shared frontend contract)::
+
+        {origin:{label,lat,lng}, destination:{label,lat,lng}, payloadKg,
+         startSoc, temperatureC, departure, deliverBy, minSoc, reservePct,
+         maxChargeKw}
+
+    Returns ``None`` if no plan_route call has resolved coordinates yet.
+    """
+    return _PLAN_ROUTE_LAST
+
+
+def reset_last_plan_request() -> None:
+    """Clear the cached last plan_route request (call before a chat turn)."""
+    global _PLAN_ROUTE_LAST
+    _PLAN_ROUTE_LAST = None
 
 
 # ---------------------------------------------------------------------------
@@ -224,12 +323,168 @@ def check_reach_tool(**kwargs: Any) -> dict[str, Any]:
     return dict(result)
 
 
+def plan_route_tool(**kwargs: Any) -> dict[str, Any]:
+    """Plan a full eActros 600 trip between two named places.
+
+    Geocodes ``origin`` + ``destination`` (TomTom Search), routes the truck
+    between them (TomTom calculateRoute), then runs the real SOC + charging
+    simulation via :func:`nexdash.route_planner.plan_route`, and returns a
+    compact JSON summary in the shared agent contract shape.
+
+    Never raises: geocode/route failures (and any unexpected error) are caught
+    and returned as ``{"error": "..."}`` so the agent's tool loop can narrate
+    the failure rather than crash.
+    """
+    # Local imports keep TomTom/routing deps out of the import path for the
+    # lightweight energy tools and the MCP server that only need the model.
+    from nexdash import tomtom
+    from nexdash.route_planner import plan_route as _plan_route
+
+    origin = (kwargs.get("origin") or "").strip()
+    destination = (kwargs.get("destination") or "").strip()
+    if not origin or not destination:
+        return {"error": "Both 'origin' and 'destination' are required."}
+
+    payload_t = _to_float(kwargs.get("payload_t"), default=0.0, field="payload_t")
+    payload_t = max(0.0, min(22.0, payload_t))
+    start_soc = _to_float(kwargs.get("start_soc"), default=100.0, field="start_soc")
+    start_soc = max(0.0, min(100.0, start_soc))
+    temperature_c = _to_float(
+        kwargs.get("temperature_c"), default=15.0, field="temperature_c"
+    )
+    min_soc = _to_float(kwargs.get("min_soc"), default=15.0, field="min_soc")
+    min_soc = max(0.0, min(100.0, min_soc))
+    reserve_pct = _to_float(kwargs.get("reserve_pct"), default=10.0, field="reserve_pct")
+    reserve_pct = max(0.0, min(100.0, reserve_pct))
+    max_charge_kw = _to_float(
+        kwargs.get("max_charge_kw"), default=400.0, field="max_charge_kw"
+    )
+    if max_charge_kw <= 0:
+        max_charge_kw = 400.0
+    # Departure / deadline are optional ISO strings passed straight through; the
+    # route planner parses them (and tolerates None -> "now").
+    departure = kwargs.get("departure") or None
+    if isinstance(departure, str):
+        departure = departure.strip() or None
+    deliver_by = kwargs.get("deliver_by") or None
+    if isinstance(deliver_by, str):
+        deliver_by = deliver_by.strip() or None
+    model_path = kwargs.get("model_path", DEFAULT_MODEL_PATH)
+
+    try:
+        a = tomtom.geocode(origin)
+        b = tomtom.geocode(destination)
+        route = tomtom.truck_route(
+            [
+                {"lat": a["lat"], "lng": a["lng"]},
+                {"lat": b["lat"], "lng": b["lng"]},
+            ]
+        )
+    except tomtom.TomTomError as exc:
+        return {"error": str(exc)}
+    except Exception as exc:  # noqa: BLE001 - never throw out of a tool wrapper
+        return {"error": f"Route lookup failed: {type(exc).__name__}: {exc}"}
+
+    # The destination waypoint carries the delivery deadline so the planner can
+    # flag on-time / late arrival.
+    dest_waypoint: dict[str, Any] = {
+        "lat": b["lat"],
+        "lng": b["lng"],
+        "label": b["label"],
+    }
+    if deliver_by:
+        dest_waypoint["deliverBy"] = deliver_by
+
+    try:
+        plan = _plan_route(
+            distance_km=route["distance_km"],
+            duration_s=route["duration_s"],
+            start_soc=start_soc,
+            min_soc=min_soc,
+            payload_kg=payload_t * 1000.0,
+            reserve_pct=reserve_pct,
+            max_charge_kw=max_charge_kw,
+            departure=departure,
+            temperature_c=temperature_c,
+            geometry=route["geometry"],
+            leg_timings=route["leg_timings"],
+            waypoints=[
+                {"lat": a["lat"], "lng": a["lng"], "label": a["label"]},
+                dest_waypoint,
+            ],
+            model_path=model_path,
+        )
+    except Exception as exc:  # noqa: BLE001 - simulation failure -> structured error
+        return {"error": f"Route simulation failed: {type(exc).__name__}: {exc}"}
+
+    # Record the resolved params + coords so the server can surface a structured
+    # planRequest for the frontend (fills the planner + runs Optimize).
+    global _PLAN_ROUTE_LAST
+    _PLAN_ROUTE_LAST = {
+        "origin": {"label": a["label"], "lat": a["lat"], "lng": a["lng"]},
+        "destination": {"label": b["label"], "lat": b["lat"], "lng": b["lng"]},
+        "payloadKg": payload_t * 1000.0,
+        "startSoc": start_soc,
+        "temperatureC": temperature_c,
+        "departure": departure,
+        "deliverBy": deliver_by,
+        "minSoc": min_soc,
+        "reservePct": reserve_pct,
+        "maxChargeKw": max_charge_kw,
+    }
+
+    summary = plan.get("summary") or {}
+    driver = summary.get("driver") or {}
+
+    charging_stops = []
+    for s in plan.get("chargingStops") or []:
+        charging_stops.append(
+            {
+                "name": s.get("name"),
+                "dist_km": s.get("distKm"),
+                "arrive_soc": s.get("arriveSoc"),
+                "depart_soc": s.get("departSoc"),
+                "kwh": s.get("kWh"),
+            }
+        )
+
+    # on_time reflects the FINAL (destination) stop's onTime flag, where the
+    # delivery deadline is checked. None when no deadline was supplied (or no
+    # destination stop was emitted).
+    stops_out = plan.get("stops") or []
+    on_time = None
+    if stops_out:
+        on_time = stops_out[-1].get("onTime")
+
+    return {
+        "origin": {"label": a["label"], "lat": a["lat"], "lng": a["lng"]},
+        "destination": {"label": b["label"], "lat": b["lat"], "lng": b["lng"]},
+        "distance_km": summary.get("distanceKm"),
+        "energy_kwh": summary.get("energyKwh"),
+        "kwh_per_100": summary.get("kwhPer100"),
+        "arrival_soc": summary.get("arrivalSoc"),
+        "min_soc": summary.get("minSoc"),
+        "charging_stops": charging_stops,
+        "n_charging_stops": summary.get("chargingStops"),
+        "driving_time_h": summary.get("drivingTimeH"),
+        "total_time_h": summary.get("totalTimeH"),
+        "departure": departure,
+        "eta": summary.get("etaLabel"),
+        "eta_iso": summary.get("etaIso"),
+        "deliver_by": deliver_by,
+        "on_time": on_time,
+        "eu561_ok": driver.get("eu561ok"),
+        "assumptions": summary.get("assumptions"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 _DISPATCH_TABLE: dict[str, Callable[..., dict[str, Any]]] = {
     "predict_energy": predict_energy_tool,
     "check_reachability": check_reach_tool,
+    "plan_route": plan_route_tool,
 }
 
 

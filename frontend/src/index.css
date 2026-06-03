@@ -100,7 +100,7 @@
   h2,
   h3,
   .font-headline {
-    font-family: "Space Grotesk", sans-serif;
+    font-family: "Sora", sans-serif;
   }
 }
 
@@ -395,7 +395,7 @@
 .chat-md p { margin: 0.35rem 0; line-height: 1.45; }
 .chat-md strong { font-weight: 700; }
 .chat-md h1, .chat-md h2, .chat-md h3, .chat-md h4 {
-  font-family: "Space Grotesk", sans-serif;
+  font-family: "Sora", sans-serif;
   font-weight: 700;
   margin: 0.5rem 0 0.3rem;
   line-height: 1.25;
