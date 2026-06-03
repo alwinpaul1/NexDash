@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from nexdash.physics import segment_energy_kwh
 from nexdash.model import predict_energy
-from nexdash.config import TRUCK
+from nexdash.config import TRUCK, FIELD_CALIBRATION_FACTOR
 
 def ml(dist, pay, spd, grad, temp, wind=0.0):
     return predict_energy({"distance_km": dist, "payload_t": pay, "speed_kph": spd,
@@ -31,6 +31,11 @@ print("=== gradient sweep, payload=18t (36t GCW), 83 km/h, 15 C ===")
 for grad in (-6, -4, -2.5, -1, 0, 1, 2.5, 4, 6):
     print(f"grad={grad:+5.1f}%   physics={ph(D,18,83,grad,15):>8.1f}   ml={ml(D,18,83,grad,15):>8.1f}")
 print()
+print("=== gradient sweep at CHUNK scale (25 km, 18t, 83 km/h, 15 C) -- the planner's real granularity ===")
+for grad in (-6, -4, -2.5, -1, 0, 1, 2.5, 4, 6):
+    pc = ph(25.0, 18, 83, grad, 15); mc = ml(25.0, 18, 83, grad, 15)
+    print(f"grad={grad:+5.1f}%   physics={pc:>7.1f} kWh   ml={mc:>7.1f} kWh   (per100km: phys {pc/25*100:>6.1f}  ml {mc/25*100:>6.1f})")
+print()
 print("=== speed sweep, payload=18t, flat, 15 C ===")
 for spd in (60, 70, 80, 85, 89):
     print(f"speed={spd:>3} kph  physics={ph(D,18,spd,0,15):>8.1f}   ml={ml(D,18,spd,0,15):>8.1f}")
@@ -46,8 +51,10 @@ print(f"=== Whole route as ONE segment (591 km, net grad {net_grad:+.3f}%, 18t, 
 print(f"  physics: {ph(591,18,83,net_grad,15):>8.1f} kWh  ({ph(591,18,83,net_grad,15)/591*100:.1f} /100km)")
 print(f"  ml:      {ml(591,18,83,net_grad,15):>8.1f} kWh  ({ml(591,18,83,net_grad,15)/591*100:.1f} /100km)")
 print()
-print("Steady-state physics (this probe) ~122-126 /100km is the conservative basis the")
-print("planner walks SOC + charging on. DISPLAYED energy now applies config.FIELD_CALIBRATION_FACTOR")
-print("(0.85): the live Munich-Berlin headline is ~600 kWh = ~101.9 /100km (was 708 = 119.9).")
-print("NexOS demo: 575 kWh = 94.6 /100km. Field band (REAL_WORLD_CALIBRATION.md S3): 95-105 /100km")
-print("(ADAC 40t Munich-Woerth 88; Daimler tour 103). WLTP/spec end: 119-120 /100km.")
+_f = FIELD_CALIBRATION_FACTOR
+print("Steady-state physics (this probe): flat 36t ~121 /100km, full 40t ~128 /100km, is the")
+print("conservative basis the planner walks SOC + charging on. DISPLAYED energy applies")
+print(f"config.FIELD_CALIBRATION_FACTOR (={_f}) to the headline only, e.g. flat-36t {_f}x121 ~= {_f*121:.0f} /100km.")
+print(f"The live Munich-Berlin headline (18t / 36t GCW, net-downhill so regen is credited) lands")
+print(f"~93 /100km displayed. Field band (REAL_WORLD_CALIBRATION.md S3): ADAC 40t Munich-Woerth 88,")
+print("Daimler 15,000 km tour 103, so ~88-103 /100km. WLTP/spec end: 119-120 /100km.")

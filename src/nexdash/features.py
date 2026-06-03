@@ -61,6 +61,11 @@ TARGET: str = "energy_kwh"
 #:   DIRECTLY (signed: positive on climbs adds energy, negative on descents credits
 #:   regen). Without it the gradient-boosted trees must reconstruct that linear
 #:   scaling from sparse joint splits and saturate on steep/long legs.
+#: * ``net_climb_km``        — distance x sin(atan(gradient/100)); the EXACT net
+#:   elevation change (km) over the segment, i.e. the true gravitational-work
+#:   driver ``E_grade ~ m*g*net_climb``. Handing the trees this physical quantity
+#:   directly is what removes the climb saturation the raw-gradient splits caused;
+#:   signed, so descents are negative and carry the regen credit.
 _DERIVED_COLUMNS: list[str] = [
     "abs_gradient",
     "temp_dev_from_20",
@@ -68,6 +73,7 @@ _DERIVED_COLUMNS: list[str] = [
     "speed_sq",
     "payload_x_distance",
     "distance_x_gradient",
+    "net_climb_km",
 ]
 
 #: Full engineered feature matrix column order: raw features then derived ones.
@@ -124,6 +130,13 @@ def _add_engineered(df: pd.DataFrame) -> pd.DataFrame:
     # distance x signed gradient: gravity-work term, ~proportional to the climb/
     # descent energy. Signed so descents (negative) directly drive regen credit.
     out["distance_x_gradient"] = out["distance_km"] * out["gradient_pct"]
+    # net_climb_km: the EXACT net elevation change over the segment,
+    # distance * sin(atan(gradient/100)) (km). This is the true gravitational-work
+    # driver -- E_grade ~ m*g*net_climb. Giving the trees this physical quantity
+    # DIRECTLY (rather than letting them reconstruct sin(atan(.)) from raw-gradient
+    # bins) is what stops the energy model saturating on steep/long climbs; signed,
+    # so descents are negative and carry the regen credit.
+    out["net_climb_km"] = out["distance_km"] * np.sin(np.arctan(out["gradient_pct"] / 100.0))
 
     # Guarantee canonical column order regardless of insertion order.
     return out[ENGINEERED_COLUMNS]

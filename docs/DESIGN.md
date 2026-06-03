@@ -59,7 +59,7 @@ underrepresented. Three options were on the table:
 
 The generator (`data_gen.py`) samples realistic, independent feature
 distributions across the full operating envelope (distance 1–350 km, payload
-0–22 t, speed 30–85 kph, gradient ±6 %, temperature −15–40 °C, wind −12..12 m/s
+0–22 t, speed 20–90 kph, gradient ±6 %, temperature −15–40 °C, wind −12..12 m/s
 — a signed headwind component, negative = tailwind),
 labels each sample with a **deterministic physics ground truth**
 (`physics.segment_energy_kwh`: speed- and temperature-dependent rolling

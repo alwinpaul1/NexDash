@@ -160,10 +160,10 @@ SPEED_GRAD_K_UP: float = 0.06        # fractional slowdown per +1% of climb
 SPEED_GRAD_K_DOWN: float = 0.015     # fractional speed-up per 1% of descent
 SPEED_DESC_CAP_FRAC: float = 1.05    # descents at most 5% faster (governed)
 #: Energy-model speed clamp, bounded to the model's ACTUAL training envelope
-#: (data_gen samples speed in [30, 85]). Feeding speeds outside it makes the GBM
+#: (data_gen samples speed in [20, 90]). Feeding speeds outside it makes the GBM
 #: extrapolate flat and under-predict energy — the optimistic / strand direction.
-SEG_SPEED_MIN_KPH: float = 30.0
-SEG_SPEED_MAX_KPH: float = 85.0
+SEG_SPEED_MIN_KPH: float = 20.0
+SEG_SPEED_MAX_KPH: float = 90.0
 
 #: Safety headroom (SOC %) added to an adaptive charge target so the linear-SOC
 #: interpolation + rounding never lands the truck a hair below the floor.
@@ -709,7 +709,10 @@ def plan_route(
             "temperature_c": chunk_temp,
             "wind_mps": chunk_wind,
         }
-        model_kwh = max(0.0, float(predict_energy(feats, model_path=model_path)))
+        # No max(0, .) floor on the model: a real downhill segment RETURNS energy
+        # (regen), so a negative prediction is physical. Reachability-safety is
+        # provided instead by the UNCONDITIONAL max(model, physics) below.
+        model_kwh = float(predict_energy(feats, model_path=model_path))
         physics_kwh = float(
             segment_energy_kwh(
                 distance_km=chunk_km,
@@ -723,12 +726,17 @@ def plan_route(
         )
         sum_model_kwh += model_kwh
         sum_physics_kwh += physics_kwh
-        diverges = (physics_kwh - model_kwh) > max(3.0 * mae_band, 0.15 * abs(physics_kwh))
-        if diverges:
+        # Drive the SOC walk on max(model, physics) UNCONDITIONALLY -- never trust the
+        # model when it predicts LESS consumption than first-principles physics, in any
+        # terrain. On climbs this floors at physics (catches model saturation); on
+        # descents it takes the less-negative value (regen is still credited, but capped
+        # at the conservative physics estimate). The walk is therefore monotonically
+        # safe: a chunk's energy is never optimistic, so the charge trigger can never
+        # under-charge and strand the truck. The flag below is a DIAGNOSTIC only (model
+        # materially under-predicting vs physics = the optimistic direction).
+        if (physics_kwh - model_kwh) > max(3.0 * mae_band, 0.15 * abs(physics_kwh)):
             n_low_confidence += 1
-            chunk_energies.append(max(model_kwh, physics_kwh))
-        else:
-            chunk_energies.append(model_kwh)
+        chunk_energies.append(max(model_kwh, physics_kwh))
 
     for i, (chunk_km, chunk_grad, chunk_temp, chunk_wind) in enumerate(chunks):
         chunk_energy = chunk_energies[i]
@@ -921,7 +929,7 @@ def plan_route(
                 p_km = chunk_km * frac
                 p_soc = chunk_soc_drop * frac
                 p_energy = chunk_energy * frac
-                soc -= p_soc
+                soc = min(100.0, soc - p_soc)  # clamp: regen cannot charge above full
                 min_soc_seen = min(min_soc_seen, soc)
                 cum_km += p_km
                 clock = clock + timedelta(minutes=t_until)
@@ -959,7 +967,9 @@ def plan_route(
             seg_start_clock = clock
 
         # --- Drive the chunk. ---
-        soc = projected_soc
+        # Clamp at 100%: a regen (negative-energy) chunk raises SOC, but the pack
+        # cannot charge above full -- excess downhill regen is dissipated, not banked.
+        soc = min(100.0, projected_soc)
         min_soc_seen = min(min_soc_seen, soc)
         total_energy_kwh += chunk_energy
         cum_km += chunk_km
@@ -1068,7 +1078,12 @@ def plan_route(
     # `total_energy_kwh` itself stays conservative (it drove the SOC walk + charge
     # plan above); only the reported headline below is discounted, so charging and
     # reachability are unaffected.
-    displayed_energy_kwh = total_energy_kwh * field_calibration
+    # Floor the DISPLAYED headline at >= 0: a net-downhill route can finish with
+    # net-negative modelled energy (regen exceeds draw over the trip), but a negative
+    # kWh / kWh-per-100 headline is nonsensical to a dispatcher. The signed
+    # total_energy_kwh stayed intact for the SOC walk above; only the reported figure
+    # is floored.
+    displayed_energy_kwh = max(0.0, total_energy_kwh) * field_calibration
     kwh_per_100 = (displayed_energy_kwh / distance_km * 100.0) if distance_km > 0 else 0.0
     charging_cost = sum(s["costEur"] for s in charging_stops)
 

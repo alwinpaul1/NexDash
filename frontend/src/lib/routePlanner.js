@@ -474,7 +474,7 @@ async function fetchAvailability(availabilityId) {
 // fields (name, lat, lng, address, + kWh attached later). Adds:
 //   connectors:   [{ label, powerKw }]  — distinct connector types at the site
 //   maxPowerKw:   number | null         — max ratedPowerKW across connectors
-//   availability: { available, total } | null  — live "X of Y free" (best-effort)
+//   availability: { available, total } | null  — live "N free" count (best-effort)
 //   openingHours: string | null         — short human string
 // Rank charging candidates by TOTAL added time = charge time (at the station's
 // real power, capped at the truck's max) + a round-trip detour penalty. The
@@ -833,10 +833,10 @@ export async function optimizeRoute(planner) {
     if (opt?.destinationCharger?.note) {
       assumptions.unshift(opt.destinationCharger.note);
     }
-    // Be honest that the "X of Y free" badge is a planning-time snapshot.
+    // Be honest that the "N free" badge is a planning-time snapshot.
     if (chargingStops.some((e) => e && e.availability)) {
       assumptions.push(
-        "Charging-station \"X of Y free\" is a LIVE snapshot at planning time; the truck arrives later, so " +
+        "Charging-station \"N free\" is a LIVE snapshot at planning time; the truck arrives later, so " +
           "availability may differ. We prefer a currently-free station where one exists nearby — not a guarantee."
       );
     }

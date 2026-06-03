@@ -69,7 +69,13 @@ def dataset_sha256(path: Union[str, Path]) -> str:
 
 
 def git_sha() -> str:
-    """Return the current git commit SHA, or ``"unknown"`` outside a repo."""
+    """Return the current git commit SHA, or ``"unknown"`` outside a repo.
+
+    A ``-dirty`` suffix is appended when the working tree has uncommitted changes,
+    so a model registered from an unclean tree is never stamped with a misleading
+    "clean commit" lineage -- checking out that bare SHA would NOT reproduce the
+    artifact. Honest provenance: a dirty stamp signals "commit before trusting".
+    """
     try:
         out = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -79,7 +85,17 @@ def git_sha() -> str:
             cwd=_REPO_ROOT,
         )
         if out.returncode == 0 and out.stdout.strip():
-            return out.stdout.strip()
+            sha = out.stdout.strip()
+            dirty = subprocess.run(
+                ["git", "status", "--porcelain"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                cwd=_REPO_ROOT,
+            )
+            if dirty.returncode == 0 and dirty.stdout.strip():
+                sha += "-dirty"
+            return sha
     except Exception:
         pass
     return "unknown"

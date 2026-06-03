@@ -768,7 +768,7 @@ export default function RouteMap({ plan, waypoints = [] }) {
                 <span className="ct-line ct-sub">
                   {s.availability ? (
                     <span className="ct-avail" style={s.availability.available > 0 ? undefined : { color: "#ff8a80" }}>
-                      {s.availability.available} of {s.availability.total} free
+                      {s.availability.available} free
                     </span>
                   ) : null}
                   {Number.isFinite(s.kWh) ? (

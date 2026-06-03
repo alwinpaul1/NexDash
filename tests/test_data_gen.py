@@ -40,7 +40,7 @@ TARGET_COLUMN = "energy_kwh"
 FEATURE_BOUNDS = {
     "distance_km": (1.0, 350.0),
     "payload_t": (0.0, TRUCK.max_payload_t),
-    "speed_kph": (30.0, 85.0),
+    "speed_kph": (20.0, 90.0),
     "gradient_pct": (-6.0, 6.0),
     "temperature_c": (-15.0, 40.0),
     "wind_mps": (-12.0, 12.0),  # signed headwind component (negative = tailwind)
@@ -87,6 +87,19 @@ def test_feature_within_documented_bounds(df: pd.DataFrame, column: str) -> None
     col = df[column]
     assert col.min() >= low, f"{column} below lower bound {low}"
     assert col.max() <= high, f"{column} above upper bound {high}"
+
+
+def test_speed_fast_tail_is_populated(df: pd.DataFrame) -> None:
+    """The widened upper speed bound (90) must actually be REACHED, so a silent
+    revert to the old 85 cap — which would still satisfy the [20,90] bounds test
+    above — is caught. The fast tail is what the planner's [20,90] clamp now relies
+    on; the 20 floor is a clip bound only (the normal(72,12) sampler does not
+    populate <~30, by design — matching the planner clamp is the point, not mass).
+    """
+    assert df["speed_kph"].max() > 88.0, (
+        f"fast-tail speeds (~88-90) not generated (max={df['speed_kph'].max():.1f}); "
+        "did the sampler revert to the old 85 cap?"
+    )
 
 
 def test_no_missing_values(df: pd.DataFrame) -> None:

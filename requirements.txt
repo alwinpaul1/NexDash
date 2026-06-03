@@ -1,6 +1,7 @@
 numpy
 pandas
-scikit-learn
+scikit-learn==1.7.0  # pinned: the served energy_model.joblib is pickled with 1.7.0; a
+                     # version drift triggers InconsistentVersionWarning on load.
 scipy
 joblib
 matplotlib
