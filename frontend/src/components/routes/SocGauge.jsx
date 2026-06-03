@@ -1,4 +1,4 @@
-// Circular SOC gauge (light theme) for the Routes result view.
+// Circular SOC gauge for the Routes result view (theme-aware).
 // SVG arc (270deg sweep) colored by arrival SOC (green -> amber -> red),
 // big arrival % in the center, START / MIN labels under the arc ends.
 
@@ -34,15 +34,33 @@ export default function SocGauge({ arrivalSoc = 0, startSoc = 100, minSoc = 15 }
   const endAngle = startAngle + (sweep * pct) / 100;
   const color = socColor(arrivalSoc);
 
+  // Full-sweep arc length (for the entrance stroke-draw). The 270° arc is
+  // 3/4 of a full circle's circumference at radius r.
+  const fullLen = 2 * Math.PI * r * (sweep / 360);
+  const valueLen = fullLen * (pct / 100);
+
   return (
     <div className="flex flex-col items-center">
       <div className="relative" style={{ width: size, height: size }}>
         <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+          <defs>
+            <linearGradient id="socStroke" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor={color} stopOpacity="0.7" />
+              <stop offset="100%" stopColor={color} stopOpacity="1" />
+            </linearGradient>
+            <filter id="socGlow" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="3" result="b" />
+              <feMerge>
+                <feMergeNode in="b" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
           {/* track */}
           <path
             d={arcPath(cx, cy, r, startAngle, startAngle + sweep)}
             fill="none"
-            stroke="#e5eeff"
+            className="stroke-surface"
             strokeWidth={14}
             strokeLinecap="round"
           />
@@ -51,34 +69,51 @@ export default function SocGauge({ arrivalSoc = 0, startSoc = 100, minSoc = 15 }
             <path
               d={arcPath(cx, cy, r, startAngle, endAngle)}
               fill="none"
-              stroke={color}
+              stroke="url(#socStroke)"
               strokeWidth={14}
               strokeLinecap="round"
+              filter="url(#socGlow)"
+              strokeDasharray={`${valueLen} ${fullLen}`}
+              data-soc-arc=""
+              style={{
+                animation: "socDraw 0.9s cubic-bezier(0.16,1,0.3,1) forwards",
+              }}
             />
           )}
         </svg>
+        <style>{`
+          @keyframes socDraw {
+            from { stroke-dashoffset: ${valueLen}; }
+            to { stroke-dashoffset: 0; }
+          }
+          @media (prefers-reduced-motion: reduce) {
+            [data-soc-arc] { animation: none !important; stroke-dashoffset: 0 !important; }
+          }
+        `}</style>
         {/* center readout */}
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className="text-[11px] uppercase tracking-wide font-medium text-on-surface-variant">Arrival</span>
+          <span className="text-[10px] uppercase tracking-[0.12em] font-semibold text-on-surface-variant">
+            Arrival
+          </span>
           <span
-            className="font-headline font-bold leading-none"
-            style={{ fontSize: "44px", color }}
+            className="font-headline font-bold leading-none tabular-nums"
+            style={{ fontSize: "46px", color }}
           >
             {Math.round(arrivalSoc)}
             <span className="text-2xl align-top">%</span>
           </span>
-          <span className="text-[11px] text-on-surface-variant mt-1">State of Charge</span>
+          <span className="text-[10px] tracking-wide text-on-surface-variant mt-1">State of Charge</span>
         </div>
       </div>
 
       <div className="flex justify-between w-44 -mt-6">
         <div className="text-center">
-          <p className="text-[11px] uppercase tracking-wide font-medium text-on-surface-variant">Start</p>
-          <p className="text-sm font-headline font-semibold text-on-surface">{Math.round(startSoc)}%</p>
+          <p className="text-[10px] uppercase tracking-[0.1em] font-semibold text-on-surface-variant">Start</p>
+          <p className="text-sm font-headline font-semibold text-on-surface tabular-nums">{Math.round(startSoc)}%</p>
         </div>
         <div className="text-center">
-          <p className="text-[11px] uppercase tracking-wide font-medium text-on-surface-variant">Min floor</p>
-          <p className="text-sm font-headline font-semibold text-on-surface">{Math.round(minSoc)}%</p>
+          <p className="text-[10px] uppercase tracking-[0.1em] font-semibold text-on-surface-variant">Min floor</p>
+          <p className="text-sm font-headline font-semibold text-on-surface tabular-nums">{Math.round(minSoc)}%</p>
         </div>
       </div>
     </div>

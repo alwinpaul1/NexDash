@@ -15,8 +15,11 @@ function windCompass(deg) {
 
 function Tile({ icon, value, unit, label, tint }) {
   return (
-    <div className="rounded-xl bg-surface-low border border-outline-variant/50 px-3 py-3">
-      <span className="material-symbols-outlined" style={{ fontSize: "20px", color: tint }}>
+    <div className="group rounded-control nx-card-inset px-3 py-3 transition-colors duration-snappy ease-nx-out hover:border-outline-variant/60">
+      <span
+        className="material-symbols-outlined transition-transform duration-snappy ease-nx-out group-hover:scale-110"
+        style={{ fontSize: "20px", color: tint }}
+      >
         {icon}
       </span>
       <p className="mt-1 text-xl font-headline font-bold text-on-surface leading-none tabular-nums">
@@ -33,13 +36,15 @@ export default function ConditionsPanel({ conditions = {} }) {
   const compass = windCompass(c.windDirDeg);
 
   return (
-    <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm p-5">
-      <div className="flex items-center gap-2 mb-3">
-        <span className="material-symbols-outlined text-secondary" style={{ fontSize: "20px" }}>
-          partly_cloudy_day
+    <div className="nx-card p-5">
+      <div className="flex items-center gap-2 mb-4">
+        <span className="flex items-center justify-center w-8 h-8 rounded-control bg-secondary/10 text-secondary ring-1 ring-secondary/20">
+          <span className="material-symbols-outlined" style={{ fontSize: "20px" }}>
+            partly_cloudy_day
+          </span>
         </span>
         <h3 className="font-headline font-semibold text-lg text-on-surface">Route Conditions</h3>
-        <span className="text-[11px] text-on-surface-variant ml-auto">via Open-Meteo</span>
+        <span className="text-[11px] text-on-surface-variant ml-auto px-2 py-0.5 rounded-pill bg-surface ring-1 ring-outline-variant/40">via Open-Meteo</span>
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
         <Tile icon="thermostat" value={fmt(c.avgTempC, 1)} unit="°C" label="Avg Temperature" tint="#f59e0b" />

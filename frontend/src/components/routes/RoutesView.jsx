@@ -135,11 +135,23 @@ export default function RoutesView() {
         {status === "error" ? error || "Could not plan the route." : ""}
       </div>
 
-      <div>
-        <h1 className="font-headline font-bold text-2xl text-on-surface">Route Planning</h1>
-        <p className="text-sm text-on-surface-variant">
-          ML-driven SOC simulation with real elevation, gradient and weather along the road.
-        </p>
+      <div className="flex items-start gap-3">
+        <span
+          aria-hidden="true"
+          className="mt-1 hidden sm:flex h-10 w-10 shrink-0 items-center justify-center rounded-control bg-primary/10 text-primary ring-1 ring-primary/20"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: "22px" }}>
+            route
+          </span>
+        </span>
+        <div>
+          <h1 className="font-headline font-bold text-2xl text-on-surface tracking-tight">
+            Route Planning
+          </h1>
+          <p className="text-sm text-on-surface-variant mt-0.5">
+            ML-driven SOC simulation with real elevation, gradient and weather along the road.
+          </p>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
@@ -169,7 +181,7 @@ export default function RoutesView() {
 
         {/* Right: map + results */}
         <div className="xl:col-span-2 space-y-6">
-          <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm overflow-hidden">
+          <div className="nx-card overflow-hidden">
             <div className="h-[520px]">
               <RouteMap plan={plan} waypoints={waypoints} />
             </div>

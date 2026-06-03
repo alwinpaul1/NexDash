@@ -16,19 +16,19 @@ export default function ChargingStopsList({ stops = [] }) {
   if (list.length === 0) return null;
 
   return (
-    <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm p-5">
-      <h3 className="text-[11px] uppercase tracking-wide font-medium text-on-surface-variant mb-3">
+    <div className="nx-card p-5">
+      <h3 className="text-[11px] uppercase tracking-[0.1em] font-semibold text-on-surface-variant mb-3">
         Charging Stops
       </h3>
       <ul className="space-y-2.5">
         {list.map((s, i) => (
           <li
             key={Number.isFinite(s?.lat) && Number.isFinite(s?.lng) ? `cs-${s.lat},${s.lng}` : `cs-${i}`}
-            className="flex items-start gap-3 rounded-xl bg-surface-low border border-outline-variant/50 px-3 py-2.5"
+            className="flex items-start gap-3 rounded-control nx-card-inset px-3 py-2.5 transition-colors duration-snappy ease-nx-out hover:border-outline-variant/60"
           >
             <span
-              className="flex shrink-0 items-center justify-center rounded-full text-white text-xs font-semibold"
-              style={{ width: 24, height: 24, background: "#f59e0b" }}
+              className="flex shrink-0 items-center justify-center rounded-pill text-white text-xs font-semibold shadow-nx-sm"
+              style={{ width: 26, height: 26, background: "#f59e0b" }}
             >
               {i + 1}
             </span>
@@ -53,7 +53,7 @@ export default function ChargingStopsList({ stops = [] }) {
               <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
                 {s.availability ? (
                   <span
-                    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium ${
+                    className={`inline-flex items-center gap-1 rounded-pill px-2 py-0.5 font-medium ${
                       s.availability.available > 0
                         ? "bg-primary/10 text-primary"
                         : "bg-surface text-on-surface-variant ring-1 ring-outline-variant/60"

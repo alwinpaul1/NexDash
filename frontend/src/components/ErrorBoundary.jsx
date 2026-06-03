@@ -24,16 +24,18 @@ export default class ErrorBoundary extends Component {
       return (
         <div
           role="alert"
-          className="min-h-screen flex items-center justify-center bg-surface p-6"
+          className="min-h-screen flex items-center justify-center bg-background p-6"
         >
-          <div className="max-w-md w-full rounded-2xl border border-outline-variant/50 bg-surface-lowest shadow-sm p-6 text-center">
-            <span
-              className="material-symbols-outlined text-error"
-              style={{ fontSize: "40px" }}
-            >
-              error
+          <div className="max-w-md w-full rounded-card border border-outline-variant/50 bg-surface-lowest shadow-nx-lg p-6 text-center">
+            <span className="mx-auto mb-1 flex h-14 w-14 items-center justify-center rounded-pill bg-error/10 ring-1 ring-error/20">
+              <span
+                className="material-symbols-outlined text-error"
+                style={{ fontSize: "32px" }}
+              >
+                error
+              </span>
             </span>
-            <h1 className="mt-2 font-headline font-bold text-xl text-on-surface">
+            <h1 className="mt-2 font-headline font-bold text-xl text-on-surface tracking-tight">
               Something went wrong
             </h1>
             <p className="mt-1 text-sm text-on-surface-variant">
@@ -43,7 +45,7 @@ export default class ErrorBoundary extends Component {
             <button
               type="button"
               onClick={() => window.location.reload()}
-              className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-primary text-on-primary text-sm font-medium hover:opacity-90 transition"
+              className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-control bg-primary text-on-primary text-sm font-medium shadow-nx-sm hover:opacity-90 active:scale-95 transition duration-snappy ease-nx-out nx-focus"
             >
               <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
                 refresh

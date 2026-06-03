@@ -32,7 +32,7 @@ function ToolChips({ tools }) {
       {tools.map((tool, i) => (
         <span
           key={tool + i}
-          className="inline-flex items-center gap-1 text-[11px] text-primary bg-primary/10 ring-1 ring-primary/20 rounded-full px-2 py-0.5"
+          className="inline-flex items-center gap-1 text-[11px] font-medium text-primary bg-primary/10 ring-1 ring-primary/20 rounded-pill px-2 py-0.5"
         >
           <span className="material-symbols-outlined" style={{ fontSize: "13px" }}>
             {toolIcon(tool)}
@@ -46,7 +46,7 @@ function ToolChips({ tools }) {
 
 function ThinkingDots() {
   return (
-    <div className="flex items-center gap-1 px-3.5 py-2.5 rounded-2xl rounded-bl-sm bg-surface-low w-fit">
+    <div className="flex items-center gap-1 px-3.5 py-2.5 rounded-card rounded-bl-sm bg-surface-low border border-outline-variant/40 w-fit">
       {[0, 1, 2].map((i) => (
         <span
           key={i}
@@ -62,7 +62,7 @@ function MessageBubble({ message }) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="bg-primary text-on-primary rounded-2xl rounded-br-sm px-3.5 py-2 text-sm max-w-[85%] whitespace-pre-wrap">
+        <div className="bg-primary text-on-primary rounded-card rounded-br-sm px-3.5 py-2 text-sm max-w-[85%] whitespace-pre-wrap shadow-nx-sm">
           {message.content}
         </div>
       </div>
@@ -73,7 +73,7 @@ function MessageBubble({ message }) {
   // lists, and a caveat blockquote); GFM enables the pipe tables it uses.
   return (
     <div className="flex flex-col items-start max-w-[85%]">
-      <div className="chat-md bg-surface-low text-on-surface rounded-2xl rounded-bl-sm px-3.5 py-2 text-sm">
+      <div className="chat-md bg-surface-low text-on-surface border border-outline-variant/40 rounded-card rounded-bl-sm px-3.5 py-2 text-sm">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
       </div>
       <ToolChips tools={message.tools} />
@@ -84,7 +84,7 @@ function MessageBubble({ message }) {
 function EmptyState() {
   return (
     <div className="flex flex-col gap-4 py-2">
-      <div className="flex items-start gap-2 text-sm text-on-surface-variant">
+      <div className="nx-card-inset flex items-start gap-2.5 px-3.5 py-3 text-sm text-on-surface-variant">
         <span className="material-symbols-outlined text-primary shrink-0" style={{ fontSize: "20px" }}>
           tips_and_updates
         </span>
@@ -177,13 +177,22 @@ export default function ChatPanel() {
   }
 
   return (
-    <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm overflow-hidden flex flex-col h-[620px] max-h-[calc(100vh-7rem)]">
+    <div className="bg-surface-lowest rounded-card border border-outline-variant/50 shadow-nx-lg overflow-hidden flex flex-col h-[620px] max-h-[calc(100vh-7rem)]">
       {/* Header — mirrors the Live Range Check gradient treatment. */}
-      <div className="px-5 py-4 bg-gradient-to-r from-primary to-accent text-on-primary">
-        <h2 className="font-headline font-bold text-lg">Dispatcher Assistant</h2>
-        <p className="text-sm text-on-primary/85 mt-0.5">
-          Ask about range, energy &amp; reachability — eActros 600
-        </p>
+      <div className="relative px-5 py-4 bg-gradient-to-br from-primary to-accent text-on-primary">
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-control bg-on-primary/15 ring-1 ring-on-primary/20">
+            <span className="material-symbols-outlined" style={{ fontSize: "20px" }}>
+              forum
+            </span>
+          </span>
+          <div>
+            <h2 className="font-headline font-bold text-lg leading-tight">Dispatcher Assistant</h2>
+            <p className="text-sm text-on-primary/85 mt-0.5">
+              Ask about range, energy &amp; reachability — eActros 600
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Messages */}
@@ -197,7 +206,7 @@ export default function ChatPanel() {
       </div>
 
       {/* Input row */}
-      <form onSubmit={handleSubmit} className="border-t border-outline-variant/40 p-3 flex items-end gap-2.5">
+      <form onSubmit={handleSubmit} className="border-t border-outline-variant/40 bg-surface-low/40 p-3 flex items-end gap-2.5">
         <textarea
           rows={2}
           value={input}
@@ -205,13 +214,13 @@ export default function ChatPanel() {
           onKeyDown={handleKeyDown}
           disabled={loading}
           placeholder="Ask about a leg, SOC, payload, weather…"
-          className="flex-1 resize-none max-h-40 px-4 py-3 rounded-xl bg-surface-low border border-outline-variant/60 text-base leading-snug text-on-surface placeholder:text-on-surface-variant/60 focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:opacity-70"
+          className="flex-1 resize-none max-h-40 px-4 py-3 rounded-control bg-surface-lowest border border-outline-variant/60 text-base leading-snug text-on-surface placeholder:text-on-surface-variant/60 transition-shadow duration-snappy ease-nx-out focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/40 disabled:opacity-70"
         />
         <button
           type="submit"
           disabled={loading || input.trim() === ""}
           aria-label="Send message"
-          className="shrink-0 w-12 h-12 flex items-center justify-center rounded-full bg-primary text-on-primary hover:bg-primary/90 active:scale-95 transition focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:opacity-50 disabled:active:scale-100"
+          className="shrink-0 w-12 h-12 flex items-center justify-center rounded-pill bg-primary text-on-primary shadow-nx-sm hover:bg-primary/90 active:scale-95 transition duration-snappy ease-nx-out focus:outline-none focus:ring-2 focus:ring-primary/40 focus:ring-offset-2 focus:ring-offset-surface-lowest disabled:opacity-50 disabled:active:scale-100"
         >
           <span className="material-symbols-outlined" style={{ fontSize: "24px" }}>
             send

@@ -29,7 +29,7 @@ function Slider({ value, min, max, step = 1, onChange, ariaLabel, ariaValueText 
       aria-valuetext={ariaValueText ?? String(value)}
       className="route-slider w-full"
       style={{
-        background: `linear-gradient(to right, #006d32 0%, #00d166 ${pct}%, #e5eeff ${pct}%, #e5eeff 100%)`,
+        background: `linear-gradient(to right, #006d32 0%, #00d166 ${pct}%, rgb(var(--c-surface)) ${pct}%, rgb(var(--c-surface)) 100%)`,
       }}
     />
   );
@@ -38,15 +38,19 @@ function Slider({ value, min, max, step = 1, onChange, ariaLabel, ariaValueText 
 function FieldLabel({ icon, children, hint }) {
   return (
     <div className="flex items-center justify-between mb-2">
-      <label className="flex items-center gap-1.5 text-[11px] font-medium text-on-surface-variant uppercase tracking-wide">
+      <label className="flex items-center gap-1.5 text-[11px] font-semibold text-on-surface-variant uppercase tracking-[0.08em]">
         {icon && (
-          <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: "16px" }}>
+          <span className="material-symbols-outlined text-on-surface-variant/80" style={{ fontSize: "16px" }}>
             {icon}
           </span>
         )}
         {children}
       </label>
-      {hint != null && <span className="text-xs text-on-surface-variant">{hint}</span>}
+      {hint != null && (
+        <span className="rounded-pill bg-surface px-2 py-0.5 text-xs font-semibold tabular-nums text-on-surface">
+          {hint}
+        </span>
+      )}
     </div>
   );
 }
@@ -70,8 +74,10 @@ function DestinationRow({
 
   return (
     <div
-      className={`rounded-xl border bg-surface-low/60 transition-colors ${
-        dragOver ? "border-primary ring-1 ring-primary/40" : "border-outline-variant/60"
+      className={`rounded-control border bg-surface-low/60 transition-all duration-snappy ease-nx-out ${
+        dragOver
+          ? "border-primary ring-2 ring-primary/40 shadow-nx-md"
+          : "border-outline-variant/50 hover:border-outline-variant/70 hover:shadow-nx-sm"
       }`}
       onDragOver={(e) => {
         e.preventDefault();
@@ -94,13 +100,13 @@ function DestinationRow({
           }}
           aria-label={`Drag to reorder stop ${index + 1}`}
           title="Drag to reorder"
-          className="flex items-center justify-center w-5 shrink-0 text-on-surface-variant hover:text-primary cursor-grab active:cursor-grabbing"
+          className="flex items-center justify-center w-5 shrink-0 text-on-surface-variant/70 hover:text-primary cursor-grab active:cursor-grabbing transition-colors duration-snappy"
         >
           <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
             drag_indicator
           </span>
         </span>
-        <span className="flex items-center justify-center w-5 h-5 shrink-0 rounded-full bg-primary/15 text-primary text-[11px] font-semibold ring-1 ring-primary/30">
+        <span className="flex items-center justify-center w-5 h-5 shrink-0 rounded-full bg-primary/15 text-primary text-[11px] font-bold tabular-nums ring-1 ring-primary/30">
           {index + 1}
         </span>
         <div className="flex-1 min-w-0">
@@ -118,7 +124,7 @@ function DestinationRow({
           onClick={() => onMove?.(index, -1)}
           disabled={index === 0}
           aria-label={`Move stop ${index + 1} up`}
-          className="flex items-center justify-center w-6 h-6 shrink-0 rounded-lg text-on-surface-variant hover:text-primary hover:bg-surface disabled:opacity-30 disabled:pointer-events-none transition-colors"
+          className="flex items-center justify-center w-6 h-6 shrink-0 rounded-control text-on-surface-variant hover:text-primary hover:bg-surface disabled:opacity-30 disabled:pointer-events-none transition-colors duration-snappy"
         >
           <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
             keyboard_arrow_up
@@ -129,7 +135,7 @@ function DestinationRow({
           onClick={() => onMove?.(index, 1)}
           disabled={index === (count ?? 1) - 1}
           aria-label={`Move stop ${index + 1} down`}
-          className="flex items-center justify-center w-6 h-6 shrink-0 rounded-lg text-on-surface-variant hover:text-primary hover:bg-surface disabled:opacity-30 disabled:pointer-events-none transition-colors"
+          className="flex items-center justify-center w-6 h-6 shrink-0 rounded-control text-on-surface-variant hover:text-primary hover:bg-surface disabled:opacity-30 disabled:pointer-events-none transition-colors duration-snappy"
         >
           <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
             keyboard_arrow_down
@@ -140,8 +146,8 @@ function DestinationRow({
           onClick={() => setOpen((o) => !o)}
           aria-label={`${open ? "Hide" : "Show"} delivery options for stop ${index + 1}`}
           aria-expanded={open}
-          className={`flex items-center justify-center w-6 h-6 shrink-0 rounded-lg transition-colors ${
-            open ? "text-primary bg-primary/10" : "text-on-surface-variant hover:text-on-surface hover:bg-surface"
+          className={`flex items-center justify-center w-6 h-6 shrink-0 rounded-control transition-colors duration-snappy ${
+            open ? "text-primary bg-primary/10 ring-1 ring-primary/25" : "text-on-surface-variant hover:text-on-surface hover:bg-surface"
           }`}
         >
           <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
@@ -152,7 +158,7 @@ function DestinationRow({
           type="button"
           onClick={() => onRemove(dest.id)}
           aria-label={`Remove stop ${index + 1}`}
-          className="flex items-center justify-center w-6 h-6 shrink-0 rounded-lg text-on-surface-variant hover:text-error hover:bg-error/10 transition-colors"
+          className="flex items-center justify-center w-6 h-6 shrink-0 rounded-control text-on-surface-variant hover:text-error hover:bg-error/10 transition-colors duration-snappy"
         >
           <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
             close
@@ -162,13 +168,13 @@ function DestinationRow({
 
       {/* Per-stop delivery options — these feed the backend per-leg simulation. */}
       {open && (
-        <div className="px-3 pb-3 pt-1 space-y-3 border-t border-outline-variant/50 bg-surface-lowest/40">
+        <div className="px-3 pb-3 pt-2.5 space-y-3 border-t border-outline-variant/40 bg-surface-lowest/40">
           {/* Drop-off Weight: editable kg box + slider. The backend subtracts this
               from the payload for every leg AFTER this stop (payload decay). */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <label className="flex items-center gap-1.5 text-[11px] font-medium text-on-surface-variant uppercase tracking-wide">
-                <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: "16px" }}>
+              <label className="flex items-center gap-1.5 text-[11px] font-semibold text-on-surface-variant uppercase tracking-[0.08em]">
+                <span className="material-symbols-outlined text-on-surface-variant/80" style={{ fontSize: "16px" }}>
                   package_2
                 </span>
                 Drop-off Weight
@@ -186,7 +192,7 @@ function DestinationRow({
                       dropWeightKg: Math.max(0, Math.min(MAX_PAYLOAD_KG, Math.round(Number(e.target.value) || 0))),
                     })
                   }
-                  className="w-24 px-2 py-1 rounded-lg bg-surface-low border border-outline-variant/60 text-sm text-on-surface text-right outline-none focus:ring-2 focus:ring-primary/40 transition"
+                  className="w-24 px-2.5 py-1 rounded-control bg-surface-lowest border border-outline-variant/50 text-sm font-medium tabular-nums text-on-surface text-right outline-none hover:border-outline-variant/70 focus:border-primary/50 focus:ring-2 focus:ring-primary/30 transition duration-snappy"
                 />
                 <span className="text-xs text-on-surface-variant">kg</span>
               </div>
@@ -203,8 +209,8 @@ function DestinationRow({
           </div>
           {/* Unloading Time: editable min box. */}
           <div className="flex items-center justify-between">
-            <label className="flex items-center gap-1.5 text-[11px] font-medium text-on-surface-variant uppercase tracking-wide">
-              <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: "16px" }}>
+            <label className="flex items-center gap-1.5 text-[11px] font-semibold text-on-surface-variant uppercase tracking-[0.08em]">
+              <span className="material-symbols-outlined text-on-surface-variant/80" style={{ fontSize: "16px" }}>
                 timer
               </span>
               Unloading Time
@@ -217,7 +223,7 @@ function DestinationRow({
                 value={dest.unloadMin}
                 aria-label={`Unloading minutes at stop ${index + 1}`}
                 onChange={(e) => onUpdate(dest.id, { unloadMin: Math.max(0, Math.round(Number(e.target.value) || 0)) })}
-                className="w-24 px-2 py-1 rounded-lg bg-surface-low border border-outline-variant/60 text-sm text-on-surface text-right outline-none focus:ring-2 focus:ring-primary/40 transition"
+                className="w-24 px-2.5 py-1 rounded-control bg-surface-lowest border border-outline-variant/50 text-sm font-medium tabular-nums text-on-surface text-right outline-none hover:border-outline-variant/70 focus:border-primary/50 focus:ring-2 focus:ring-primary/30 transition duration-snappy"
               />
               <span className="text-xs text-on-surface-variant">min</span>
             </div>
@@ -230,7 +236,7 @@ function DestinationRow({
               value={dest.deliverBy}
               aria-label={`Deliver-by deadline for stop ${index + 1}`}
               onChange={(e) => onUpdate(dest.id, { deliverBy: e.target.value })}
-              className="w-full px-2 py-2 rounded-xl bg-surface-low border border-outline-variant/60 text-sm text-on-surface outline-none focus:ring-2 focus:ring-primary/40 transition"
+              className="w-full px-2.5 py-2 rounded-control bg-surface-lowest border border-outline-variant/50 text-sm text-on-surface outline-none hover:border-outline-variant/70 focus:border-primary/50 focus:ring-2 focus:ring-primary/30 transition duration-snappy"
             />
           </div>
         </div>
@@ -278,16 +284,20 @@ export default function PlannerForm({
   const canOptimize = hasOrigin && validDestinations >= 1 && !computing;
 
   return (
-    <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm overflow-hidden">
-      <div className="px-5 py-4 bg-gradient-to-r from-primary to-accent text-on-primary">
-        <div className="flex items-center gap-2">
+    <div className="nx-card overflow-hidden">
+      <div className="relative px-5 py-4 bg-gradient-to-br from-primary to-accent text-on-primary overflow-hidden">
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -right-8 -top-10 h-32 w-32 rounded-full bg-on-primary/10 blur-2xl"
+        />
+        <div className="relative flex items-center gap-2">
           <span className="material-symbols-outlined">route</span>
-          <h2 className="font-headline font-semibold text-lg">Route Planner</h2>
+          <h2 className="font-headline font-semibold text-lg tracking-tight">Route Planner</h2>
         </div>
-        <p className="text-xs text-on-primary/85 mt-0.5">Optimize an eActros 600 long-haul trip</p>
+        <p className="relative text-xs text-on-primary/85 mt-0.5">Optimize an eActros 600 long-haul trip</p>
       </div>
 
-      <div className="p-5 space-y-4">
+      <div className="p-5 space-y-5">
         {/* Vehicle */}
         <TruckCard />
 
@@ -315,8 +325,8 @@ export default function PlannerForm({
         {/* Destinations */}
         <div>
           <div className="flex items-center justify-between mb-2">
-            <label className="flex items-center gap-1.5 text-[11px] font-medium text-on-surface-variant uppercase tracking-wide">
-              <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: "16px" }}>
+            <label className="flex items-center gap-1.5 text-[11px] font-semibold text-on-surface-variant uppercase tracking-[0.08em]">
+              <span className="material-symbols-outlined text-on-surface-variant/80" style={{ fontSize: "16px" }}>
                 flag
               </span>
               Destinations
@@ -324,7 +334,7 @@ export default function PlannerForm({
             <button
               type="button"
               onClick={onAddDestination}
-              className="flex items-center gap-1 px-2 py-1 rounded-lg bg-primary/10 text-primary text-xs font-medium ring-1 ring-primary/25 hover:bg-primary/15 transition-colors"
+              className="flex items-center gap-1 pl-1.5 pr-2.5 py-1 rounded-pill bg-primary/10 text-primary text-xs font-semibold ring-1 ring-primary/25 hover:bg-primary/15 hover:ring-primary/40 active:scale-[0.97] transition-all duration-snappy ease-nx-out"
             >
               <span className="material-symbols-outlined" style={{ fontSize: "16px" }}>
                 add
@@ -360,12 +370,12 @@ export default function PlannerForm({
               type="datetime-local"
               value={planner.departure}
               onChange={(e) => onDeparture(e.target.value)}
-              className="flex-1 px-3 py-2.5 rounded-xl bg-surface-low border border-outline-variant/60 text-sm text-on-surface outline-none focus:ring-2 focus:ring-primary/40 transition"
+              className="flex-1 px-3 py-2.5 rounded-control bg-surface-low border border-outline-variant/50 text-sm text-on-surface outline-none hover:border-outline-variant/70 focus:border-primary/50 focus:ring-2 focus:ring-primary/30 transition duration-snappy"
             />
             <button
               type="button"
               onClick={() => onDeparture(nowLocalISO())}
-              className="px-3 py-2.5 rounded-xl bg-surface-low text-on-surface-variant text-xs font-semibold hover:bg-surface transition-colors"
+              className="px-3.5 py-2.5 rounded-control bg-surface-low border border-outline-variant/50 text-on-surface-variant text-xs font-semibold tracking-wide hover:bg-surface hover:text-on-surface active:scale-[0.97] transition-all duration-snappy ease-nx-out"
             >
               NOW
             </button>
@@ -373,28 +383,28 @@ export default function PlannerForm({
         </div>
 
         {/* More Options (collapsible) */}
-        <div className="rounded-xl border border-outline-variant/60 overflow-hidden">
+        <div className="rounded-control border border-outline-variant/50 overflow-hidden bg-surface-low/40">
           <button
             type="button"
             onClick={() => setMoreOpen((o) => !o)}
             aria-expanded={moreOpen}
-            className="flex w-full items-center justify-between px-3 py-2.5 text-[11px] font-medium text-on-surface-variant uppercase tracking-wide hover:bg-surface-low transition-colors"
+            className="flex w-full items-center justify-between px-3 py-3 text-[11px] font-semibold text-on-surface-variant uppercase tracking-[0.08em] hover:bg-surface-low hover:text-on-surface transition-colors duration-snappy"
           >
             <span className="flex items-center gap-1.5">
-              <span className="material-symbols-outlined" style={{ fontSize: "16px" }}>
+              <span className="material-symbols-outlined text-on-surface-variant/80" style={{ fontSize: "16px" }}>
                 settings
               </span>
               More Options
             </span>
             <span
-              className="material-symbols-outlined transition-transform"
+              className="material-symbols-outlined transition-transform duration-smooth ease-nx-out"
               style={{ fontSize: "18px", transform: moreOpen ? "rotate(180deg)" : "none" }}
             >
               expand_more
             </span>
           </button>
           {moreOpen && (
-            <div className="px-3 pb-3 pt-1 space-y-3 border-t border-outline-variant/50">
+            <div className="px-3 pb-3 pt-3 space-y-4 border-t border-outline-variant/40 bg-surface-lowest/40">
               <div>
                 <FieldLabel icon="target" hint={`${planner.minSoc}%`}>
                   Arrive with at least
@@ -456,8 +466,8 @@ export default function PlannerForm({
               </div>
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <label className="flex items-center gap-1.5 text-[11px] font-medium text-on-surface-variant uppercase tracking-wide">
-                    <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: "16px" }}>
+                  <label className="flex items-center gap-1.5 text-[11px] font-semibold text-on-surface-variant uppercase tracking-[0.08em]">
+                    <span className="material-symbols-outlined text-on-surface-variant/80" style={{ fontSize: "16px" }}>
                       scale
                     </span>
                     Payload
@@ -475,7 +485,7 @@ export default function PlannerForm({
                           Math.max(0, Math.min(MAX_PAYLOAD_KG, Math.round(Number(e.target.value) || 0)))
                         )
                       }
-                      className="w-24 px-2 py-1 rounded-lg bg-surface-low border border-outline-variant/60 text-sm text-on-surface text-right outline-none focus:ring-2 focus:ring-primary/40 transition"
+                      className="w-24 px-2.5 py-1 rounded-control bg-surface-lowest border border-outline-variant/50 text-sm font-medium tabular-nums text-on-surface text-right outline-none hover:border-outline-variant/70 focus:border-primary/50 focus:ring-2 focus:ring-primary/30 transition duration-snappy"
                     />
                     <span className="text-xs text-on-surface-variant">kg</span>
                   </div>
@@ -495,7 +505,14 @@ export default function PlannerForm({
           )}
         </div>
 
-        {error && <p className="text-xs text-error px-1">{error}</p>}
+        {error && (
+          <p className="flex items-start gap-1.5 rounded-control bg-error/10 px-3 py-2 text-xs font-medium text-error">
+            <span className="material-symbols-outlined shrink-0" style={{ fontSize: "16px" }}>
+              error
+            </span>
+            <span>{error}</span>
+          </p>
+        )}
 
         {/* Actions */}
         <div className="space-y-2 pt-1">
@@ -503,7 +520,7 @@ export default function PlannerForm({
             type="button"
             onClick={onOptimize}
             disabled={!canOptimize}
-            className="flex w-full items-center justify-center gap-2 px-4 py-3 rounded-xl bg-primary text-on-primary text-sm font-semibold hover:bg-primary/90 active:scale-[0.99] transition disabled:opacity-50 disabled:cursor-not-allowed"
+            className="nx-focus flex w-full items-center justify-center gap-2 px-4 py-3 rounded-control bg-primary text-on-primary text-sm font-semibold shadow-nx-sm hover:bg-primary/90 hover:shadow-nx-md active:scale-[0.99] transition-all duration-snappy ease-nx-out disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none disabled:hover:bg-primary"
           >
             {computing ? (
               <>
@@ -524,7 +541,7 @@ export default function PlannerForm({
           <button
             type="button"
             onClick={onReset}
-            className="block w-full text-center text-xs text-on-surface-variant hover:text-on-surface transition-colors"
+            className="block w-full rounded-control py-1.5 text-center text-xs font-medium text-on-surface-variant hover:text-on-surface hover:bg-surface-low transition-colors duration-snappy"
           >
             Reset
           </button>

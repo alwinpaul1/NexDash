@@ -42,10 +42,10 @@ export default function MapControls({ isFullscreen, onToggleFullscreen, onLocate
   };
 
   const btn =
-    "w-9 h-9 flex items-center justify-center bg-surface-lowest text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-colors";
+    "w-10 h-10 flex items-center justify-center bg-surface-lowest/95 backdrop-blur text-on-surface-variant hover:text-primary hover:bg-primary/10 active:scale-95 transition-all duration-snappy ease-nx-out nx-focus";
   // Disabled (limit reached): greyed and non-interactive.
   const disabledBtn =
-    "w-9 h-9 flex items-center justify-center bg-surface-lowest text-on-surface-variant/30 cursor-not-allowed";
+    "w-10 h-10 flex items-center justify-center bg-surface-lowest/95 backdrop-blur text-on-surface-variant/30 cursor-not-allowed";
 
   return (
     <div
@@ -57,7 +57,7 @@ export default function MapControls({ isFullscreen, onToggleFullscreen, onLocate
       }
     >
       {/* Zoom cluster */}
-      <div className="flex flex-col rounded-xl overflow-hidden border border-outline-variant/60 shadow-sm divide-y divide-outline-variant/50">
+      <div className="flex flex-col rounded-control overflow-hidden border border-outline-variant/50 shadow-nx-md divide-y divide-outline-variant/40">
         <button
           type="button"
           onClick={() => map.zoomIn()}
@@ -87,7 +87,7 @@ export default function MapControls({ isFullscreen, onToggleFullscreen, onLocate
         type="button"
         onClick={locate}
         aria-label="Locate me"
-        className={`${btn} rounded-xl border border-outline-variant/60 shadow-sm`}
+        className={`${btn} rounded-control border border-outline-variant/50 shadow-nx-md`}
       >
         <span className="material-symbols-outlined" style={{ fontSize: "20px" }}>
           my_location
@@ -99,7 +99,7 @@ export default function MapControls({ isFullscreen, onToggleFullscreen, onLocate
         type="button"
         onClick={onToggleFullscreen}
         aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-        className={`${btn} rounded-xl border border-outline-variant/60 shadow-sm`}
+        className={`${btn} rounded-control border border-outline-variant/50 shadow-nx-md`}
       >
         <span className="material-symbols-outlined" style={{ fontSize: "20px" }}>
           {isFullscreen ? "fullscreen_exit" : "fullscreen"}
