@@ -11,7 +11,7 @@ export default function ChatWidget({ open, onOpenChange }) {
     <>
       <div
         aria-hidden={!open}
-        className={`fixed bottom-24 right-6 z-[3000] w-[460px] max-w-[calc(100vw-3rem)] origin-bottom-right transition-all duration-200 ease-out ${
+        className={`fixed bottom-24 right-6 z-[3000] w-[460px] max-w-[calc(100vw-3rem)] origin-bottom-right transition-all duration-smooth ease-nx-out ${
           open
             ? "opacity-100 translate-y-0 scale-100"
             : "opacity-0 translate-y-3 scale-95 pointer-events-none"
@@ -24,10 +24,10 @@ export default function ChatWidget({ open, onOpenChange }) {
         type="button"
         onClick={() => onOpenChange(!open)}
         aria-label={open ? "Close assistant" : "Open Dispatcher Assistant"}
-        className="fixed bottom-6 right-6 z-[3000] w-14 h-14 rounded-full bg-gradient-to-br from-primary to-accent text-on-primary shadow-lg shadow-primary/30 flex items-center justify-center hover:scale-105 active:scale-95 transition-transform"
+        className="group fixed bottom-6 right-6 z-[3000] w-14 h-14 rounded-pill bg-gradient-to-br from-primary to-accent text-on-primary shadow-nx-lg shadow-primary/30 flex items-center justify-center ring-1 ring-on-primary/10 hover:scale-105 active:scale-95 transition-transform duration-smooth ease-nx-out nx-focus"
       >
         <span
-          className="material-symbols-outlined transition-transform duration-200"
+          className="material-symbols-outlined transition-transform duration-smooth ease-nx-out group-hover:rotate-3"
           style={{ fontSize: "26px" }}
         >
           {open ? "keyboard_arrow_down" : "forum"}

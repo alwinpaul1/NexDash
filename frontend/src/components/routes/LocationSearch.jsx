@@ -94,10 +94,10 @@ export default function LocationSearch({
   }
 
   return (
-    <div ref={wrapRef} className="relative">
+    <div ref={wrapRef} className="group relative">
       <div className="relative flex items-center">
         <span
-          className="material-symbols-outlined absolute left-2.5 text-on-surface-variant pointer-events-none"
+          className="material-symbols-outlined absolute left-2.5 text-on-surface-variant/80 pointer-events-none transition-colors duration-snappy group-focus-within:text-primary"
           style={{ fontSize: "18px" }}
         >
           {icon}
@@ -110,7 +110,7 @@ export default function LocationSearch({
           onKeyDown={onKeyDown}
           placeholder={placeholder}
           autoFocus={autoFocus}
-          className="w-full pl-9 pr-8 py-2.5 rounded-xl bg-surface-low border border-outline-variant/60 text-sm text-on-surface placeholder:text-on-surface-variant/70 outline-none focus:ring-2 focus:ring-primary/40 transition"
+          className="w-full pl-9 pr-8 py-2.5 rounded-control bg-surface-low border border-outline-variant/50 text-sm text-on-surface placeholder:text-on-surface-variant/60 outline-none hover:border-outline-variant/70 focus:border-primary/50 focus:ring-2 focus:ring-primary/30 transition duration-snappy"
         />
         {loading ? (
           <span
@@ -124,7 +124,7 @@ export default function LocationSearch({
             type="button"
             onClick={clear}
             aria-label="Clear"
-            className="absolute right-2 text-on-surface-variant hover:text-on-surface transition-colors"
+            className="absolute right-2 flex items-center justify-center rounded-full p-0.5 text-on-surface-variant hover:text-on-surface hover:bg-surface transition-colors duration-snappy"
           >
             <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
               close
@@ -134,19 +134,21 @@ export default function LocationSearch({
       </div>
 
       {open && results.length > 0 && (
-        <ul className="absolute z-[1100] mt-1 w-full rounded-xl bg-surface-lowest border border-outline-variant/60 shadow-lg overflow-hidden max-h-60 overflow-y-auto">
+        <ul className="absolute z-[1100] mt-1.5 w-full rounded-control bg-surface-lowest border border-outline-variant/50 shadow-nx-lg overflow-hidden max-h-60 overflow-y-auto p-1">
           {results.map((r, i) => (
             <li key={`${r.lat},${r.lng},${i}`}>
               <button
                 type="button"
                 onMouseEnter={() => setActive(i)}
                 onClick={() => choose(r)}
-                className={`flex w-full items-start gap-2 px-3 py-2 text-left text-sm transition-colors ${
+                className={`flex w-full items-start gap-2 rounded-[10px] px-2.5 py-2 text-left text-sm transition-colors duration-snappy ${
                   active === i ? "bg-primary/10 text-on-surface" : "text-on-surface-variant hover:bg-surface-low"
                 }`}
               >
                 <span
-                  className="material-symbols-outlined mt-0.5 text-on-surface-variant shrink-0"
+                  className={`material-symbols-outlined mt-0.5 shrink-0 transition-colors duration-snappy ${
+                    active === i ? "text-primary" : "text-on-surface-variant/80"
+                  }`}
                   style={{ fontSize: "16px" }}
                 >
                   location_on

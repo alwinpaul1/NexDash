@@ -34,8 +34,8 @@ function socColor(soc) {
 function Marker({ icon, tint }) {
   return (
     <div
-      className="flex items-center justify-center w-8 h-8 rounded-full ring-1"
-      style={{ background: `${tint}1f`, color: tint, borderColor: `${tint}55` }}
+      className="flex items-center justify-center w-8 h-8 rounded-pill ring-1 shadow-nx-sm"
+      style={{ background: `${tint}1f`, color: tint, borderColor: `${tint}55`, "--tw-ring-color": `${tint}40` }}
     >
       <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
         {icon}
@@ -53,7 +53,7 @@ function DriveRow({ seg }) {
   // towns/30-zones lower. The total still equals TomTom's measured time.
   const speedKph = seg.durationMin > 0 ? (seg.km || 0) / (seg.durationMin / 60) : 0;
   return (
-    <div className="flex-1 rounded-xl bg-surface-low border border-outline-variant/50 px-3 py-2.5">
+    <div className="flex-1 rounded-control nx-card-inset px-3 py-2.5 transition-colors duration-snappy ease-nx-out hover:border-outline-variant/60">
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium text-on-surface">
           Drive
@@ -65,8 +65,7 @@ function DriveRow({ seg }) {
         <div className="flex items-center gap-2 shrink-0 ml-2">
           {speedKph > 0 && (
             <span
-              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium tabular-nums"
-              style={{ background: "#0059bb14", color: "#0059bb" }}
+              className="inline-flex items-center gap-1 rounded-pill px-2 py-0.5 text-[11px] font-semibold tabular-nums bg-secondary/10 text-secondary ring-1 ring-secondary/20"
               title="Average speed over this leg (varies by posted road limits)"
             >
               <span className="material-symbols-outlined" style={{ fontSize: "13px" }}>speed</span>
@@ -98,9 +97,9 @@ function DriveRow({ seg }) {
 
 function RestCard({ seg }) {
   return (
-    <div className="flex-1 rounded-xl bg-amber-500/10 border border-amber-500/30 px-3 py-2.5">
+    <div className="flex-1 rounded-control bg-amber-500/10 border border-amber-500/30 px-3 py-2.5">
       <div className="flex items-center justify-between">
-        <p className="text-sm font-medium text-amber-700">{seg.label || "Rest Break"}</p>
+        <p className="text-sm font-semibold text-amber-700">{seg.label || "Rest Break"}</p>
         <p className="text-[11px] text-amber-700/70 tabular-nums">{fmtDur(seg.durationMin)}</p>
       </div>
       <p className="text-[11px] text-amber-700/60 mt-0.5 tabular-nums">
@@ -114,9 +113,9 @@ function ChargeCard({ seg }) {
   const start = seg.socStart ?? 0;
   const end = seg.socEnd ?? 0;
   return (
-    <div className="flex-1 rounded-xl bg-primary/8 border border-primary/25 px-3 py-2.5">
+    <div className="flex-1 rounded-control bg-primary/8 border border-primary/25 px-3 py-2.5">
       <div className="flex items-center justify-between">
-        <p className="text-sm font-medium text-primary truncate">
+        <p className="text-sm font-semibold text-primary truncate">
           {seg.station?.name || "Charging Stop"}
         </p>
         <p className="text-[11px] text-primary/70 tabular-nums shrink-0 ml-2">
@@ -173,7 +172,7 @@ export default function TripTimeline({ segments = [] }) {
           <li key={i} className="flex gap-3">
             <div className="flex flex-col items-center">
               {marker}
-              {!isLast && <div className="flex-1 w-px bg-outline-variant/60 mt-1" />}
+              {!isLast && <div className="flex-1 w-0.5 mt-1 rounded-pill bg-gradient-to-b from-outline-variant/60 to-outline-variant/25" />}
             </div>
             {body}
           </li>

@@ -131,11 +131,18 @@ function pinIcon(kind, num) {
     kind === "origin" || Number.isFinite(num)
       ? ""
       : `<span class="material-symbols-outlined" style="position:absolute;left:19px;top:18px;transform:translate(-50%,-50%);font-size:14px;color:${color};">flag</span>`;
+  const gradId = `pin-${kind}-${Number.isFinite(num) ? num : "x"}`;
   return L.divIcon({
     className: "",
-    html: `<div style="position:relative;width:38px;height:48px;filter:drop-shadow(0 3px 4px rgba(0,0,0,0.35));">
+    html: `<div style="position:relative;width:38px;height:48px;filter:drop-shadow(0 4px 6px rgba(0,0,0,0.28)) drop-shadow(0 1px 1px rgba(0,0,0,0.18));">
       <svg width="38" height="48" viewBox="0 0 24 32" xmlns="http://www.w3.org/2000/svg">
-        <path d="M12 0C5.37 0 0 5.37 0 12c0 8.5 10.5 18.7 11.1 19.3a1.3 1.3 0 0 0 1.8 0C13.5 30.7 24 20.5 24 12 24 5.37 18.63 0 12 0z" fill="${color}" stroke="#fff" stroke-width="1.5"/>
+        <defs>
+          <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="${color}"/>
+            <stop offset="100%" stop-color="${color}" stop-opacity="0.82"/>
+          </linearGradient>
+        </defs>
+        <path d="M12 0C5.37 0 0 5.37 0 12c0 8.5 10.5 18.7 11.1 19.3a1.3 1.3 0 0 0 1.8 0C13.5 30.7 24 20.5 24 12 24 5.37 18.63 0 12 0z" fill="url(#${gradId})" stroke="#fff" stroke-width="1.75"/>
         <circle cx="12" cy="12" r="6.5" fill="#fff"/>
         ${center}
       </svg>
@@ -161,8 +168,8 @@ function gpsIcon() {
 function chargeIcon(num) {
   return L.divIcon({
     className: "",
-    html: `<div style="transform:translate(-50%,-50%);background:#f59e0b;color:#fff;border-radius:9999px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font:600 12px Inter,sans-serif;border:2px solid #fff;box-shadow:0 2px 5px rgba(0,0,0,0.3);">${num}</div>`,
-    iconSize: [24, 24],
+    html: `<div style="transform:translate(-50%,-50%);background:linear-gradient(160deg,#fbbf24,#f59e0b);color:#fff;border-radius:9999px;width:25px;height:25px;display:flex;align-items:center;justify-content:center;font:700 12px Inter,sans-serif;border:2.5px solid #fff;box-shadow:0 3px 7px rgba(245,158,11,0.45),0 1px 2px rgba(0,0,0,0.25);">${num}</div>`,
+    iconSize: [25, 25],
     iconAnchor: [0, 0],
   });
 }
@@ -186,7 +193,7 @@ function incidentIcon(inc) {
   const color = incidentColor(inc.magnitude);
   return L.divIcon({
     className: "",
-    html: `<div style="transform:translate(-50%,-50%);background:${color};color:#fff;border-radius:9999px;width:26px;height:26px;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 2px 5px rgba(0,0,0,0.35);">
+    html: `<div style="transform:translate(-50%,-50%);background:${color};color:#fff;border-radius:9999px;width:27px;height:27px;display:flex;align-items:center;justify-content:center;border:2.5px solid #fff;box-shadow:0 3px 7px ${color}55,0 1px 2px rgba(0,0,0,0.28);">
       <span class="material-symbols-outlined" style="font-size:16px;">${incidentGlyph(inc.category)}</span>
     </div>`,
     iconSize: [26, 26],
@@ -495,9 +502,9 @@ function SearchBox({ onPick }) {
 
   return (
     <div className="absolute top-5 left-5 z-[1000] w-80">
-      <div className="relative flex items-center">
+      <div className="group relative flex items-center">
         <span
-          className="material-symbols-outlined absolute left-3 text-on-surface-variant pointer-events-none"
+          className="material-symbols-outlined absolute left-3.5 text-on-surface-variant pointer-events-none transition-colors duration-snappy group-focus-within:text-primary"
           style={{ fontSize: "22px" }}
         >
           search
@@ -508,7 +515,7 @@ function SearchBox({ onPick }) {
           onChange={(e) => setQuery(e.target.value)}
           onFocus={() => results.length > 0 && setOpen(true)}
           placeholder="Search locations…"
-          className="w-full pl-11 pr-10 py-3.5 rounded-2xl bg-surface-lowest/95 backdrop-blur border border-outline-variant/60 text-base text-on-surface placeholder:text-on-surface-variant/70 outline-none focus:ring-2 focus:ring-primary/40 shadow-md transition"
+          className="w-full pl-11 pr-10 py-3.5 rounded-card bg-surface-lowest/95 backdrop-blur border border-outline-variant/50 text-base text-on-surface placeholder:text-on-surface-variant/70 outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/40 shadow-nx-md transition-[box-shadow,border-color] duration-smooth ease-nx-out"
         />
         {loading ? (
           <span
@@ -526,7 +533,7 @@ function SearchBox({ onPick }) {
               setOpen(false);
             }}
             aria-label="Clear"
-            className="absolute right-2 text-on-surface-variant hover:text-on-surface transition-colors"
+            className="absolute right-2.5 flex items-center justify-center rounded-pill p-0.5 text-on-surface-variant hover:text-on-surface hover:bg-surface transition-colors duration-snappy"
           >
             <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
               close
@@ -536,16 +543,16 @@ function SearchBox({ onPick }) {
       </div>
 
       {open && results.length > 0 && (
-        <ul className="mt-1 w-full rounded-xl bg-surface-lowest border border-outline-variant/60 shadow-lg overflow-hidden max-h-60 overflow-y-auto">
+        <ul className="mt-2 w-full rounded-control bg-surface-lowest/95 backdrop-blur border border-outline-variant/50 shadow-nx-lg overflow-hidden max-h-60 overflow-y-auto p-1">
           {results.map((r, i) => (
             <li key={`${r.lat},${r.lng},${i}`}>
               <button
                 type="button"
                 onClick={() => pick(r)}
-                className="flex w-full items-start gap-2 px-3 py-2 text-left text-sm text-on-surface-variant hover:bg-surface-low transition-colors"
+                className="flex w-full items-start gap-2.5 rounded-control px-2.5 py-2 text-left text-sm text-on-surface-variant hover:bg-surface-low hover:text-on-surface transition-colors duration-snappy"
               >
                 <span
-                  className="material-symbols-outlined mt-0.5 text-on-surface-variant shrink-0"
+                  className="material-symbols-outlined mt-0.5 text-primary/80 shrink-0"
                   style={{ fontSize: "16px" }}
                 >
                   location_on
@@ -563,7 +570,7 @@ function SearchBox({ onPick }) {
 // Segmented tile-style switcher (Streets / Satellite / Dark).
 function TileSwitcher({ value, onChange }) {
   return (
-    <div className="absolute bottom-5 left-5 z-[1000] flex rounded-2xl bg-surface-lowest/95 backdrop-blur border border-outline-variant/60 shadow-md overflow-hidden">
+    <div className="absolute bottom-5 left-5 z-[1000] flex gap-1 rounded-card bg-surface-lowest/95 backdrop-blur border border-outline-variant/50 shadow-nx-md overflow-hidden p-1">
       {Object.entries(TILE_STYLES).map(([key, s]) => {
         const on = value === key;
         return (
@@ -571,9 +578,9 @@ function TileSwitcher({ value, onChange }) {
             key={key}
             type="button"
             onClick={() => onChange(key)}
-            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+            className={`flex items-center gap-2 rounded-control px-3.5 py-2.5 text-sm font-medium transition-all duration-smooth ease-nx-out ${
               on
-                ? "bg-primary text-white"
+                ? "bg-primary text-on-primary shadow-nx-sm"
                 : "text-on-surface-variant hover:bg-primary/10 hover:text-primary"
             }`}
           >
@@ -678,6 +685,18 @@ export default function RouteMap({ plan, waypoints = [] }) {
           (layers.drain ? (
             socSegs.map((seg, i) => (
               <Fragment key={`soc-${i}`}>
+                {/* Subtle dark casing beneath each SOC segment so the coloured
+                    line reads crisply over both light and satellite tiles. */}
+                <Polyline
+                  positions={seg.positions}
+                  pathOptions={{
+                    color: "#0b1c30",
+                    weight: 12,
+                    opacity: 0.18,
+                    lineCap: "round",
+                    lineJoin: "round",
+                  }}
+                />
                 <Polyline
                   positions={seg.positions}
                   pathOptions={{
@@ -705,16 +724,28 @@ export default function RouteMap({ plan, waypoints = [] }) {
               </Fragment>
             ))
           ) : geometry.length >= 2 ? (
-            <Polyline
-              positions={geometry}
-              pathOptions={{
-                color: "#006d32",
-                weight: 8,
-                opacity: 0.95,
-                lineCap: "round",
-                lineJoin: "round",
-              }}
-            />
+            <Fragment>
+              <Polyline
+                positions={geometry}
+                pathOptions={{
+                  color: "#0b1c30",
+                  weight: 12,
+                  opacity: 0.18,
+                  lineCap: "round",
+                  lineJoin: "round",
+                }}
+              />
+              <Polyline
+                positions={geometry}
+                pathOptions={{
+                  color: "#006d32",
+                  weight: 8,
+                  opacity: 0.95,
+                  lineCap: "round",
+                  lineJoin: "round",
+                }}
+              />
+            </Fragment>
           ) : null)}
 
         {/* A single live "runner" travelling source -> destination on a loop. */}

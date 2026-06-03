@@ -21,24 +21,38 @@ export default function TruckCard() {
   const [showSpecs, setShowSpecs] = useState(false);
 
   return (
-    <div className="relative rounded-2xl border border-outline-variant/50 bg-surface-lowest p-4">
+    <div className="nx-card nx-hover-lift relative p-4">
       {/* Framed render box — truck blended onto a soft panel (matches the brief). */}
-      <div className="rounded-xl bg-surface-low/50 border border-outline-variant/40 overflow-hidden p-2">
+      <div className="nx-card-inset relative overflow-hidden p-2">
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 bg-gradient-to-b from-primary/[0.06] to-transparent"
+        />
         <img
           src="/eactros-600.png"
           alt="Mercedes-Benz eActros 600"
-          className="w-full h-44 object-contain"
+          className="relative w-full h-44 object-contain"
           style={{ mixBlendMode: "multiply" }}
         />
       </div>
 
       <div className="mt-3 flex items-center justify-between">
-        <h3 className="font-headline font-bold text-xl text-on-surface">eActros 600</h3>
+        <div className="min-w-0">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant/80">
+            Vehicle
+          </p>
+          <h3 className="font-headline font-bold text-xl tracking-tight text-on-surface">eActros 600</h3>
+        </div>
         <button
           type="button"
           onClick={() => setShowSpecs((s) => !s)}
           aria-label="Vehicle specifications"
-          className="w-9 h-9 rounded-full bg-surface-lowest border border-outline-variant/60 text-on-surface-variant hover:text-primary hover:bg-primary/10 flex items-center justify-center transition-colors"
+          aria-pressed={showSpecs}
+          className={`w-9 h-9 shrink-0 rounded-full border flex items-center justify-center transition-all duration-snappy ease-nx-out active:scale-95 ${
+            showSpecs
+              ? "border-primary/40 bg-primary/10 text-primary"
+              : "border-outline-variant/50 bg-surface-lowest text-on-surface-variant hover:text-primary hover:border-primary/30 hover:bg-primary/10"
+          }`}
         >
           <span className="material-symbols-outlined" style={{ fontSize: "20px" }}>
             info
@@ -47,16 +61,19 @@ export default function TruckCard() {
       </div>
 
       {showSpecs && (
-        <div className="mt-3 rounded-xl border border-outline-variant/50 bg-surface-lowest divide-y divide-outline-variant/40 overflow-hidden">
+        <div className="mt-3 rounded-control border border-outline-variant/50 bg-surface-low/50 divide-y divide-outline-variant/30 overflow-hidden">
           {SPECS.map((s) => (
-            <div key={s.label} className="flex items-center justify-between px-3 py-2 text-sm">
+            <div
+              key={s.label}
+              className="flex items-center justify-between gap-3 px-3 py-2 text-sm transition-colors duration-snappy hover:bg-surface-low"
+            >
               <span className="flex items-center gap-2 text-on-surface-variant">
-                <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
+                <span className="material-symbols-outlined text-on-surface-variant/80" style={{ fontSize: "18px" }}>
                   {s.icon}
                 </span>
                 {s.label}
               </span>
-              <span className="font-medium text-on-surface">{s.value}</span>
+              <span className="font-semibold tabular-nums text-on-surface text-right">{s.value}</span>
             </div>
           ))}
         </div>

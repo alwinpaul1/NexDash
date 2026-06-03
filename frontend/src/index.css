@@ -2,9 +2,98 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ─────────────────────────────────────────────────────────────────────────
+   THEME TOKENS
+   Semantic color variables consumed by tailwind.config.js as
+   rgb(var(--c-…) / <alpha-value>). Values are SPACE-SEPARATED "R G B" so
+   Tailwind can inject the alpha channel (e.g. border-outline-variant/40).
+
+   :root                = refined LIGHT (Material-derived emerald/charcoal)
+   [data-theme="dark"]  = premium DARK  (charcoal panels, emerald accent)
+
+   Alpha caveat: components alpha-composite surfaces & borders (…/40, …/60).
+   Dark values are chosen as MID greys (not pure white/black) so those
+   composited usages stay subtle and legible.
+   ───────────────────────────────────────────────────────────────────────── */
+:root {
+  /* Brand */
+  --c-primary: 0 109 50; /* #006d32 emerald */
+  --c-accent: 0 209 102; /* #00d166 bright emerald */
+  --c-on-primary: 255 255 255;
+  --c-secondary: 0 89 187; /* #0059bb */
+  --c-error: 186 26 26; /* #ba1a1a */
+
+  /* Surfaces (low → high elevation reads brighter) */
+  --c-background: 247 249 253; /* refined from #f8f9ff, slightly warmer-neutral */
+  --c-surface-lowest: 255 255 255;
+  --c-surface-low: 239 244 255; /* #eff4ff */
+  --c-surface: 229 238 255; /* #e5eeff */
+
+  /* Text */
+  --c-on-surface: 11 28 48; /* #0b1c30 */
+  --c-on-surface-variant: 60 74 61; /* #3c4a3d */
+
+  /* Lines */
+  --c-outline-variant: 187 203 185; /* #bbcbb9 */
+
+  /* Elevation (light: soft cool shadows) */
+  --shadow-sm: 0 1px 2px rgb(11 28 48 / 0.06);
+  --shadow-md: 0 4px 14px rgb(11 28 48 / 0.08);
+  --shadow-lg: 0 12px 32px rgb(11 28 48 / 0.12);
+  --shadow-ring: 0 0 0 3px rgb(0 109 50 / 0.28);
+
+  /* Theme-aware scrollbar */
+  --scrollbar-thumb: 187 203 185;
+  --scrollbar-thumb-hover: 60 74 61;
+
+  /* chat-md table border hook (used below) */
+  --md-border: #d9e2d6;
+
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  /* Brand — emerald reads slightly brighter on dark for parity. */
+  --c-primary: 16 185 129; /* #10b981 nex-accent */
+  --c-accent: 52 211 153; /* #34d399 nex-accent-bright */
+  --c-on-primary: 6 14 12; /* near-black so text on emerald stays legible */
+  --c-secondary: 96 165 250; /* lifted blue for dark contrast */
+  --c-error: 248 113 113; /* lifted red */
+
+  /* Surfaces — charcoal panels from the NexOS palette, layered. */
+  --c-background: 10 13 14; /* #0a0d0e nex-bg */
+  --c-surface-lowest: 14 20 19; /* #0e1413 nex-panel */
+  --c-surface-low: 16 24 23; /* #101817 nex-panel-alt */
+  --c-surface: 23 32 31; /* a touch lighter for raised chips */
+
+  /* Text */
+  --c-on-surface: 230 237 240; /* light slate */
+  --c-on-surface-variant: 156 163 175; /* #9ca3af muted */
+
+  /* Lines — MID grey so …/40, …/60 borders are visible but soft, not glaring. */
+  --c-outline-variant: 120 132 128;
+
+  /* Elevation (dark: deeper, near-black shadows) */
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-md: 0 6px 18px rgb(0 0 0 / 0.45);
+  --shadow-lg: 0 16px 40px rgb(0 0 0 / 0.55);
+  --shadow-ring: 0 0 0 3px rgb(52 211 153 / 0.35);
+
+  /* Theme-aware scrollbar */
+  --scrollbar-thumb: 255 255 255;
+  --scrollbar-thumb-hover: 255 255 255;
+
+  --md-border: #28322f;
+
+  color-scheme: dark;
+}
+
 @layer base {
   body {
     font-family: "Inter", sans-serif;
+    /* Smooth theme swap without animating layout. */
+    transition: background-color 240ms cubic-bezier(0.16, 1, 0.3, 1),
+      color 240ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   h1,
@@ -33,6 +122,43 @@
     font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
     vertical-align: middle;
   }
+
+  /* ───────────────────────────────────────────────────────────────────────
+     REUSABLE ELEVATION UTILITIES (theme-aware via tokens)
+     Phase-2 component agents should compose these instead of hand-rolling
+     surface + border + radius + shadow each time.
+     ─────────────────────────────────────────────────────────────────────── */
+
+  /* .nx-card — the standard panel: highest surface, hairline border, card
+     radius, soft elevation. Add .nx-hover-lift for an interactive card. */
+  .nx-card {
+    @apply bg-surface-lowest border border-outline-variant/50 rounded-card shadow-nx-sm;
+  }
+
+  /* .nx-card-inset — a recessed sub-panel (use inside .nx-card). */
+  .nx-card-inset {
+    @apply bg-surface-low/60 border border-outline-variant/30 rounded-control;
+  }
+
+  /* .nx-hover-lift — subtle raise + stronger shadow on hover. Purposeful,
+     not bouncy. Honors reduced-motion via the global media query below. */
+  .nx-hover-lift {
+    @apply transition-[transform,box-shadow] duration-smooth ease-nx-out;
+  }
+  .nx-hover-lift:hover {
+    @apply -translate-y-0.5 shadow-nx-md;
+  }
+
+  /* .nx-focus — consistent, accessible focus ring in both themes. Apply to
+     buttons / interactive elements. */
+  .nx-focus {
+    @apply outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+  }
+
+  /* .nx-divider — a hairline rule in the current theme. */
+  .nx-divider {
+    @apply border-t border-outline-variant/40;
+  }
 }
 
 /* NexOS dark scrollbar (scoped) */
@@ -43,7 +169,8 @@
   background: rgba(255, 255, 255, 0.22);
 }
 
-/* Custom scrollbar */
+/* Custom scrollbar — theme-aware via tokens. In dark the thumb uses a low
+   white alpha so it reads as a soft grey track handle. */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -52,11 +179,21 @@
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #bbcbb9;
+  background: rgb(var(--scrollbar-thumb) / 0.7);
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #3c4a3d;
+  background: rgb(var(--scrollbar-thumb-hover) / 0.85);
+}
+[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 0.14);
+}
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: rgb(255 255 255 / 0.26);
+}
+/* Firefox */
+* {
+  scrollbar-color: rgb(var(--scrollbar-thumb) / 0.7) transparent;
 }
 
 @keyframes pulse-ring {
@@ -270,7 +407,7 @@
 .chat-md li { margin: 0.15rem 0; }
 .chat-md ul { list-style: disc; }
 .chat-md ol { list-style: decimal; }
-.chat-md a { color: #006d32; text-decoration: underline; }
+.chat-md a { color: rgb(var(--c-primary)); text-decoration: underline; }
 .chat-md code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.85em;
@@ -284,6 +421,10 @@
   padding: 0.5rem 0.65rem;
   overflow-x: auto;
   margin: 0.4rem 0;
+}
+[data-theme="dark"] .chat-md code,
+[data-theme="dark"] .chat-md pre {
+  background: rgba(255, 255, 255, 0.08);
 }
 .chat-md pre code { background: none; padding: 0; }
 .chat-md blockquote {
@@ -310,7 +451,7 @@
   white-space: nowrap;
 }
 .chat-md thead th {
-  background: rgba(0, 109, 50, 0.08);
+  background: rgb(var(--c-primary) / 0.08);
   font-weight: 700;
 }
 

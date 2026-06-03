@@ -20,10 +20,12 @@ export default function ElevationProfile({ profile = [], chargingStops = [] }) {
 
   if (pts.length < 2) {
     return (
-      <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm p-5">
+      <div className="nx-card p-5">
         <div className="flex items-center gap-2 mb-2">
-          <span className="material-symbols-outlined text-primary" style={{ fontSize: "20px" }}>
-            terrain
+          <span className="flex items-center justify-center w-8 h-8 rounded-control bg-primary/10 text-primary ring-1 ring-primary/20">
+            <span className="material-symbols-outlined" style={{ fontSize: "20px" }}>
+              terrain
+            </span>
           </span>
           <h3 className="font-headline font-semibold text-lg text-on-surface">Elevation Profile</h3>
         </div>
@@ -110,14 +112,16 @@ export default function ElevationProfile({ profile = [], chargingStops = [] }) {
   };
 
   return (
-    <div className="bg-surface-lowest rounded-2xl border border-outline-variant/40 shadow-sm p-5">
-      <div className="flex items-center gap-2 mb-1">
-        <span className="material-symbols-outlined text-primary" style={{ fontSize: "20px" }}>
-          terrain
+    <div className="nx-card p-5">
+      <div className="flex items-center gap-2 mb-2">
+        <span className="flex items-center justify-center w-8 h-8 rounded-control bg-primary/10 text-primary ring-1 ring-primary/20">
+          <span className="material-symbols-outlined" style={{ fontSize: "20px" }}>
+            terrain
+          </span>
         </span>
         <h3 className="font-headline font-semibold text-lg text-on-surface">Elevation Profile</h3>
         <span
-          className="text-[11px] text-on-surface-variant ml-auto"
+          className="text-[11px] text-on-surface-variant ml-auto px-2 py-0.5 rounded-pill bg-surface ring-1 ring-outline-variant/40 tabular-nums"
           title="Terrain elevation range along the route (metres above sea level), the chart's vertical scale — not a distance."
         >
           Elev {Math.round(minElev)}–{Math.round(maxElev)} m
@@ -142,8 +146,8 @@ export default function ElevationProfile({ profile = [], chargingStops = [] }) {
         {/* Y gridlines + labels */}
         {ticks.map((t) => (
           <g key={t}>
-            <line x1={padL} y1={y(t)} x2={W - padR} y2={y(t)} stroke="#e5eeff" strokeWidth="1" />
-            <text x={padL - 6} y={y(t) + 3} textAnchor="end" fontSize="11" fill="#3c4a3d">
+            <line x1={padL} y1={y(t)} x2={W - padR} y2={y(t)} className="stroke-outline-variant/40" strokeWidth="1" />
+            <text x={padL - 6} y={y(t) + 3} textAnchor="end" fontSize="11" className="fill-on-surface-variant">
               {Math.round(t)}
             </text>
           </g>
@@ -157,7 +161,7 @@ export default function ElevationProfile({ profile = [], chargingStops = [] }) {
             y={H - 8}
             textAnchor={i === 0 ? "start" : i === 2 ? "end" : "middle"}
             fontSize="11"
-            fill="#3c4a3d"
+            className="fill-on-surface-variant"
           >
             {Math.round(d)} km
           </text>
@@ -194,26 +198,26 @@ export default function ElevationProfile({ profile = [], chargingStops = [] }) {
       {hover && (
         <>
           <div
-            className="pointer-events-none absolute z-10 w-3 h-3 rounded-full bg-primary border-2 border-white shadow"
+            className="pointer-events-none absolute z-10 w-3 h-3 rounded-pill bg-primary border-2 border-surface-lowest shadow-nx-sm"
             style={{ left: hover.px, top: hover.py, transform: "translate(-50%, -50%)" }}
           />
           <div
-            className="pointer-events-none absolute z-10 rounded-xl bg-on-surface text-white shadow-lg px-3 py-2 whitespace-nowrap"
+            className="pointer-events-none absolute z-10 rounded-control bg-on-surface text-background shadow-nx-lg px-3 py-2 whitespace-nowrap"
             style={{
               left: hover.px,
               top: hover.topPx,
               transform: `translate(${hover.flip ? "calc(-100% - 10px)" : "10px"}, 0)`,
             }}
           >
-            <div className="text-[13px] font-semibold leading-tight">{Math.round(hover.elevM)} m</div>
-            <div className="text-[11px] text-white/70 leading-tight">{Math.round(hover.distKm)} km</div>
+            <div className="text-[13px] font-semibold leading-tight tabular-nums">{Math.round(hover.elevM)} m</div>
+            <div className="text-[11px] text-background/70 leading-tight tabular-nums">{Math.round(hover.distKm)} km</div>
           </div>
         </>
       )}
       </div>
       {stops.length > 0 && (
-        <div className="flex items-center gap-1.5 mt-1 text-[11px] text-on-surface-variant">
-          <span className="w-2.5 h-2.5 rounded-full bg-amber-500 ring-1 ring-white"></span>
+        <div className="flex items-center gap-1.5 mt-2 text-[11px] text-on-surface-variant">
+          <span className="w-2.5 h-2.5 rounded-pill bg-amber-500 ring-1 ring-surface-lowest"></span>
           Charging stop
         </div>
       )}
