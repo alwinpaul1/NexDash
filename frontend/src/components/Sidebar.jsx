@@ -32,14 +32,6 @@ export default function Sidebar() {
           Route Planner
         </span>
       </nav>
-
-      {/* Footer marker — fills the rail and anchors the brand identity. */}
-      <div className="mt-auto px-6 py-5 border-t border-outline-variant/40">
-        <div className="flex items-center gap-2 text-[11px] text-on-surface-variant">
-          <span className="h-1.5 w-1.5 rounded-pill bg-accent shadow-[0_0_0_3px] shadow-accent/20" />
-          eActros 600 · live model
-        </div>
-      </div>
     </aside>
   );
 }

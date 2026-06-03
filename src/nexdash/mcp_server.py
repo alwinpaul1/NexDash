@@ -2,13 +2,13 @@
 
 This module wraps the deterministic/ML prediction layer of NexDash (the
 Mercedes-Benz eActros 600 energy model) as a Model Context Protocol (MCP)
-server so that MCP-aware clients (Claude Desktop, IDEs, custom agents) can call
+server so that MCP-aware clients (MCP-aware clients, IDEs, custom agents) can call
 ``predict_energy`` and ``check_reachability`` directly.
 
 The two exposed tools are thin delegations to :mod:`nexdash.tools`, which in
 turn call :func:`nexdash.model.predict_energy` and
 :func:`nexdash.range.check_reachability`. Keeping the real logic in
-``nexdash.tools`` means the MCP server, the in-process Anthropic agent, and the
+``nexdash.tools`` means the MCP server, the in-process tool-use agent, and the
 FastAPI dashboard all share one source of truth.
 
 Running the server
@@ -19,7 +19,7 @@ The server speaks MCP over stdio (the default transport for ``FastMCP.run``)::
 
 Registering in an MCP client config
 -----------------------------------
-Add an entry to your client's MCP server configuration. For Claude Desktop the
+Add an entry to your client's MCP server configuration. For MCP-aware clients the
 file is ``claude_desktop_config.json`` (macOS:
 ``~/Library/Application Support/Claude/claude_desktop_config.json``)::
 

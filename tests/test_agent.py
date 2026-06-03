@@ -1,6 +1,6 @@
-"""Tests for :mod:`nexdash.agent` (the Claude tool-use dispatcher).
+"""Tests for :mod:`nexdash.agent` (the MiniMax tool-use dispatcher).
 
-These tests run entirely offline by injecting a *mock* Anthropic client into
+These tests run entirely offline by injecting a *mock* MiniMax client into
 :class:`~nexdash.agent.DispatcherAgent`. They verify the load-bearing
 contract that the CLI and MCP layers depend on:
 
@@ -15,7 +15,7 @@ contract that the CLI and MCP layers depend on:
   default, so a misconfigured path would silently serve wrong numbers.
 * The final natural-language text from the follow-up response is returned
   verbatim. WHY: that string is exactly what the dispatcher reads.
-* A missing ``ANTHROPIC_API_KEY`` (with no injected client) raises the
+* A missing ``MINIMAX_API_KEY`` (with no injected client) raises the
   explicit :class:`MissingAPIKeyError` rather than an opaque SDK error, and
   no real client is ever constructed when one is injected. WHY: tests and the
   CLI must never hit the network or require credentials.
@@ -33,9 +33,9 @@ from nexdash.agent import DispatcherAgent, MissingAPIKeyError, SYSTEM_PROMPT
 
 
 # --------------------------------------------------------------------------- #
-# Lightweight Anthropic SDK stand-ins (attribute-style blocks/responses).
+# Lightweight MiniMax SDK stand-ins (attribute-style blocks/responses).
 # The agent's block helpers read attributes via getattr, so these mirror the
-# real SDK object shape without importing the anthropic package.
+# real SDK object shape without importing the MiniMax SDK.
 # --------------------------------------------------------------------------- #
 @dataclass
 class _TextBlock:
@@ -78,7 +78,7 @@ class _Messages:
 
 
 class _FakeClient:
-    """Mimics ``anthropic.Anthropic`` exposing ``.messages.create``."""
+    """Mimics ``the MiniMax client`` exposing ``.messages.create``."""
 
     def __init__(self, responses: list[_Response]) -> None:
         self.messages = _Messages(responses)
@@ -216,13 +216,13 @@ def test_tool_error_is_reported_back_not_raised(monkeypatch):
 
 
 def test_injected_client_never_constructs_real_client(monkeypatch):
-    """With a client injected, no real Anthropic client is ever built.
+    """With a client injected, no real MiniMax client is ever built.
 
-    WHY: tests and offline use must not require ANTHROPIC_API_KEY or hit the
+    WHY: tests and offline use must not require MINIMAX_API_KEY or hit the
     network. We delete the key and make the real-client factory explode if
     touched, proving the injected client is used exclusively.
     """
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
     monkeypatch.setattr(
         DispatcherAgent,
         "_make_real_client",
@@ -242,7 +242,7 @@ def test_missing_api_key_raises_explicit_error(monkeypatch):
     setup guidance instead of leaking a raw SDK exception. With no provider key
     of either kind set, construction must raise.
     """
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
     agent = DispatcherAgent()  # no client injected
 
@@ -252,7 +252,7 @@ def test_missing_api_key_raises_explicit_error(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# Reasoning-strip, OpenAI<->Anthropic adapter, chat(), AgentError, MAX_TURNS
+# Reasoning-strip, OpenAI<->MiniMax adapter, chat(), AgentError, MAX_TURNS
 # --------------------------------------------------------------------------- #
 def test_strip_reasoning_removes_think_blocks() -> None:
     """<think>...</think> must be stripped from the user-facing reply.
@@ -273,14 +273,14 @@ def test_strip_reasoning_removes_think_blocks() -> None:
     assert _extract_text(blocks) == "Final answer."
 
 
-def test_openai_anthropic_adapter_roundtrips_tool_call_ids() -> None:
+def test_openai_minimax_adapter_roundtrips_tool_call_ids() -> None:
     """The adapter must preserve tool-call ids both directions.
 
     WHY: OpenAI requires each assistant tool_call to be answered by a `tool`
     message with the SAME tool_call_id; if the adapter dropped/renamed ids the
     provider would reject the follow-up or mis-route the result.
     """
-    from nexdash.agent import _to_anthropic_blocks, _to_openai_messages
+    from nexdash.agent import _to_tooluse_blocks, _to_openai_messages
 
     convo = [
         {"role": "user", "content": "How much energy?"},
@@ -301,8 +301,8 @@ def test_openai_anthropic_adapter_roundtrips_tool_call_ids() -> None:
     tool_msg = next(m for m in msgs if m["role"] == "tool")
     assert tool_msg["tool_call_id"] == "call_1" and tool_msg["content"] == "42"
 
-    # OpenAI response -> Anthropic blocks: ids/names/args survive.
-    blocks = _to_anthropic_blocks(
+    # OpenAI response -> MiniMax blocks: ids/names/args survive.
+    blocks = _to_tooluse_blocks(
         {
             "content": "ok",
             "tool_calls": [

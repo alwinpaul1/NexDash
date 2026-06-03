@@ -17,7 +17,7 @@ coroutine and, as a defensive cross-check, via the internal
 (``the two tools are exposed``) even if one access path changes.
 
 Why these assertions matter (Rule 9): the MCP server is the integration
-surface MCP-aware clients (Claude Desktop, IDEs) bind to. If the instance
+surface MCP-aware clients (MCP-aware clients, IDEs) bind to. If the instance
 name drifts, or a tool fails to register, or a registered tool no longer
 forwards to ``nexdash.tools``, every external client silently loses the
 capability. Each assertion guards one of those contract points.

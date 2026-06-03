@@ -24,10 +24,6 @@ export default function TopBar() {
       </div>
 
       <div className="ml-auto flex items-center gap-2">
-        <span className="hidden md:inline-flex items-center gap-1.5 rounded-pill border border-outline-variant/50 bg-surface-low/60 px-3 py-1.5 text-[11px] font-medium text-on-surface-variant">
-          <span className="h-1.5 w-1.5 rounded-pill bg-accent shadow-[0_0_0_3px] shadow-accent/20" />
-          Live
-        </span>
         <ThemeToggle />
       </div>
     </header>

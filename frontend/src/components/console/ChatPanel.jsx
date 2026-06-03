@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useChat } from "../../context/ChatContext.jsx";
 
 /* ChatPanel — the dispatcher's plain-language assistant (case-study Part 2).
  *
@@ -21,6 +22,7 @@ import remarkGfm from "remark-gfm";
 /** Choose an icon for a tool chip based on the tool's name. */
 function toolIcon(name) {
   const n = String(name).toLowerCase();
+  if (n.includes("plan_route") || n.includes("route") || n.includes("reach")) return "alt_route";
   if (n.includes("energy") || n.includes("charge") || n.includes("soc")) return "bolt";
   return "build";
 }
@@ -90,7 +92,8 @@ function EmptyState() {
         </span>
         <p>
           Ask in plain language about range, energy use, or whether a truck will make
-          its next stop.
+          its next stop — or describe a full trip (e.g. &ldquo;Berlin to Munich, 12 t,
+          cold, deliver by Friday 9pm&rdquo;) and the route result panel fills in.
         </p>
       </div>
     </div>
@@ -98,9 +101,10 @@ function EmptyState() {
 }
 
 export default function ChatPanel() {
-  const [messages, setMessages] = useState([]);
+  // Conversation + send-flow live in ChatContext so the "Optimize Route" button
+  // (RoutesView) can post narrated plan summaries into the same conversation.
+  const { messages, loading, sendMessage } = useChat();
   const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
   const scrollRef = useRef(null);
 
   // Auto-scroll to the latest message whenever the list grows or thinking shows.
@@ -109,70 +113,21 @@ export default function ChatPanel() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, loading]);
 
-  async function sendMessage(text) {
-    const trimmed = text.trim();
-    if (!trimmed || loading) return;
-
-    const userMessage = { role: "user", content: trimmed };
-    // The request body needs the full history including this new turn. We build
-    // it from the previous state to avoid a stale-closure race.
-    const history = [...messages, userMessage];
-
-    setMessages(history);
+  function handleSend(text) {
+    sendMessage(text);
     setInput("");
-    setLoading(true);
-
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        // Strip tool metadata — the contract only wants role + content.
-        body: JSON.stringify({
-          messages: history.map((m) => ({ role: m.role, content: m.content })),
-        }),
-      });
-
-      if (!res.ok) throw new Error("Server returned HTTP " + res.status + ".");
-
-      const body = await res.json();
-      const reply =
-        typeof body.reply === "string" && body.reply.length > 0
-          ? body.reply
-          : "The assistant returned an empty reply.";
-      const tools = Array.isArray(body.tools) ? body.tools : [];
-
-      setMessages((prev) => [...prev, { role: "assistant", content: reply, tools }]);
-    } catch (err) {
-      const detail =
-        err instanceof TypeError
-          ? "I couldn't reach the assistant. Is the API running on this host?"
-          : err && err.message
-          ? err.message
-          : String(err);
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: "Sorry — something went wrong. " + detail,
-          tools: [],
-          isError: true,
-        },
-      ]);
-    } finally {
-      setLoading(false);
-    }
   }
 
   function handleSubmit(event) {
     event.preventDefault();
-    sendMessage(input);
+    handleSend(input);
   }
 
   function handleKeyDown(event) {
     // Enter submits; Shift+Enter inserts a newline.
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      sendMessage(input);
+      handleSend(input);
     }
   }
 

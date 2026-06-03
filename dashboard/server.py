@@ -401,11 +401,15 @@ class ChatRequest(BaseModel):
 async def chat(req: ChatRequest) -> JSONResponse:
     """Run the LLM dispatcher agent on the conversation.
 
-    The agent (``nexdash.agent.DispatcherAgent``) uses Claude with the
+    The agent (``nexdash.agent.DispatcherAgent``) uses MiniMax (M3) with the
     deterministic energy/reachability tools. Returns the reply plus the list of
-    tools the agent invoked this turn (so the UI can show them). If the server
-    has no ``ANTHROPIC_API_KEY`` it returns a friendly degraded message rather
-    than a hard error.
+    tools the agent invoked this turn (so the UI can show them). When the agent
+    ran ``plan_route`` this turn, the response also carries a structured
+    ``planRequest`` (resolved origin/destination with coords + planner params)
+    so the frontend can fill the planner and run the same Optimize pipeline that
+    populates the visual result panel; otherwise ``planRequest`` is ``null``. If
+    the server has no ``MINIMAX_API_KEY`` it returns a friendly degraded message
+    rather than a hard error.
     """
 
     history = [{"role": m.role, "content": m.content} for m in req.messages]
@@ -413,14 +417,18 @@ async def chat(req: ChatRequest) -> JSONResponse:
         agent = agent_module.DispatcherAgent(model_path=DEFAULT_MODEL_PATH)
         result = agent.chat(history)
         return JSONResponse(
-            content={"reply": result.get("reply", ""), "tools": result.get("tools", [])}
+            content={
+                "reply": result.get("reply", ""),
+                "tools": result.get("tools", []),
+                "planRequest": result.get("planRequest"),
+            }
         )
     except agent_module.MissingAPIKeyError:
         return JSONResponse(
             content={
                 "reply": (
                     "⚠️ The dispatcher agent isn't connected yet — set "
-                    "MINIMAX_API_KEY (or ANTHROPIC_API_KEY) on the server and "
+                    "MINIMAX_API_KEY on the server and "
                     "restart to chat live. Meanwhile the Route Planner and range "
                     "tools still work."
                 ),

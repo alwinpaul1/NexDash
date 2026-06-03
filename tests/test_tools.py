@@ -2,8 +2,8 @@
 
 These tests verify the contract that the agent / MCP layers depend on:
 
-* ``TOOL_SPECS`` are well-formed Anthropic tool schemas. WHY: the agent
-  ships these verbatim to the Claude API; a missing ``name`` /
+* ``TOOL_SPECS`` are well-formed tool-use schemas. WHY: the agent
+  ships these verbatim to the MiniMax API; a missing ``name`` /
   ``description`` / ``input_schema`` (or a non-``object`` schema) is
   rejected by the API at request time, breaking every tool-use call.
 * The wrappers return *JSON-serializable* dicts and coerce numeric
@@ -60,13 +60,13 @@ def test_tool_specs_cover_required_tools() -> None:
 
 @pytest.mark.parametrize("spec", TOOL_SPECS, ids=lambda s: s["name"])
 def test_tool_spec_shape(spec: dict) -> None:
-    # Required top-level fields for an Anthropic tool definition.
+    # Required top-level fields for an tool-use definition.
     assert isinstance(spec["name"], str) and spec["name"]
     assert isinstance(spec["description"], str) and spec["description"].strip()
 
     schema = spec["input_schema"]
     assert isinstance(schema, dict)
-    # The Anthropic API requires the input_schema root to be a JSON-Schema
+    # The MiniMax API requires the input_schema root to be a JSON-Schema
     # object; anything else is rejected before the model ever runs.
     assert schema["type"] == "object"
     assert isinstance(schema["properties"], dict) and schema["properties"]

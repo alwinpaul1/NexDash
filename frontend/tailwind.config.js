@@ -31,7 +31,7 @@ export default {
         "nex-muted": "#9ca3af",
       },
       fontFamily: {
-        headline: ['"Space Grotesk"', "sans-serif"],
+        headline: ['"Sora"', "sans-serif"],
         body: ['"Inter"', "sans-serif"],
       },
       borderRadius: {

@@ -8,8 +8,8 @@ Provides two modes:
   exit (handy for scripting / smoke tests).
 
 The CLI delegates all reasoning to :class:`nexdash.agent.DispatcherAgent`, which
-runs an Anthropic tool-use loop. ANSI colours are used for friendly terminal
-output; if the ``ANTHROPIC_API_KEY`` environment variable is missing we print
+runs a MiniMax tool-use loop. ANSI colours are used for friendly terminal
+output; if the ``MINIMAX_API_KEY`` environment variable is missing we print
 clear setup guidance and exit non-zero instead of crashing with a stack trace.
 """
 
@@ -19,7 +19,7 @@ import argparse
 import os
 import sys
 
-from nexdash.agent import DEFAULT_CLAUDE_MODEL, DispatcherAgent
+from nexdash.agent import DEFAULT_LLM_MODEL, DispatcherAgent
 
 # --------------------------------------------------------------------------- #
 # Terminal styling helpers
@@ -89,17 +89,14 @@ HELP_TEXT = (
     f"  {_cyan('exit')}  {_dim('quit (also: quit, q, Ctrl-D)')}\n"
 )
 
-# The dispatcher picks its provider by whichever key is set (MiniMax preferred,
-# Anthropic fallback) — see nexdash.agent. The CLI must accept either.
-_API_KEY_ENVS = ("MINIMAX_API_KEY", "ANTHROPIC_API_KEY")
+# The dispatcher runs on MiniMax (M3) via MINIMAX_API_KEY — see nexdash.agent.
+_API_KEY_ENVS = ("MINIMAX_API_KEY",)
 
 MISSING_KEY_MESSAGE = (
     f"{_red('✗ No LLM API key set')}\n\n"
-    "The dispatcher assistant needs an LLM key (MiniMax preferred, Anthropic\n"
-    "fallback).\n\n"
-    f"{_bold('Set one for this shell:')}\n"
-    f"  {_cyan('export MINIMAX_API_KEY=...')}   {_dim('# default: MiniMax-M3')}\n"
-    f"  {_cyan('export ANTHROPIC_API_KEY=sk-ant-...')}   {_dim('# fallback')}\n\n"
+    "The dispatcher assistant needs a MiniMax API key (MiniMax-M3).\n\n"
+    f"{_bold('Set it for this shell:')}\n"
+    f"  {_cyan('export MINIMAX_API_KEY=...')}   {_dim('# model: MiniMax-M3')}\n\n"
     f"{_bold('Or add it to a .env file')} "
     f"{_dim('(see .env.example in the repo root):')}\n"
     f"  {_cyan('cp .env.example .env')}\n"
@@ -187,11 +184,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--model",
-        default=DEFAULT_CLAUDE_MODEL,
+        default=DEFAULT_LLM_MODEL,
         help=(
-            f"Model id to use (default: {DEFAULT_CLAUDE_MODEL}). Left at the "
-            "default, the agent auto-selects the MiniMax provider when "
-            "MINIMAX_API_KEY is set, else Anthropic."
+            f"Model id to use (default: {DEFAULT_LLM_MODEL}, served by MiniMax "
+            "when MINIMAX_API_KEY is set)."
         ),
     )
     return parser
