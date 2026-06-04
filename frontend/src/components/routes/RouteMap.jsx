@@ -342,10 +342,10 @@ function mergeBands(segs) {
   return out;
 }
 
-// A single STATIC arrow badge placed at the route midpoint, rotated to the
-// direction of travel (origin -> destination). It gives a clear sense of which
-// way the route runs without any animation — replacing the old looping truck.
-function RouteDirectionArrow({ geometry }) {
+// STATIC direction chevrons spaced evenly along the route, each rotated to the
+// local travel direction (origin -> destination). Small white "^" arrowheads,
+// like a map's direction-of-travel hints — no animation (replaced the old truck).
+function RouteDirectionArrows({ geometry }) {
   const map = useMap();
   useEffect(() => {
     if (!Array.isArray(geometry) || geometry.length < 2) return undefined;
@@ -353,7 +353,7 @@ function RouteDirectionArrow({ geometry }) {
     const toRad = (d) => (d * Math.PI) / 180;
     const toDeg = (r) => (r * 180) / Math.PI;
 
-    // Cumulative great-circle distance so we can find the true midpoint.
+    // Cumulative great-circle distance along the polyline.
     const cum = [0];
     for (let i = 1; i < geometry.length; i++) {
       const a = geometry[i - 1];
@@ -368,43 +368,51 @@ function RouteDirectionArrow({ geometry }) {
     }
     const total = cum[cum.length - 1] || 1;
 
-    // Segment that contains the midpoint, and the interpolated point on it.
-    const mid = total / 2;
-    let lo = 1;
-    while (lo < cum.length - 1 && cum[lo] < mid) lo++;
-    const a = geometry[lo - 1];
-    const b = geometry[lo];
-    const segLen = cum[lo] - cum[lo - 1] || 1;
-    const f = (mid - cum[lo - 1]) / segLen;
-    const pos = [a[0] + f * (b[0] - a[0]), a[1] + f * (b[1] - a[1])];
+    // Position + travel bearing at a given distance `d` along the route.
+    const at = (d) => {
+      let lo = 1;
+      while (lo < cum.length - 1 && cum[lo] < d) lo++;
+      const a = geometry[lo - 1];
+      const b = geometry[lo];
+      const segLen = cum[lo] - cum[lo - 1] || 1;
+      const f = (d - cum[lo - 1]) / segLen;
+      const pos = [a[0] + f * (b[0] - a[0]), a[1] + f * (b[1] - a[1])];
+      const y = Math.sin(toRad(b[1] - a[1])) * Math.cos(toRad(b[0]));
+      const x =
+        Math.cos(toRad(a[0])) * Math.sin(toRad(b[0])) -
+        Math.sin(toRad(a[0])) * Math.cos(toRad(b[0])) * Math.cos(toRad(b[1] - a[1]));
+      const bearing = (toDeg(Math.atan2(y, x)) + 360) % 360;
+      return { pos, bearing };
+    };
 
-    // Initial bearing a -> b (clockwise from north) to orient the arrow.
-    const y = Math.sin(toRad(b[1] - a[1])) * Math.cos(toRad(b[0]));
-    const x =
-      Math.cos(toRad(a[0])) * Math.sin(toRad(b[0])) -
-      Math.sin(toRad(a[0])) * Math.cos(toRad(b[0])) * Math.cos(toRad(b[1] - a[1]));
-    const bearing = (toDeg(Math.atan2(y, x)) + 360) % 360;
-
-    // White circular badge with a navigation arrow (points "up" = north at 0°),
-    // the inner arrow rotated by the bearing so it points along the route.
-    const icon = L.divIcon({
-      className: "",
-      html:
-        `<div class="route-arrow"><div class="ra-rot" style="transform:rotate(${bearing}deg)">` +
-        `<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">` +
-        `<path d="M12 2 L19 21 L12 16 L5 21 Z" fill="#059669"/></svg></div></div>`,
-      iconSize: [38, 38],
-      iconAnchor: [19, 19],
-    });
-    const marker = L.marker(pos, {
-      icon,
-      interactive: false,
-      keyboard: false,
-      zIndexOffset: 650,
-    }).addTo(map);
+    // ~1 chevron per 45 km, clamped to 3..14, spaced evenly (endpoints skipped so
+    // arrows don't sit under the origin/destination pins).
+    const count = Math.max(3, Math.min(14, Math.round(total / 45)));
+    const markers = [];
+    for (let k = 1; k <= count; k++) {
+      const { pos, bearing } = at((total * k) / (count + 1));
+      const icon = L.divIcon({
+        className: "",
+        html:
+          `<div class="route-chevron" style="transform:rotate(${bearing}deg)">` +
+          `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">` +
+          `<path d="M5 15 L12 8 L19 15" fill="none" stroke="#ffffff" stroke-width="3.5" ` +
+          `stroke-linecap="round" stroke-linejoin="round"/></svg></div>`,
+        iconSize: [16, 16],
+        iconAnchor: [8, 8],
+      });
+      markers.push(
+        L.marker(pos, {
+          icon,
+          interactive: false,
+          keyboard: false,
+          zIndexOffset: 600,
+        }).addTo(map)
+      );
+    }
 
     return () => {
-      map.removeLayer(marker);
+      markers.forEach((m) => map.removeLayer(m));
     };
   }, [map, geometry]);
   return null;
@@ -755,7 +763,7 @@ export default function RouteMap({ plan, waypoints = [] }) {
           ) : null)}
 
         {/* A single live "runner" travelling source -> destination on a loop. */}
-        {layers.route && geometry.length >= 2 && <RouteDirectionArrow geometry={geometry} />}
+        {layers.route && geometry.length >= 2 && <RouteDirectionArrows geometry={geometry} />}
 
         {/* Planned stops — origin + destinations. */}
         {layers.stops && origin && Number.isFinite(origin.lat) && (

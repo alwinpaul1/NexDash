@@ -406,24 +406,19 @@
   font-weight: 600;
 }
 
-/* Route direction arrow — a single STATIC badge at the route midpoint whose
-   inner arrow is rotated to the direction of travel. No animation. */
-.route-arrow {
-  width: 38px;
-  height: 38px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #fff;
-  border-radius: 9999px;
-  border: 2px solid #fff;
-  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.4);
-}
-.route-arrow .ra-rot {
+/* Route direction chevrons — small STATIC "^" arrowheads spaced along the route,
+   each rotated to the local travel direction. White with a soft shadow so they
+   read on any SOC line colour. No animation. */
+.route-chevron {
+  width: 16px;
+  height: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
   transform-origin: 50% 50%;
+}
+.route-chevron svg {
+  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.55));
 }
 
 /* Markdown rendering inside an assistant chat bubble. The dispatcher agent
