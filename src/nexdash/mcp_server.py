@@ -386,9 +386,18 @@ def main() -> None:
     ).lower() in ("http", "streamable-http")
 
     if want_http:
+        from mcp.server.transport_security import TransportSecuritySettings
+
         mcp.settings.host = "0.0.0.0"
         mcp.settings.port = int(os.environ.get("PORT") or os.environ.get("MCP_PORT") or "8000")
         mcp.settings.stateless_http = True
+        # DNS-rebinding protection defaults to a localhost-only Host allowlist,
+        # which 421s a PUBLIC server reached via its real domain (Railway, etc.).
+        # This server is meant to be reached from anywhere (incl. Anthropic's
+        # cloud for Claude custom connectors), so lift the host check.
+        mcp.settings.transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=False
+        )
         mcp.run(transport="streamable-http")
     else:
         mcp.run()

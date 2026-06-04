@@ -103,9 +103,29 @@ On **Railway**: New Project → Deploy from this GitHub repo (it auto-detects th
 
 Railway exposes the variables to the Docker build automatically. The health check is `/api/health`. Locally you can `docker build -t nexdash . && docker run -p 8000:8000 -e TOMTOM_API_KEY=… -e MINIMAX_API_KEY=… nexdash`.
 
-**MCP server (bonus).** The same tools are exposed as an MCP server so any MCP host (Claude Desktop, Cursor, your own agent…) can call them directly — no NexDash LLM in the loop. It exposes four tools: `predict_energy`, `check_reachability`, `plan_route`, and `model_info`. Transport is **stdio** (`FastMCP.run` default — local only, no network port).
+**MCP server (bonus).** The same tools are exposed as an MCP server so any MCP host (Claude Desktop, Cursor, your own agent…) can call them directly — no NexDash LLM in the loop. It exposes four tools: `predict_energy`, `check_reachability`, `plan_route`, and `model_info`.
 
-**Run it (on the same machine or any other):**
+### Hosted — connect in 30 seconds (no install)
+
+A public instance is already running over **Streamable HTTP**:
+
+```
+https://nexdash-mcp-production.up.railway.app/mcp
+```
+
+Add it as a **custom connector** — nothing to install, no key on your side:
+
+- **Claude (Pro / Max):** Customize → **Connectors** → **Add custom connector** → paste the URL → **Add**. No OAuth needed (leave Advanced settings blank).
+- **Claude (Team / Enterprise):** an owner adds it under **Organization settings → Connectors → Add → Custom → Web** → paste the URL; members then click **Connect**.
+- **Cursor / your own agent:** point it at the same URL with the **Streamable HTTP** transport. For a stdio-only client, bridge it: `npx mcp-remote https://nexdash-mcp-production.up.railway.app/mcp`.
+
+Once connected, the four tools appear and you can ask things like *"plan a route Berlin → Munich, 18 t, depart 9am"*.
+
+> Notes: Claude connects from **Anthropic's cloud**, not your device, so the server has to be public — this one is. It's an **open demo endpoint** (no auth) and `plan_route` uses the host's TomTom key, so please don't hammer it. To run your own hosted copy, deploy the Docker image with `SERVICE_MODE=mcp` (the container then serves Streamable HTTP at `/mcp` on `$PORT`).
+
+### Run it yourself (local, stdio)
+
+For a private/local setup, register it as a stdio server:
 
 1. Install and train once, so the deps and the model exist:
    ```bash
