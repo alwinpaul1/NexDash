@@ -453,8 +453,11 @@ def plan_route(
         ``charge_power_kw`` -- the charge time re-computed at that real station's
         power -- and ``station_resolved`` (``False`` when no real charger was
         found nearby, so the stop is still timed at the truck-cap assumption;
-        ``chargers_unresolved`` counts these). ``total_time_h``/``eta`` already
-        include the real-charger time, so a slower station pushes the ETA later.
+        ``chargers_unresolved`` counts these). When real chargers resolve, the
+        trip is RE-SIMULATED at their actual power so ``total_time_h``/``eta`` and
+        the full EU 561 break/rest schedule reflect the true charge times (a slower
+        station pushes the ETA later); ``charge_times_real_power`` is ``True`` in
+        that case, ``False`` when the times fall back to the truck-cap assumption.
         On geocode/route/simulation failure it returns ``{"error": ...}``
         (secret-free) instead of throwing.
     """

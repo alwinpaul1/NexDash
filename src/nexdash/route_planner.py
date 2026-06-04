@@ -405,6 +405,13 @@ def _build_stops(
     return stops
 
 
+#: Sentinel for the ``precomputed_enrichment`` parameter so a caller can pass an
+#: explicit ``None`` (meaning "no geometry / flat fallback") and still skip the
+#: network fetch on a second pass. ``None`` is a legitimate enrichment value
+#: (flat-route mode), so it cannot double as "not provided".
+_ENRICH_UNSET = object()
+
+
 def plan_route(
     *,
     distance_km: float,
@@ -425,6 +432,9 @@ def plan_route(
     allow_extended_days: int = 0,
     allow_reduced_rest_days: int = 0,
     hours_already_driven_this_week: float = 0.0,
+    charger_kw_by_stop: Optional[list[Optional[float]]] = None,
+    precomputed_enrichment: Any = _ENRICH_UNSET,
+    return_enrichment: bool = False,
     model_path: Union[str, Path] = DEFAULT_MODEL_PATH,
 ) -> dict[str, Any]:
     """Simulate SOC drain + charging + driver hours over a route.
@@ -605,7 +615,14 @@ def plan_route(
     # Build the list of chunks covering the route. Each chunk carries its own
     # physical conditions: in flat fallback mode these are the constant
     # approximations; in geometry mode they come from the enriched profile.
-    enrichment = _enrich(geometry, departure, distance_km, leg_timings)
+    # A caller may pass back the enrichment from a prior pass (same geometry) so a
+    # second simulation -- e.g. re-timing charges at real charger power -- reuses
+    # the already-fetched Open-Meteo weather/elevation instead of fetching again.
+    enrichment = (
+        _enrich(geometry, departure, distance_km, leg_timings)
+        if precomputed_enrichment is _ENRICH_UNSET
+        else precomputed_enrichment
+    )
     chunks, chunk_measured_speeds = _build_chunks(distance_km, enrichment, temperature_c)
 
     # Payload carried during each chunk, accounting for per-stop drops: the truck
@@ -813,6 +830,19 @@ def plan_route(
             )
             kwh_added = max(0.0, (depart_soc - arrive_soc) / 100.0 * battery_kwh)
             charge_kw = max_charge_kw if max_charge_kw and max_charge_kw > 0 else CHARGER_KW
+            # Real-charger override: when the caller supplies the matched station's
+            # power for THIS stop (index = the i-th charge, before it's appended),
+            # time the charge at that power. A real station can only equal or
+            # under-cut the truck cap, so charge time only grows -- and the EU 561
+            # break/rest schedule below is then computed at the TRUE charge time,
+            # not a 400 kW assumption. Default (None) = the truck-cap behaviour,
+            # byte-identical to before this parameter existed.
+            if charger_kw_by_stop is not None:
+                _ci = len(charging_stops)  # 0-based index of the charge being placed
+                if _ci < len(charger_kw_by_stop):
+                    _real_kw = charger_kw_by_stop[_ci]
+                    if _real_kw and _real_kw > 0:
+                        charge_kw = min(charge_kw, float(_real_kw))
             # Taper-aware charge time: the 80->target tail charges slower than a
             # flat-rate model would (see _charge_minutes). Energy/cost are
             # unaffected by the taper (it changes time, not kWh delivered).
@@ -1356,6 +1386,12 @@ def plan_route(
     if enrichment:
         result["elevationProfile"] = elevation_profile
         result["conditions"] = conditions
+    if return_enrichment:
+        # Internal handle so a caller can run a second pass (e.g. re-timing
+        # charges at real charger power) WITHOUT re-fetching weather/elevation.
+        # Not part of the public/JSON response: callers that set this read it,
+        # then drop it before serialising (the dashboard path never sets it).
+        result["_enrichment"] = enrichment
     return result
 
 
