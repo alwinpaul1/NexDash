@@ -412,6 +412,7 @@ def plan_route_tool(**kwargs: Any) -> dict[str, Any]:
             temperature_c=temperature_c,
             geometry=route["geometry"],
             leg_timings=route["leg_timings"],
+            speed_limits=route.get("speed_limits"),
             waypoints=[
                 {"lat": a["lat"], "lng": a["lng"], "label": a["label"]},
                 dest_waypoint,
