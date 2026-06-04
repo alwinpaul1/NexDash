@@ -808,6 +808,32 @@ export async function optimizeRoute(planner) {
       }
     }
 
+    // Snap each charging-stop MARKER onto the drawn route so the pin sits ON the
+    // line instead of floating beside it. The re-route above tries to detour the
+    // line into each station, but a 40 t truck can't always reach a charger set
+    // back from the road (parking lot / restricted access road) — TomTom then
+    // routes to the nearest road, leaving the pin offset. We anchor the pin to
+    // the closest point on the actual route; the real station name/address/power
+    // stay in the tooltip so the driver still knows the exact charger.
+    if (Array.isArray(geometry) && geometry.length >= 2) {
+      for (const st of chargingStops) {
+        if (!Number.isFinite(st?.lat) || !Number.isFinite(st?.lng)) continue;
+        let best = null;
+        let bestKm = Infinity;
+        for (const g of geometry) {
+          const dd = haversineKm([st.lat, st.lng], g);
+          if (dd < bestKm) {
+            bestKm = dd;
+            best = g;
+          }
+        }
+        if (best) {
+          st.markerLat = best[0];
+          st.markerLng = best[1];
+        }
+      }
+    }
+
     // Re-label the charge timeline segments to the enriched stations, in order.
     let ci = 0;
     const segments = (sim.segments || []).map((seg) => {
