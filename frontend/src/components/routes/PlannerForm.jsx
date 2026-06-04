@@ -390,7 +390,9 @@ export default function PlannerForm({
           />
         </div>
 
-        {/* Payload */}
+        {/* Payload — only relevant once a trip has a starting point, so it stays
+            hidden until an origin is chosen (keeps the empty form minimal). */}
+        {hasOrigin && (
         <div>
           <div className="flex items-center justify-between mb-2">
             <label className="flex items-center gap-1.5 text-[11px] font-semibold text-on-surface-variant uppercase tracking-[0.08em]">
@@ -428,6 +430,7 @@ export default function PlannerForm({
             {(planner.payloadKg / 1000).toFixed(1)} t / {MAX_PAYLOAD_KG / 1000} t max
           </p>
         </div>
+        )}
 
         {/* Destinations */}
         <div>
