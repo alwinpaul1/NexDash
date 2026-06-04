@@ -18,6 +18,7 @@ agent tool layer can turn it into ``{"error": ...}`` for the model.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 import re
@@ -84,14 +85,37 @@ def _parse_env_key(path: Path) -> Optional[str]:
     return val or None
 
 
+# Per-request "bring your own key" override. A remote caller (e.g. the MCP
+# server reading an X-TomTom-Key request header) sets this for the duration of
+# one request so the routing uses THEIR TomTom key, never the host's. It is a
+# ContextVar so concurrent requests can't see each other's key.
+_request_api_key: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
+    "tomtom_request_api_key", default=None
+)
+
+
+def set_request_api_key(key: Optional[str]):
+    """Bind a per-request TomTom key; returns a token for :func:`reset_request_api_key`."""
+    return _request_api_key.set(key.strip() if key and key.strip() else None)
+
+
+def reset_request_api_key(token) -> None:
+    """Restore the key bound before the matching :func:`set_request_api_key`."""
+    _request_api_key.reset(token)
+
+
 def get_api_key() -> str:
-    """Return the TomTom key from env, falling back to ``frontend/.env``.
+    """Return the TomTom key: a per-request override first, then env, then
+    ``frontend/.env``.
 
     Raises
     ------
     TomTomError
-        If no key can be found in either location.
+        If no key can be found.
     """
+    request_key = _request_api_key.get()
+    if request_key and request_key.strip():
+        return request_key.strip()
     key = os.environ.get("TOMTOM_API_KEY")
     if key and key.strip():
         return key.strip()

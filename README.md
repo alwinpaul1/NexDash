@@ -65,7 +65,7 @@ npm install
 npm run dev
 ```
 
-Then open **http://localhost:5173** in your browser — that's the dashboard (the Vite dev server proxies `/api` to the backend on `:8000`, so keep both running). The chat widget plans a whole trip from plain language and fills in the result panel. If `MINIMAX_API_KEY` is missing, `/api/chat` returns a friendly note instead of an error, and the rest of the app keeps working.
+Then open the URL `npm run dev` prints — **usually http://localhost:5173** — that's the dashboard. The command runs the backend and the Vite frontend together and wires Vite's `/api` proxy to the backend for you; if the default ports are busy it bumps to the next free one (frontend 5173 → 5174…, backend 8000 → 8001…), so just use whatever URL the terminal shows. The chat widget plans a whole trip from plain language and fills in the result panel. If `MINIMAX_API_KEY` is missing, `/api/chat` returns a friendly note instead of an error, and the rest of the app keeps working.
 
 ### API keys (and where to get them)
 
@@ -113,49 +113,18 @@ A public instance is already running over **Streamable HTTP**:
 https://nexdash-mcp-production.up.railway.app/mcp
 ```
 
-Add it as a **custom connector** — nothing to install, no key on your side:
+Add it as a **custom connector** — nothing to install:
 
-- **Claude (Pro / Max):** Customize → **Connectors** → **Add custom connector** → paste the URL → **Add**. No OAuth needed (leave Advanced settings blank).
+- **Claude (Pro / Max):** Customize → **Connectors** → **Add custom connector** → paste the URL → **Add**.
 - **Claude (Team / Enterprise):** an owner adds it under **Organization settings → Connectors → Add → Custom → Web** → paste the URL; members then click **Connect**.
-- **Cursor / your own agent:** point it at the same URL with the **Streamable HTTP** transport. For a stdio-only client, bridge it: `npx mcp-remote https://nexdash-mcp-production.up.railway.app/mcp`.
+- **Claude Code (CLI):** `claude mcp add --transport http nexdash https://nexdash-mcp-production.up.railway.app/mcp` — add `--scope user` to use it in every project, and `--header "X-TomTom-Key: <your-tomtom-key>"` to enable `plan_route` (see below).
+- **Cursor / your own agent:** point it at the URL with the **Streamable HTTP** transport. For a stdio-only client, bridge it: `npx mcp-remote https://nexdash-mcp-production.up.railway.app/mcp`.
 
 Once connected, the four tools appear and you can ask things like *"plan a route Berlin → Munich, 18 t, depart 9am"*.
 
-> Notes: Claude connects from **Anthropic's cloud**, not your device, so the server has to be public — this one is. It's an **open demo endpoint** (no auth) and `plan_route` uses the host's TomTom key, so please don't hammer it. To run your own hosted copy, deploy the Docker image with `SERVICE_MODE=mcp` (the container then serves Streamable HTTP at `/mcp` on `$PORT`).
+**`plan_route` uses YOUR TomTom key (bring-your-own-key).** It routes on the key *you* supply — never the host's — so the public endpoint can't spend anyone else's quota. Pass it as an `X-TomTom-Key: <key>` header (or `Authorization: Bearer <key>`); a free key takes a minute at [developer.tomtom.com](https://developer.tomtom.com). Without a key, `plan_route` returns a friendly "add your key" message, while `predict_energy`, `check_reachability`, and `model_info` need **no key** and work for everyone.
 
-### Run it yourself (local, stdio)
-
-For a private/local setup, register it as a stdio server:
-
-1. Install and train once, so the deps and the model exist:
-   ```bash
-   pip install -e .          # makes `python -m nexdash.mcp_server` importable
-   python run_pipeline.py    # writes models/energy_model.joblib (required)
-   ```
-2. Smoke-test it standalone (it'll wait on stdio — Ctrl-C to exit):
-   ```bash
-   python -m nexdash.mcp_server
-   ```
-3. Register it in your MCP host's config (e.g. `claude_desktop_config.json`). Point `command` at the **interpreter that has the package installed** (your venv), and set the keys:
-   ```json
-   {
-     "mcpServers": {
-       "nexdash": {
-         "command": "/absolute/path/to/NexDash/.venv/bin/python",
-         "args": ["-m", "nexdash.mcp_server"],
-         "env": {
-           "PYTHONPATH": "/absolute/path/to/NexDash/src",
-           "TOMTOM_API_KEY": "<your-tomtom-key>"
-         }
-       }
-     }
-   }
-   ```
-
-Notes:
-- If `pip install -e .` ran in that environment, you can drop the `PYTHONPATH` line (the package is already importable).
-- `TOMTOM_API_KEY` is only needed for `plan_route` (geocode + routing); `predict_energy` / `check_reachability` / `model_info` run fully offline.
-- The trained model must be present on that machine — copy `models/energy_model.joblib` over, or run `python run_pipeline.py` there (deterministic, seed 42).
+> Notes: Claude connects from **Anthropic's cloud**, not your device, so the server must be public — this one is. Heads-up: Claude **Desktop / web's** connector UI can't yet send a custom header ([Anthropic limitation](https://github.com/anthropics/claude-ai-mcp/issues/112)), so use **Claude Code / Cursor / the API** for `plan_route` (the offline tools work from anywhere). To self-host your own copy, deploy the Docker image with `SERVICE_MODE=mcp` (it serves Streamable HTTP at `/mcp` on `$PORT`).
 
 ---
 
