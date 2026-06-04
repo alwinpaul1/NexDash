@@ -12,3 +12,4 @@ fastapi
 uvicorn
 pydantic
 pytest
+cryptography

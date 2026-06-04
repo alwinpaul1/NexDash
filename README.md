@@ -113,17 +113,18 @@ A public instance is already running over **Streamable HTTP**:
 https://nexdash-mcp-production.up.railway.app/mcp
 ```
 
-**The whole server is gated by YOUR TomTom key (bring-your-own-key).** Every request — connecting, listing tools, every tool call — must carry your key, so the public endpoint can never spend anyone else's quota. Get a free key in a minute at [developer.tomtom.com](https://developer.tomtom.com), then add it as an `X-TomTom-Key: <key>` header (or `Authorization: Bearer <key>`). Without it the server replies `401 api_key_required`.
+**It's secured with OAuth — just click Connect.** When you add the connector your client runs the standard OAuth flow and a small **consent page asks for your TomTom API key** (free, one minute at [developer.tomtom.com](https://developer.tomtom.com)). That key is **encrypted into your access token and never stored on the server**, so the public endpoint can never spend anyone else's quota. No key, no access.
 
-Add it as a **custom connector** with that header:
+Add it as a **custom connector** — the consent page handles the key, nothing to paste in config:
 
-- **Claude Code (CLI):** `claude mcp add --transport http nexdash https://nexdash-mcp-production.up.railway.app/mcp --header "X-TomTom-Key: <your-tomtom-key>"` (add `--scope user` to use it in every project).
-- **Cursor / your own agent / Claude API connector:** add the URL over **Streamable HTTP** with an `X-TomTom-Key: <key>` header. For a stdio-only client, bridge it: `npx mcp-remote https://nexdash-mcp-production.up.railway.app/mcp --header "X-TomTom-Key: <key>"`.
-- **Claude Desktop / web:** not supported for this server yet — its connector UI can't send a custom header ([Anthropic limitation](https://github.com/anthropics/claude-ai-mcp/issues/112)), and the server requires the key on every request.
+- **Claude (Desktop / Pro / Max / web):** Customize → **Connectors** → **Add custom connector** → paste the URL → **Connect** → the consent page opens → enter your TomTom key. Done.
+- **Claude (Team / Enterprise):** an owner adds it under **Organization settings → Connectors → Add → Custom → Web** → paste the URL; members click **Connect** and enter their key.
+- **Claude Code (CLI):** `claude mcp add --transport http nexdash https://nexdash-mcp-production.up.railway.app/mcp` then `/mcp` and authenticate (it opens the OAuth/consent page in your browser). Add `--scope user` to use it everywhere.
+- **Cursor / your own agent:** add the URL over **Streamable HTTP**; it runs the same OAuth flow.
 
-Once connected, the four tools appear (`plan_route` routes on your key; `predict_energy` / `check_reachability` / `model_info` use it for access but spend nothing). Ask things like *"plan a route Berlin → Munich, 18 t, depart 9am"*.
+Once connected, the four tools appear (`plan_route` routes on **your** key; `predict_energy` / `check_reachability` / `model_info` need only the connection and spend nothing). Ask things like *"plan a route Berlin → Munich, 18 t, depart 9am"*.
 
-> Note: Claude connects from **Anthropic's cloud**, not your device, so the server must be public — this one is. To self-host your own copy, deploy the Docker image with `SERVICE_MODE=mcp` (it serves Streamable HTTP at `/mcp` on `$PORT`).
+> Security: the consent page validates your TomTom key with one live call, then seals it inside an AEAD-encrypted (Fernet) bearer token — the server keeps **no** user keys (auth codes/clients are in-process and short-lived). Claude connects from **Anthropic's cloud**, so the server is public. To self-host your own copy, deploy the Docker image with `SERVICE_MODE=mcp` + `MCP_OAUTH=1` + a `MCP_TOKEN_SECRET` (it serves Streamable HTTP + OAuth at `/mcp` on `$PORT`).
 
 ---
 

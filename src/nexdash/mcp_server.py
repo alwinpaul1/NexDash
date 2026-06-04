@@ -89,12 +89,27 @@ and receives a JSON plan with ``distance_km``, ``energy_kwh``, ``charging_stops`
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
 from mcp.server.fastmcp import Context, FastMCP
 
 from nexdash import tomtom
 from nexdash import tools
+
+
+def _tomtom_key_for_request(ctx: "Context | None") -> "str | None":
+    """The caller's TomTom key for this request: from the verified OAuth token's
+    claims (hosted OAuth mode) first, then an X-TomTom-Key / Bearer header."""
+    try:
+        from mcp.server.auth.middleware.auth_context import get_access_token
+
+        at = get_access_token()
+        if at is not None and at.claims and at.claims.get("tomtom_key"):
+            return at.claims["tomtom_key"]
+    except Exception:  # noqa: BLE001 - no auth context (stdio / non-OAuth)
+        pass
+    return _tomtom_key_from_request(ctx)
 
 
 def _tomtom_key_from_request(ctx: "Context | None") -> "str | None":
@@ -180,7 +195,26 @@ if not logger.handlers:
     logger.setLevel(logging.INFO)
     logger.propagate = False
 
-mcp = FastMCP("nexdash")
+# OAuth mode (hosted): when MCP_OAUTH is set and a public URL is known, the
+# server speaks OAuth 2.1 so non-technical users can connect via Claude Desktop's
+# "Connect" button — a consent page collects their TomTom key. The SDK then gates
+# every request behind the issued token. Otherwise it's a plain server (stdio, or
+# HTTP guarded by the X-TomTom-Key gate in main()).
+_PUBLIC_URL = os.environ.get("MCP_PUBLIC_URL") or (
+    "https://" + os.environ["RAILWAY_PUBLIC_DOMAIN"]
+    if os.environ.get("RAILWAY_PUBLIC_DOMAIN")
+    else None
+)
+USE_OAUTH = bool(os.environ.get("MCP_OAUTH")) and bool(_PUBLIC_URL)
+
+if USE_OAUTH:
+    from nexdash.mcp_oauth import build_auth, register_consent_routes
+
+    _provider, _auth_settings = build_auth(_PUBLIC_URL)
+    mcp = FastMCP("nexdash", auth_server_provider=_provider, auth=_auth_settings)
+    register_consent_routes(mcp, _provider)
+else:
+    mcp = FastMCP("nexdash")
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +432,7 @@ def plan_route(
     # for this trip so the host's key is never spent. If none is supplied AND no
     # host/env key is configured, return a clear, actionable message instead of
     # routing — the other three tools need no key and keep working.
-    user_key = _tomtom_key_from_request(ctx)
+    user_key = _tomtom_key_for_request(ctx)
     key_token = None
     if user_key:
         key_token = tomtom.set_request_api_key(user_key)
@@ -498,17 +532,21 @@ def main() -> None:
         mcp.settings.transport_security = TransportSecuritySettings(
             enable_dns_rebinding_protection=False
         )
-        # Gate the ENTIRE server (not just plan_route) behind the caller's key:
-        # every HTTP request must carry it, so connecting/listing/calling any tool
-        # all require the user to supply their own key. The bound key is also what
-        # plan_route routes on (per-request, never the host's).
-        import uvicorn
+        if USE_OAUTH:
+            # OAuth mode: the SDK auth layer already gates every request behind a
+            # valid token (and serves the discovery/registration/authorize/token
+            # endpoints + the consent page), so run it directly.
+            mcp.run(transport="streamable-http")
+        else:
+            # No OAuth: gate the ENTIRE server behind the caller's key header —
+            # every request must carry X-TomTom-Key / Bearer, used by plan_route.
+            import uvicorn
 
-        uvicorn.run(
-            _require_api_key_asgi(mcp.streamable_http_app()),
-            host=mcp.settings.host,
-            port=mcp.settings.port,
-        )
+            uvicorn.run(
+                _require_api_key_asgi(mcp.streamable_http_app()),
+                host=mcp.settings.host,
+                port=mcp.settings.port,
+            )
     else:
         mcp.run()
 
