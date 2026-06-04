@@ -448,8 +448,7 @@ export default function PlannerForm({
                 <Slider value={planner.minChargerKw ?? 150} min={50} max={350} step={50} onChange={onMinChargerKw}
                   ariaLabel="Minimum charger power" ariaValueText={`${planner.minChargerKw ?? 150} kilowatts`} />
                 <p className="mt-1 text-[10px] leading-snug text-on-surface-variant/70">
-                  Skip chargers slower than this — a 40 t truck wastes hours on a low-power post.
-                  Faster stations are always allowed.
+                  Skip stations slower than this. Faster ones are always allowed.
                 </p>
               </div>
               <div>
@@ -458,9 +457,8 @@ export default function PlannerForm({
                 </FieldLabel>
                 <Slider value={planner.maxChargeKw} min={100} max={400} step={10} onChange={onMaxChargeKw} />
                 <p className="mt-1 text-[10px] leading-snug text-on-surface-variant/70">
-                  How hard the truck pulls — not a station filter. The eActros 600 charges up to
-                  400 kW; lower this only to charge gentler (battery care). A faster station is
-                  still used — the truck simply draws no more than this.
+                  Caps how hard the truck pulls (not a filter). Lower it only for gentler,
+                  battery-friendlier charging.
                 </p>
               </div>
               <div>
