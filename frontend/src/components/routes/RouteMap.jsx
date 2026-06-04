@@ -617,8 +617,13 @@ export default function RouteMap({ plan, waypoints = [] }) {
   // typed index visited at position k, so a dest's pin number is its position in
   // that array. This keeps the pin numbers consistent with the drawn route line.
   const optOrder = plan?.optimization?.optimizedOrder;
-  const visitNum = (i) =>
-    Array.isArray(optOrder) && optOrder.indexOf(i) >= 0 ? optOrder.indexOf(i) + 1 : i + 1;
+  // `typedIdx` is the destination's 0-based position in the dispatcher's typed
+  // list. With optimisation off the pin number is just typedIdx+1; with it on,
+  // `optOrder` maps typed index -> visit order, so the pin follows the route.
+  const visitNum = (typedIdx) =>
+    Array.isArray(optOrder) && optOrder.indexOf(typedIdx) >= 0
+      ? optOrder.indexOf(typedIdx) + 1
+      : typedIdx + 1;
   const center = geometry[0] || [51.0, 10.2];
   const stops = (plan?.chargingStops || []).filter(
     (s) => Number.isFinite(s.lat) && Number.isFinite(s.lng)
@@ -764,17 +769,23 @@ export default function RouteMap({ plan, waypoints = [] }) {
         )}
 
         {layers.stops &&
-          dests.map((d, i) =>
-            Number.isFinite(d.lat) ? (
-              <Marker key={`dest-${i}`} position={[d.lat, d.lng]} icon={pinIcon("dest", visitNum(i))} title={`Destination ${visitNum(i)}: ${d.label || ""}`}>
+          dests.map((d, i) => {
+            if (!Number.isFinite(d.lat)) return null;
+            // Number by the destination's TYPED list position (carried as `num`),
+            // not its index among the geocoded subset — so an un-geocoded earlier
+            // stop can't renumber the later ones. Falls back to array position.
+            const typedIdx = Number.isInteger(d.num) ? d.num - 1 : i;
+            const n = visitNum(typedIdx);
+            return (
+              <Marker key={`dest-${i}`} position={[d.lat, d.lng]} icon={pinIcon("dest", n)} title={`Destination ${n}: ${d.label || ""}`}>
                 <Tooltip direction="top" offset={[0, -46]}>
-                  <span style={{ fontWeight: 600 }}>Destination {visitNum(i)}</span>
+                  <span style={{ fontWeight: 600 }}>Destination {n}</span>
                   <br />
                   {d.label}
                 </Tooltip>
               </Marker>
-            ) : null
-          )}
+            );
+          })}
 
         {/* Final-approach connector: a short dashed line from the route to each
             charger that sits off the truck-accessible road, so it's clear where

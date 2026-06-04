@@ -196,9 +196,21 @@ export default function RoutesView() {
   if (planner.origin?.lat != null) {
     waypoints.push({ kind: "origin", label: planner.origin.label || "Origin", lat: planner.origin.lat, lng: planner.origin.lng });
   }
-  for (const d of planner.destinations) {
-    if (d.lat != null) waypoints.push({ kind: "dest", label: d.label || "Destination", lat: d.lat, lng: d.lng });
-  }
+  // Carry each destination's TYPED position (1-based) so the map numbers pins by
+  // their place in the dispatcher's list — not by position among only the
+  // geocoded ones. Without this, an un-geocoded earlier stop (e.g. Leipzig with
+  // no coords yet) would make the next stop (Dresden, #2) show as "Destination 1".
+  planner.destinations.forEach((d, idx) => {
+    if (d.lat != null) {
+      waypoints.push({
+        kind: "dest",
+        num: idx + 1,
+        label: d.label || "Destination",
+        lat: d.lat,
+        lng: d.lng,
+      });
+    }
+  });
 
   return (
     <div className="p-6 space-y-6">
