@@ -385,9 +385,9 @@ function RouteDirectionArrows({ geometry }) {
       return { pos, bearing };
     };
 
-    // ~1 chevron per 45 km, clamped to 3..14, spaced evenly (endpoints skipped so
-    // arrows don't sit under the origin/destination pins).
-    const count = Math.max(3, Math.min(14, Math.round(total / 45)));
+    // A few chevrons is enough to show direction — ~1 per 200 km, clamped 1..3,
+    // spaced evenly (endpoints skipped so arrows don't sit under the pins).
+    const count = Math.max(1, Math.min(3, Math.round(total / 200)));
     const markers = [];
     for (let k = 1; k <= count; k++) {
       const { pos, bearing } = at((total * k) / (count + 1));
