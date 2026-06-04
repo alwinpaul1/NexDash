@@ -14,8 +14,8 @@ function InfoCard({ icon, value, label, tint = "#006d32" }) {
       >
         {icon}
       </span>
-      <p className="ck-num mt-1.5 text-xl font-bold text-on-surface leading-none">{value}</p>
-      <p className="ck-label text-[9px] text-on-surface-variant mt-1.5">{label}</p>
+      <p className="mt-1 text-xl font-headline font-bold text-on-surface leading-none tabular-nums">{value}</p>
+      <p className="text-[11px] text-on-surface-variant mt-1">{label}</p>
     </div>
   );
 }
