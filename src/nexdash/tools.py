@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from nexdash.config import DEFAULT_MODEL_PATH
+from nexdash.config import DEFAULT_MODEL_PATH, TRUCK
 from nexdash.model import predict_energy
 from nexdash.range import check_reachability
 
@@ -239,7 +239,21 @@ TOOL_SPECS: list[dict[str, Any]] = [
                 },
                 "max_charge_kw": {
                     "type": "number",
-                    "description": "Max charging power (kW). Defaults to 400.",
+                    "description": "Max charging power (kW) the truck accepts. Defaults to 400.",
+                },
+                "min_charger_kw": {
+                    "type": "number",
+                    "description": (
+                        "Minimum charger power to consider (kW); slower chargers "
+                        "are skipped. Defaults to 150."
+                    ),
+                },
+                "max_detour_km": {
+                    "type": "number",
+                    "description": (
+                        "Max detour off the route to reach a charger (km) -- the "
+                        "charger search radius around each stop. Defaults to 30."
+                    ),
                 },
             },
             "required": ["origin", "destination"],
@@ -323,6 +337,86 @@ def check_reach_tool(**kwargs: Any) -> dict[str, Any]:
     return dict(result)
 
 
+def _reconcile_charge_times_to_real_power(
+    stops: list[dict[str, Any]],
+    *,
+    max_charge_kw: float,
+    battery_kwh: float,
+) -> tuple[list[dict[str, Any]], float, int]:
+    """Re-time each charging stop at the REAL matched station's power.
+
+    The planner times every charge at the truck's flat max-accept rate
+    (``max_charge_kw``, default 400 kW) because it has no station knowledge during
+    the SOC walk. After TomTom enrichment each stop may carry a ``station`` with a
+    real ``effective_power_kw`` (already capped at the truck intake). A real
+    station can only equal or UNDER-cut the truck cap, so the recomputed charge
+    time is always >= the planned time -- the ETA shifts later, never earlier
+    (conservative; it can never make a trip look more reachable than it is).
+    Charger power affects only TIME: SOC, kWh and which stop is taken are
+    power-independent and left untouched.
+
+    Mirrors the browser planner's ``reconcileChargeDurations`` so the agent/MCP
+    path and the website agree. Like it, this folds the extra minutes into the
+    ETA without re-running the EU 561 break/rest schedule (a conservative time
+    shift, not a re-plan).
+
+    Args:
+        stops: The planner's charging stops AFTER enrichment (each has
+            ``arriveSoc``/``departSoc``/``durationMin`` and an optional
+            ``station`` dict).
+        max_charge_kw: The truck's max charge-accept rate the plan was timed at.
+        battery_kwh: Usable pack capacity (for the taper-aware time model).
+
+    Returns:
+        ``(stops_out, extra_minutes_total, n_unresolved)`` -- ``extra_minutes_total``
+        is the summed (real - planned) charge minutes to add to the ETA / total
+        time; ``n_unresolved`` counts NEEDED charges with no real station found
+        (still timed at the truck cap and flagged ``stationResolved=False``).
+    """
+    from nexdash.route_planner import CHARGER_KW, _charge_minutes
+
+    cap = max_charge_kw if (max_charge_kw and max_charge_kw > 0) else CHARGER_KW
+    out: list[dict[str, Any]] = []
+    extra_total = 0.0
+    n_unresolved = 0
+    for s in stops or []:
+        new_stop = dict(s)
+        station = s.get("station") if isinstance(s.get("station"), dict) else None
+        arrive = s.get("arriveSoc")
+        depart = s.get("departSoc")
+        planned_min = s.get("durationMin")
+        real_kw = None
+        if station is not None:
+            real_kw = station.get("effective_power_kw") or station.get("max_power_kw")
+
+        if (
+            real_kw
+            and real_kw > 0
+            and isinstance(arrive, (int, float))
+            and isinstance(depart, (int, float))
+            and depart > arrive
+        ):
+            eff_kw = min(float(cap), float(real_kw))
+            real_min = _charge_minutes(float(arrive), float(depart), eff_kw, battery_kwh)
+            base_min = (
+                float(planned_min)
+                if isinstance(planned_min, (int, float))
+                else _charge_minutes(float(arrive), float(depart), float(cap), battery_kwh)
+            )
+            extra_total += max(0.0, real_min - base_min)
+            new_stop["durationMin"] = round(real_min)
+            new_stop["chargePowerKw"] = round(eff_kw)
+            new_stop["stationResolved"] = True
+        elif station is None:
+            # A needed charge with no real charger resolved nearby: the time stays
+            # at the truck-cap assumption. Flag it so the answer never presents a
+            # phantom hub as if it were a confirmed real station.
+            n_unresolved += 1
+            new_stop["stationResolved"] = False
+        out.append(new_stop)
+    return out, extra_total, n_unresolved
+
+
 def plan_route_tool(**kwargs: Any) -> dict[str, Any]:
     """Plan a full eActros 600 trip between two named places.
 
@@ -361,6 +455,19 @@ def plan_route_tool(**kwargs: Any) -> dict[str, Any]:
     )
     if max_charge_kw <= 0:
         max_charge_kw = 400.0
+    # Charger filters (mirror the website's "Min Charger Speed" + "Max Charging
+    # Detour" sliders): skip chargers below `min_charger_kw`, and only consider
+    # stations within `max_detour_km` of the route point (the POI search radius).
+    min_charger_kw = _to_float(
+        kwargs.get("min_charger_kw"), default=150.0, field="min_charger_kw"
+    )
+    if min_charger_kw <= 0:
+        min_charger_kw = 150.0
+    max_detour_km = _to_float(
+        kwargs.get("max_detour_km"), default=30.0, field="max_detour_km"
+    )
+    if max_detour_km <= 0:
+        max_detour_km = 30.0
     # Departure / deadline are optional ISO strings passed straight through; the
     # route planner parses them (and tolerates None -> "now").
     departure = kwargs.get("departure") or None
@@ -449,9 +556,28 @@ def plan_route_tool(**kwargs: Any) -> dict[str, Any]:
     raw_stops = plan.get("chargingStops") or []
     try:
         raw_stops = tomtom.enrich_charging_stations(
-            raw_stops, max_charge_kw=max_charge_kw
+            raw_stops,
+            radius_km=max_detour_km,
+            min_charger_kw=min_charger_kw,
+            max_charge_kw=max_charge_kw,
         )
     except Exception:  # noqa: BLE001 - never fail the plan over POI enrichment
+        pass
+
+    # Re-time each charge at the REAL matched station's power. The SOC walk timed
+    # every charge at the truck's flat max-accept rate (no station knowledge mid-
+    # walk); a real station can only charge the same or slower, so this shifts the
+    # ETA later (never earlier) and surfaces the real per-stop charge minutes. SOC,
+    # kWh and stop placement are power-independent and unchanged.
+    extra_charge_min = 0.0
+    n_unresolved_chargers = 0
+    try:
+        raw_stops, extra_charge_min, n_unresolved_chargers = (
+            _reconcile_charge_times_to_real_power(
+                raw_stops, max_charge_kw=max_charge_kw, battery_kwh=TRUCK.battery_kwh
+            )
+        )
+    except Exception:  # noqa: BLE001 - never fail the plan over time reconciliation
         pass
 
     charging_stops = []
@@ -463,6 +589,12 @@ def plan_route_tool(**kwargs: Any) -> dict[str, Any]:
                 "arrive_soc": s.get("arriveSoc"),
                 "depart_soc": s.get("departSoc"),
                 "kwh": s.get("kWh"),
+                # Charge time re-computed at the REAL station's power (taper-aware),
+                # the power used (kW), and whether a real charger was resolved at
+                # all (False -> still timed at the truck cap, surfaced honestly).
+                "charge_min": s.get("durationMin"),
+                "charge_power_kw": s.get("chargePowerKw"),
+                "station_resolved": s.get("stationResolved"),
                 # The real station it charges at (None if no charger could be
                 # resolved): name, address, off_route_km, connectors, max/eff power,
                 # live availability, opening hours, price_per_kwh.
@@ -477,6 +609,33 @@ def plan_route_tool(**kwargs: Any) -> dict[str, Any]:
     on_time = None
     if stops_out:
         on_time = stops_out[-1].get("onTime")
+
+    # Fold the real-charger time correction into the headline ETA / total time.
+    # extra_charge_min >= 0 (slower real chargers only add time), so the ETA can
+    # only move later -- and a deadline that was met at the optimistic cap-rate
+    # ETA is re-checked against the realistic one.
+    eta_label = summary.get("etaLabel")
+    eta_iso = summary.get("etaIso")
+    total_time_h = summary.get("totalTimeH")
+    if extra_charge_min and extra_charge_min > 0:
+        from datetime import datetime, timedelta
+
+        if isinstance(total_time_h, (int, float)):
+            total_time_h = round(total_time_h + extra_charge_min / 60.0, 2)
+        if isinstance(eta_iso, str):
+            try:
+                shifted = datetime.fromisoformat(eta_iso) + timedelta(
+                    minutes=extra_charge_min
+                )
+                eta_iso = shifted.isoformat(timespec="minutes")
+                eta_label = shifted.strftime("%H:%M")
+                if deliver_by:
+                    try:
+                        on_time = shifted <= datetime.fromisoformat(deliver_by)
+                    except Exception:  # noqa: BLE001 - deadline parse best-effort
+                        pass
+            except Exception:  # noqa: BLE001 - ETA shift best-effort
+                pass
 
     # Surface the live route conditions the plan was optimised against — per-
     # segment wind + elevation/gradient + temperature come from Open-Meteo (when
@@ -526,11 +685,14 @@ def plan_route_tool(**kwargs: Any) -> dict[str, Any]:
         "min_soc": summary.get("minSoc"),
         "charging_stops": charging_stops,
         "n_charging_stops": summary.get("chargingStops"),
+        # Number of NEEDED charges with no real station resolvable nearby (timed at
+        # the truck-cap assumption). 0 means every charge is at a confirmed station.
+        "chargers_unresolved": n_unresolved_chargers,
         "driving_time_h": summary.get("drivingTimeH"),
-        "total_time_h": summary.get("totalTimeH"),
+        "total_time_h": total_time_h,
         "departure": departure,
-        "eta": summary.get("etaLabel"),
-        "eta_iso": summary.get("etaIso"),
+        "eta": eta_label,
+        "eta_iso": eta_iso,
         "deliver_by": deliver_by,
         "on_time": on_time,
         "eu561_ok": driver.get("eu561ok"),

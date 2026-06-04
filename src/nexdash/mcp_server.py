@@ -382,6 +382,8 @@ def plan_route(
     min_soc: float = 15.0,
     reserve_pct: float = 10.0,
     max_charge_kw: float = 400.0,
+    min_charger_kw: float = 150.0,
+    max_detour_km: float = 30.0,
     ctx: Context | None = None,
 ) -> dict:
     """Plan a COMPLETE door-to-door trip for a Mercedes-Benz eActros 600 truck.
@@ -430,21 +432,31 @@ def plan_route(
             whether arrival is on time / early / late via ``on_time``.
         min_soc: SOC floor (%) never to dip below (0-100). Default 15.
         reserve_pct: Safety-reserve buffer (%) above min SOC (0-100). Default 10.
-        max_charge_kw: Max charging power (kW). Default 400.
+        max_charge_kw: Max charging power (kW) the truck accepts. Default 400.
+        min_charger_kw: Minimum charger power to consider (kW); slower chargers
+            are skipped when resolving a real station. Default 150.
+        max_detour_km: Max detour off the route to reach a charger (km) -- the
+            charger search radius around each stop. Default 30.
 
     Returns:
         JSON-serializable plan summary: ``origin``/``destination`` (label+coords),
         ``distance_km``, ``energy_kwh``, ``kwh_per_100``, ``arrival_soc``,
         ``min_soc``, ``charging_stops`` (with arrive/depart SOC + kWh),
-        ``n_charging_stops``, ``driving_time_h``, ``total_time_h``, ``departure``,
-        ``eta``/``eta_iso``, ``deliver_by``, ``on_time``, ``eu561_ok``,
-        ``conditions`` (the live Open-Meteo wind / elevation-gain+loss /
-        temperature the trip was optimised against), ``traffic`` (live
-        delay + ETA-relevant incidents on the route) and ``assumptions``. Each
-        ``charging_stops`` entry carries a ``station`` object naming the real CCS
-        charger (operator, power, live availability, opening hours, price) or
-        ``None``. On geocode/route/simulation failure it returns
-        ``{"error": ...}`` (secret-free) instead of throwing.
+        ``n_charging_stops``, ``chargers_unresolved``, ``driving_time_h``,
+        ``total_time_h``, ``departure``, ``eta``/``eta_iso``, ``deliver_by``,
+        ``on_time``, ``eu561_ok``, ``conditions`` (the live Open-Meteo wind /
+        elevation-gain+loss / temperature the trip was optimised against),
+        ``traffic`` (live delay + ETA-relevant incidents on the route) and
+        ``assumptions``. Each ``charging_stops`` entry carries a ``station``
+        object naming the real CCS charger (operator, power, live availability,
+        opening hours, price) or ``None``, plus ``charge_min`` and
+        ``charge_power_kw`` -- the charge time re-computed at that real station's
+        power -- and ``station_resolved`` (``False`` when no real charger was
+        found nearby, so the stop is still timed at the truck-cap assumption;
+        ``chargers_unresolved`` counts these). ``total_time_h``/``eta`` already
+        include the real-charger time, so a slower station pushes the ETA later.
+        On geocode/route/simulation failure it returns ``{"error": ...}``
+        (secret-free) instead of throwing.
     """
     # Bring-your-own-key: use the caller's TomTom key (from the request header)
     # for this trip so the host's key is never spent. If none is supplied AND no
@@ -487,6 +499,8 @@ def plan_route(
             min_soc=min_soc,
             reserve_pct=reserve_pct,
             max_charge_kw=max_charge_kw,
+            min_charger_kw=min_charger_kw,
+            max_detour_km=max_detour_km,
         )
     except Exception as exc:  # noqa: BLE001 - MCP boundary: never crash the call.
         return _safe_error(exc)
