@@ -65,7 +65,20 @@ npm install
 npm run dev
 ```
 
-In the web console, the chat widget plans a whole trip from plain language and fills in the result panel. If `MINIMAX_API_KEY` is missing, `/api/chat` returns a friendly note instead of an error, and the rest of the app keeps working.
+Then open **http://localhost:5173** in your browser — that's the dashboard (the Vite dev server proxies `/api` to the backend on `:8000`, so keep both running). The chat widget plans a whole trip from plain language and fills in the result panel. If `MINIMAX_API_KEY` is missing, `/api/chat` returns a friendly note instead of an error, and the rest of the app keeps working.
+
+### API keys (and where to get them)
+
+Copy `frontend/.env.example` to `frontend/.env` and drop your keys in. Each is **free** to obtain:
+
+| Key | Put in | Needed for | Get it at |
+|-----|--------|------------|-----------|
+| `VITE_TOMTOM_API_KEY` | `frontend/.env` | Geocoding, truck routing, map tiles (the route planner) | [developer.tomtom.com](https://developer.tomtom.com) |
+| `MINIMAX_API_KEY` | `.env` (repo root) | The chat agent (MiniMax-M3) | [platform.minimaxi.com](https://platform.minimaxi.com) |
+| `VITE_MAPTILER_API_KEY` | `frontend/.env` | *Optional* — nicer map tiles (falls back to free OSM/CARTO) | [maptiler.com](https://www.maptiler.com) |
+| `TOMTOM_API_KEY` | `.env` (repo root) | *Optional* — server-side routing for the agent's `plan_route`/MCP (else reuses the Vite key) | same as TomTom above |
+
+Weather and elevation come from **Open-Meteo, which needs no key** (free, no signup). The app degrades gracefully: no TomTom key → the planner can't geocode/route; no MiniMax key → chat shows a friendly note; no MapTiler key → free fallback map tiles.
 
 ### Tests and shortcuts
 
