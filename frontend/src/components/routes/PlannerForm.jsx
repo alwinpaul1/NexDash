@@ -312,9 +312,16 @@ export default function PlannerForm({
   const [moreOpen, setMoreOpen] = useState(false);
   // Earliest selectable departure = now. Bound to the datetime-local `min` so the
   // browser greys out past dates AND past times today (you can't depart in the
-  // past — it would produce a nonsense back-dated plan). Refreshed when the picker
-  // opens so "now" never goes stale on a long-open tab.
+  // past — it would produce a nonsense back-dated plan).
   const [minDeparture, setMinDeparture] = useState(nowLocalISO());
+  // Keep `min` continuously current. onFocus alone is unreliable — clicking the
+  // native calendar icon doesn't always fire it — so on a tab left open a while
+  // `min` would go stale and let already-past times (between page load and now)
+  // stay selectable. Tick every 20 s so the picker always sees a fresh "now".
+  useEffect(() => {
+    const id = setInterval(() => setMinDeparture(nowLocalISO()), 20000);
+    return () => clearInterval(id);
+  }, []);
 
   // Drag-to-reorder destinations (grip handle is the drag source).
   const dragFrom = useRef(null);
