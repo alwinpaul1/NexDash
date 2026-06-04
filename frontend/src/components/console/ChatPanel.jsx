@@ -19,33 +19,6 @@ import { useChat } from "../../context/ChatContext.jsx";
  * comes back 200 and renders as a normal assistant message.
  */
 
-/** Choose an icon for a tool chip based on the tool's name. */
-function toolIcon(name) {
-  const n = String(name).toLowerCase();
-  if (n.includes("plan_route") || n.includes("route") || n.includes("reach")) return "alt_route";
-  if (n.includes("energy") || n.includes("charge") || n.includes("soc")) return "bolt";
-  return "build";
-}
-
-function ToolChips({ tools }) {
-  if (!Array.isArray(tools) || tools.length === 0) return null;
-  return (
-    <div className="flex flex-wrap gap-1.5 mt-1.5">
-      {tools.map((tool, i) => (
-        <span
-          key={tool + i}
-          className="inline-flex items-center gap-1 text-[11px] font-medium text-primary bg-primary/10 ring-1 ring-primary/20 rounded-pill px-2 py-0.5"
-        >
-          <span className="material-symbols-outlined" style={{ fontSize: "13px" }}>
-            {toolIcon(tool)}
-          </span>
-          {tool}
-        </span>
-      ))}
-    </div>
-  );
-}
-
 function ThinkingDots() {
   return (
     <div className="flex items-center gap-1 px-3.5 py-2.5 rounded-card rounded-bl-sm bg-surface-low border border-outline-variant/40 w-fit">
@@ -72,13 +45,12 @@ function MessageBubble({ message }) {
   }
 
   // Assistant replies are rendered as Markdown (the agent emits tables, bold,
-  // lists, and a caveat blockquote); GFM enables the pipe tables it uses.
+  // and lists); GFM enables the pipe tables it uses.
   return (
     <div className="flex flex-col items-start max-w-[85%]">
       <div className="chat-md bg-surface-low text-on-surface border border-outline-variant/40 rounded-card rounded-bl-sm px-3.5 py-2 text-sm">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
       </div>
-      <ToolChips tools={message.tools} />
     </div>
   );
 }
