@@ -7,7 +7,9 @@
 
 const STORAGE_KEY = "nexdash-theme";
 
-/** Resolve the theme to use on load: saved choice → OS preference → light. */
+/** Resolve the theme to use on load: an explicit saved choice, else light.
+ * Light is the default for everyone — we intentionally do NOT follow the OS
+ * dark preference, so a first-time visitor always lands on the light theme. */
 export function getInitialTheme() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -15,11 +17,7 @@ export function getInitialTheme() {
   } catch {
     // localStorage unavailable (private mode / SSR) — fall through.
   }
-  const prefersDark =
-    typeof window !== "undefined" &&
-    window.matchMedia &&
-    window.matchMedia("(prefers-color-scheme: dark)").matches;
-  return prefersDark ? "dark" : "light";
+  return "light";
 }
 
 /** Apply a theme to the document (no persistence). */
