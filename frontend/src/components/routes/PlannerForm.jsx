@@ -294,7 +294,6 @@ export default function PlannerForm({
           <span className="material-symbols-outlined">route</span>
           <h2 className="font-headline font-semibold text-lg tracking-tight">Route Planner</h2>
         </div>
-        <p className="relative text-xs text-on-primary/85 mt-0.5">Optimize an eActros 600 long-haul trip</p>
       </div>
 
       <div className="p-5 space-y-5">

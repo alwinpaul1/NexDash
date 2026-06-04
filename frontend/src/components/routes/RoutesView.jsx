@@ -228,9 +228,6 @@ export default function RoutesView() {
           <h1 className="font-headline font-bold text-2xl text-on-surface tracking-tight">
             Route Planning
           </h1>
-          <p className="text-sm text-on-surface-variant mt-0.5">
-            ML-driven SOC simulation with real elevation, gradient and weather along the road.
-          </p>
         </div>
       </div>
 
