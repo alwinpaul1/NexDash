@@ -824,10 +824,27 @@ export default function RouteMap({ plan, waypoints = [] }) {
             ) : null
           )}
 
+        {/* Final-approach connector: a short dashed line from the route to each
+            charger that sits off the truck-accessible road, so it's clear where
+            to leave the route to reach the station. */}
+        {layers.charging &&
+          stops.map((s, i) =>
+            Number.isFinite(s.routeLat) && Number.isFinite(s.routeLng) && (s.routeGapM ?? 0) > 25 ? (
+              <Polyline
+                key={`charge-link-${i}`}
+                positions={[
+                  [s.routeLat, s.routeLng],
+                  [s.lat, s.lng],
+                ]}
+                pathOptions={{ color: "#f5a623", weight: 3, opacity: 0.9, dashArray: "3 7", lineCap: "round" }}
+              />
+            ) : null
+          )}
+
         {/* Charging stations. */}
         {layers.charging &&
           stops.map((s, i) => (
-            <Marker key={`charge-${i}`} position={[s.markerLat ?? s.lat, s.markerLng ?? s.lng]} icon={chargeIcon(i + 1)} title={`Charging stop ${i + 1}: ${s.name || ""}`}>
+            <Marker key={`charge-${i}`} position={[s.lat, s.lng]} icon={chargeIcon(i + 1)} title={`Charging stop ${i + 1}: ${s.name || ""}`}>
               <Tooltip direction="top" offset={[0, -14]} className="map-tip charge-tip">
                 <span className="ct-head">
                   <span className="material-symbols-outlined mt-icon" style={{ color: "#f5a623" }}>
