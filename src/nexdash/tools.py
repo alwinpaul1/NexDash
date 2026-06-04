@@ -488,13 +488,12 @@ def plan_route_tool(**kwargs: Any) -> dict[str, Any]:
             "avg_temp_c": cond.get("avgTempC"),
             "avg_wind_mps": cond.get("avgWindMps"),
             "wind_dir_deg": cond.get("windDirDeg"),
-            "max_gradient_pct": cond.get("maxGradientPct"),
             "elevation_gain_m": cond.get("climbM"),
             "elevation_loss_m": cond.get("descentM"),
             "weather_source": cond.get("weatherSource"),
             "weather_degraded": cond.get("weatherDegraded"),
             "elevation_degraded": cond.get("elevationDegraded"),
-            "source": "Open-Meteo (per-segment wind, elevation/gradient, temperature)",
+            "source": "Open-Meteo (per-segment wind, elevation, temperature)",
         }
         if cond
         else None
