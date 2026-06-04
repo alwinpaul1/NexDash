@@ -83,7 +83,7 @@ field-measured **~0.95–1.05 kWh/km**:
 
 - ADAC fully-loaded 40 t, ~350 km Munich–Wörth at ≤85 km/h: **~0.88 kWh/km**. [S4]
 - Daimler 15,000+ km European tour (40 t, 22 countries, 20 °C ref): **~1.03 kWh/km** average, envelope **0.85** (downhill) to **1.40** (cold + unpaved). [S5]
-- Vandijck 1,530 km long-haul: **0.963 kWh/km**; aero-kit truck **0.934 kWh/km**. [S7]
+- Vandijck 1,530 km long-haul **at 33.2 t GCW** (a lighter, part-load rig — not 40 t): **0.963 kWh/km**; aero-kit truck **0.934 kWh/km**. [S7]
 - WLTP declared: **1.19 kWh/km**; spec-implied (600 kWh / 500 km): **~1.20 kWh/km**. [S2]
 
 With the §1 values (`crr=0.0055, cd=0.50, A=10` → **CdA 5.0**, `dt=0.85`) and the

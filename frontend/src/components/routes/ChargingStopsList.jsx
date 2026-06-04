@@ -58,6 +58,7 @@ export default function ChargingStopsList({ stops = [] }) {
                         ? "bg-primary/10 text-primary"
                         : "bg-surface text-on-surface-variant ring-1 ring-outline-variant/60"
                     }`}
+                    title="Live availability at planning time — the truck arrives hours later, so the number of free chargers may differ on arrival."
                   >
                     {s.availability.available} free
                   </span>

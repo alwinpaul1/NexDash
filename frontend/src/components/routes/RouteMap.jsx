@@ -813,7 +813,11 @@ export default function RouteMap({ plan, waypoints = [] }) {
                 )}
                 <span className="ct-line ct-sub">
                   {s.availability ? (
-                    <span className="ct-avail" style={s.availability.available > 0 ? undefined : { color: "#ff8a80" }}>
+                    <span
+                      className="ct-avail"
+                      style={s.availability.available > 0 ? undefined : { color: "#ff8a80" }}
+                      title="Live availability at planning time — the truck arrives hours later, so the number of free chargers may differ on arrival."
+                    >
                       {s.availability.available} free
                     </span>
                   ) : null}
