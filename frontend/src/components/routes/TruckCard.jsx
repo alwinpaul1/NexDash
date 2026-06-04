@@ -22,11 +22,6 @@ export default function TruckCard() {
 
   return (
     <div className="nx-card nx-hover-lift relative p-4">
-      {/* HUD caption */}
-      <p className="ck-label text-[10px] text-on-surface-variant/70 mb-2">
-        Vehicle Render Bay · Mercedes-Benz eActros 600
-      </p>
-
       {/* Framed render box — truck on a light "render bay" with the signature
           44px HUD grid backdrop and a lime CCS power tag. */}
       <div className="relative overflow-hidden rounded-control border border-outline-variant/50 bg-gradient-to-br from-white to-slate-200 p-2">
