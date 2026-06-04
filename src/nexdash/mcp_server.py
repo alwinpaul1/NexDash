@@ -386,10 +386,17 @@ def plan_route(
     This is the standalone trip planner: it works for any MCP client with NO
     NexDash frontend. Give it two place names and it (1) geocodes both via
     TomTom, (2) routes a 40 t / 5-axle artic eActros 600 over the real TomTom
-    truck road network, (3) simulates state-of-charge drain, (4) inserts DC
-    fast-charging stops where needed, (5) computes ETA and -- if ``deliver_by``
-    is set -- whether arrival is on time, and (6) checks EU 561 driver-hours
+    truck road network, (3) enriches that route with live per-segment wind,
+    elevation/gradient and temperature from Open-Meteo and factors them into the
+    energy estimate, (4) simulates state-of-charge drain, (5) inserts DC
+    fast-charging stops where needed, (6) computes ETA and -- if ``deliver_by``
+    is set -- whether arrival is on time, and (7) checks EU 561 driver-hours
     (a >=45-min charge counts as the required break).
+
+    The plan is therefore optimised against real headwind/tailwind and the
+    climbs/descents along the actual roads -- not just flat distance. Those live
+    conditions are echoed back in the ``conditions`` field so the caller can see
+    what was taken into account.
 
     Use this whenever a user describes a trip between places (e.g. "Berlin to
     Munich, 18 tonnes, depart 09:00, deliver by noon"). For a single isolated
@@ -424,7 +431,9 @@ def plan_route(
         ``distance_km``, ``energy_kwh``, ``kwh_per_100``, ``arrival_soc``,
         ``min_soc``, ``charging_stops`` (with arrive/depart SOC + kWh),
         ``n_charging_stops``, ``driving_time_h``, ``total_time_h``, ``departure``,
-        ``eta``/``eta_iso``, ``deliver_by``, ``on_time``, ``eu561_ok`` and
+        ``eta``/``eta_iso``, ``deliver_by``, ``on_time``, ``eu561_ok``,
+        ``conditions`` (the live Open-Meteo wind / elevation-gain+loss /
+        gradient / temperature the trip was optimised against) and
         ``assumptions``. On geocode/route/simulation failure it returns
         ``{"error": ...}`` (secret-free) instead of throwing.
     """

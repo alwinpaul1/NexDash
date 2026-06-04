@@ -461,6 +461,28 @@ def plan_route_tool(**kwargs: Any) -> dict[str, Any]:
     if stops_out:
         on_time = stops_out[-1].get("onTime")
 
+    # Surface the live route conditions the plan was optimised against — per-
+    # segment wind + elevation/gradient + temperature come from Open-Meteo (when
+    # a route geometry is available) and already shape the energy estimate, so the
+    # MCP client can see they were taken into account (not just the headline kWh).
+    cond = plan.get("conditions") or {}
+    conditions = (
+        {
+            "avg_temp_c": cond.get("avgTempC"),
+            "avg_wind_mps": cond.get("avgWindMps"),
+            "wind_dir_deg": cond.get("windDirDeg"),
+            "max_gradient_pct": cond.get("maxGradientPct"),
+            "elevation_gain_m": cond.get("climbM"),
+            "elevation_loss_m": cond.get("descentM"),
+            "weather_source": cond.get("weatherSource"),
+            "weather_degraded": cond.get("weatherDegraded"),
+            "elevation_degraded": cond.get("elevationDegraded"),
+            "source": "Open-Meteo (per-segment wind, elevation/gradient, temperature)",
+        }
+        if cond
+        else None
+    )
+
     return {
         "origin": {"label": a["label"], "lat": a["lat"], "lng": a["lng"]},
         "destination": {"label": b["label"], "lat": b["lat"], "lng": b["lng"]},
@@ -479,6 +501,7 @@ def plan_route_tool(**kwargs: Any) -> dict[str, Any]:
         "deliver_by": deliver_by,
         "on_time": on_time,
         "eu561_ok": driver.get("eu561ok"),
+        "conditions": conditions,
         "assumptions": summary.get("assumptions"),
     }
 
