@@ -68,17 +68,14 @@ export default function ChargingStopsList({ stops = [] }) {
                     {Number.isFinite(s.chargeMinutes) ? ` · ~${fmtChargeTime(s.chargeMinutes)}` : ""}
                   </span>
                 ) : null}
-                {Number.isFinite(s.costEur) && s.costEur > 0 ? (
+                {/* Cost only shown when a LIVE per-kWh tariff is available;
+                    the flat €0.45/kWh fallback is an estimate, not real data. */}
+                {Number.isFinite(s.pricePerKwh) && Number.isFinite(s.costEur) && s.costEur > 0 ? (
                   <span
                     className="inline-flex items-center gap-1 rounded-full bg-surface text-on-surface-variant px-2 py-0.5 ring-1 ring-outline-variant/60"
-                    title={
-                      Number.isFinite(s.pricePerKwh)
-                        ? `Estimated at €${s.pricePerKwh.toFixed(2)}/kWh`
-                        : "Estimated at a flat €0.45/kWh (no live tariff for this site)"
-                    }
+                    title={`Live tariff €${s.pricePerKwh.toFixed(2)}/kWh`}
                   >
-                    ≈ €{Math.round(s.costEur)}
-                    {Number.isFinite(s.pricePerKwh) ? ` · €${s.pricePerKwh.toFixed(2)}/kWh` : ""}
+                    ≈ €{Math.round(s.costEur)} · €{s.pricePerKwh.toFixed(2)}/kWh
                   </span>
                 ) : null}
                 {s.openingHours ? (

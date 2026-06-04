@@ -132,7 +132,8 @@ function ChargeCard({ seg }) {
         </span>
         <span className="text-on-surface tabular-nums">
           {Math.round(seg.kWh || 0)} kWh
-          {Number.isFinite(seg.costEur) && seg.costEur > 0 ? (
+          {/* Cost only with a live per-kWh tariff; the flat estimate is hidden. */}
+          {Number.isFinite(seg.pricePerKwh) && Number.isFinite(seg.costEur) && seg.costEur > 0 ? (
             <span className="text-on-surface-variant"> · ≈€{Math.round(seg.costEur)}</span>
           ) : null}
         </span>
