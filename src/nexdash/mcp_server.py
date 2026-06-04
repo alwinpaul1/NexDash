@@ -117,6 +117,58 @@ def _tomtom_key_from_request(ctx: "Context | None") -> "str | None":
         return None
     return key.strip() if key and key.strip() else None
 
+
+def _require_api_key_asgi(inner):
+    """Wrap the MCP Streamable-HTTP app so the WHOLE server is gated by the
+    caller's API key: every HTTP request must carry ``X-TomTom-Key`` (or
+    ``Authorization: Bearer <key>``) — connecting, listing tools and calling any
+    tool all require it. The key is bound to the per-request context for the
+    duration of the request so ``plan_route`` routes on it (never the host's).
+    Non-HTTP scopes (the lifespan that starts the session manager) pass through.
+    """
+    import json as _json
+
+    async def app(scope, receive, send):
+        if scope.get("type") != "http":
+            await inner(scope, receive, send)
+            return
+        raw = {k.lower(): v for k, v in (scope.get("headers") or [])}
+        key = (raw.get(b"x-tomtom-key") or b"").decode().strip()
+        if not key:
+            auth = (raw.get(b"authorization") or b"").decode()
+            if auth.lower().startswith("bearer "):
+                key = auth[7:].strip()
+        if not key:
+            body = _json.dumps(
+                {
+                    "error": "api_key_required",
+                    "detail": (
+                        "This MCP server requires your TomTom API key. Add an "
+                        "'X-TomTom-Key: <key>' header (or 'Authorization: Bearer <key>') "
+                        "when you connect. Free key: https://developer.tomtom.com"
+                    ),
+                }
+            ).encode()
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 401,
+                    "headers": [
+                        (b"content-type", b"application/json"),
+                        (b"content-length", str(len(body)).encode()),
+                    ],
+                }
+            )
+            await send({"type": "http.response.body", "body": body})
+            return
+        token = tomtom.set_request_api_key(key)
+        try:
+            await inner(scope, receive, send)
+        finally:
+            tomtom.reset_request_api_key(token)
+
+    return app
+
 # Log to STDERR only. For a stdio MCP server, STDOUT is the JSON-RPC protocol
 # channel -- any write to it corrupts message framing. Server-side diagnostics
 # (including the full text of a caught exception) go here, never to the client.
@@ -446,7 +498,17 @@ def main() -> None:
         mcp.settings.transport_security = TransportSecuritySettings(
             enable_dns_rebinding_protection=False
         )
-        mcp.run(transport="streamable-http")
+        # Gate the ENTIRE server (not just plan_route) behind the caller's key:
+        # every HTTP request must carry it, so connecting/listing/calling any tool
+        # all require the user to supply their own key. The bound key is also what
+        # plan_route routes on (per-request, never the host's).
+        import uvicorn
+
+        uvicorn.run(
+            _require_api_key_asgi(mcp.streamable_http_app()),
+            host=mcp.settings.host,
+            port=mcp.settings.port,
+        )
     else:
         mcp.run()
 

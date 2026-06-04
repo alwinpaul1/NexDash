@@ -113,18 +113,17 @@ A public instance is already running over **Streamable HTTP**:
 https://nexdash-mcp-production.up.railway.app/mcp
 ```
 
-Add it as a **custom connector** — nothing to install:
+**The whole server is gated by YOUR TomTom key (bring-your-own-key).** Every request — connecting, listing tools, every tool call — must carry your key, so the public endpoint can never spend anyone else's quota. Get a free key in a minute at [developer.tomtom.com](https://developer.tomtom.com), then add it as an `X-TomTom-Key: <key>` header (or `Authorization: Bearer <key>`). Without it the server replies `401 api_key_required`.
 
-- **Claude (Pro / Max):** Customize → **Connectors** → **Add custom connector** → paste the URL → **Add**.
-- **Claude (Team / Enterprise):** an owner adds it under **Organization settings → Connectors → Add → Custom → Web** → paste the URL; members then click **Connect**.
-- **Claude Code (CLI):** `claude mcp add --transport http nexdash https://nexdash-mcp-production.up.railway.app/mcp` — add `--scope user` to use it in every project, and `--header "X-TomTom-Key: <your-tomtom-key>"` to enable `plan_route` (see below).
-- **Cursor / your own agent:** point it at the URL with the **Streamable HTTP** transport. For a stdio-only client, bridge it: `npx mcp-remote https://nexdash-mcp-production.up.railway.app/mcp`.
+Add it as a **custom connector** with that header:
 
-Once connected, the four tools appear and you can ask things like *"plan a route Berlin → Munich, 18 t, depart 9am"*.
+- **Claude Code (CLI):** `claude mcp add --transport http nexdash https://nexdash-mcp-production.up.railway.app/mcp --header "X-TomTom-Key: <your-tomtom-key>"` (add `--scope user` to use it in every project).
+- **Cursor / your own agent / Claude API connector:** add the URL over **Streamable HTTP** with an `X-TomTom-Key: <key>` header. For a stdio-only client, bridge it: `npx mcp-remote https://nexdash-mcp-production.up.railway.app/mcp --header "X-TomTom-Key: <key>"`.
+- **Claude Desktop / web:** not supported for this server yet — its connector UI can't send a custom header ([Anthropic limitation](https://github.com/anthropics/claude-ai-mcp/issues/112)), and the server requires the key on every request.
 
-**`plan_route` uses YOUR TomTom key (bring-your-own-key).** It routes on the key *you* supply — never the host's — so the public endpoint can't spend anyone else's quota. Pass it as an `X-TomTom-Key: <key>` header (or `Authorization: Bearer <key>`); a free key takes a minute at [developer.tomtom.com](https://developer.tomtom.com). Without a key, `plan_route` returns a friendly "add your key" message, while `predict_energy`, `check_reachability`, and `model_info` need **no key** and work for everyone.
+Once connected, the four tools appear (`plan_route` routes on your key; `predict_energy` / `check_reachability` / `model_info` use it for access but spend nothing). Ask things like *"plan a route Berlin → Munich, 18 t, depart 9am"*.
 
-> Notes: Claude connects from **Anthropic's cloud**, not your device, so the server must be public — this one is. Heads-up: Claude **Desktop / web's** connector UI can't yet send a custom header ([Anthropic limitation](https://github.com/anthropics/claude-ai-mcp/issues/112)), so use **Claude Code / Cursor / the API** for `plan_route` (the offline tools work from anywhere). To self-host your own copy, deploy the Docker image with `SERVICE_MODE=mcp` (it serves Streamable HTTP at `/mcp` on `$PORT`).
+> Note: Claude connects from **Anthropic's cloud**, not your device, so the server must be public — this one is. To self-host your own copy, deploy the Docker image with `SERVICE_MODE=mcp` (it serves Streamable HTTP at `/mcp` on `$PORT`).
 
 ---
 
