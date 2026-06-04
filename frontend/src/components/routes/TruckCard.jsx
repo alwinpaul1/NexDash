@@ -14,7 +14,7 @@ const SPECS = [
   { icon: "package_2", label: "Max Payload", value: "22 t (22,000 kg)" },
   { icon: "scale", label: "GCW (laden)", value: "40 t (40,000 kg)" },
   { icon: "straighten", label: "L × W × H", value: "16.5 × 2.55 × 4.0 m" },
-  { icon: "trip_origin", label: "Axles", value: "5 (artic)" },
+  { icon: "trip_origin", label: "Axles", value: "5" },
 ];
 
 export default function TruckCard() {
