@@ -340,7 +340,28 @@ export default function PlannerForm({
         {/* Vehicle */}
         <TruckCard />
 
-        {/* Payload (moved up from advanced options — a primary vehicle input) */}
+        {/* Starting Battery */}
+        <div>
+          <FieldLabel icon="battery_charging_full" hint={`${planner.startSoc}%`}>
+            Starting Battery
+          </FieldLabel>
+          <Slider value={planner.startSoc} min={0} max={100} onChange={onStartSoc}
+            ariaLabel="Starting battery" ariaValueText={`${planner.startSoc} percent`} />
+        </div>
+
+        {/* Origin */}
+        <div>
+          <FieldLabel icon="my_location">Origin</FieldLabel>
+          <LocationSearch
+            value={planner.origin?.label || ""}
+            placeholder="Where does the trip start?"
+            icon="trip_origin"
+            onSelect={(r) => onSetOrigin({ label: r.label, lat: r.lat, lng: r.lng })}
+            onClear={() => onSetOrigin(null)}
+          />
+        </div>
+
+        {/* Payload */}
         <div>
           <div className="flex items-center justify-between mb-2">
             <label className="flex items-center gap-1.5 text-[11px] font-semibold text-on-surface-variant uppercase tracking-[0.08em]">
@@ -377,27 +398,6 @@ export default function PlannerForm({
           <p className="mt-1 text-[10px] text-on-surface-variant/70">
             {(planner.payloadKg / 1000).toFixed(1)} t / {MAX_PAYLOAD_KG / 1000} t max
           </p>
-        </div>
-
-        {/* Starting Battery */}
-        <div>
-          <FieldLabel icon="battery_charging_full" hint={`${planner.startSoc}%`}>
-            Starting Battery
-          </FieldLabel>
-          <Slider value={planner.startSoc} min={0} max={100} onChange={onStartSoc}
-            ariaLabel="Starting battery" ariaValueText={`${planner.startSoc} percent`} />
-        </div>
-
-        {/* Origin */}
-        <div>
-          <FieldLabel icon="my_location">Origin</FieldLabel>
-          <LocationSearch
-            value={planner.origin?.label || ""}
-            placeholder="Where does the trip start?"
-            icon="trip_origin"
-            onSelect={(r) => onSetOrigin({ label: r.label, lat: r.lat, lng: r.lng })}
-            onClear={() => onSetOrigin(null)}
-          />
         </div>
 
         {/* Destinations */}
