@@ -26,10 +26,8 @@ import pytest
 
 from nexdash.data_gen import generate_dataset
 from nexdash.model import train_model
-from nexdash.route_planner import _charge_minutes
 from nexdash.tools import (
     TOOL_SPECS,
-    _reconcile_charge_times_to_real_power,
     check_reach_tool,
     dispatch,
     predict_energy_tool,
@@ -227,75 +225,6 @@ def test_check_reach_tool_low_soc_is_unreachable(model_path: str) -> None:
     )
     assert result["reaches"] is False
     assert result["margin_kwh"] < 0
-
-
-# ---------------------------------------------------------------------------
-# Real-charger charge-time reconciliation
-# ---------------------------------------------------------------------------
-# WHY: the SOC walk times every charge at the truck's flat max-accept rate
-# (default 400 kW) because it has no station knowledge mid-walk. After TomTom
-# resolves the real station, the agent answer must charge at that station's REAL
-# power. A real station is never faster than the truck cap, so corrected times
-# only ever grow -> the ETA shifts later, never earlier (can't fake reachability).
-_BATTERY_KWH = 600.0
-_CAP_KW = 400.0
-
-
-def test_reconcile_uses_real_station_power_and_lengthens_time() -> None:
-    arrive, depart, real_kw = 20.0, 80.0, 150.0
-    planned = _charge_minutes(arrive, depart, _CAP_KW, _BATTERY_KWH)
-    real = _charge_minutes(arrive, depart, real_kw, _BATTERY_KWH)
-    stops = [
-        {
-            "arriveSoc": arrive,
-            "departSoc": depart,
-            "durationMin": round(planned),
-            "station": {"effective_power_kw": real_kw, "max_power_kw": real_kw},
-        }
-    ]
-    out, extra, n_unresolved = _reconcile_charge_times_to_real_power(
-        stops, max_charge_kw=_CAP_KW, battery_kwh=_BATTERY_KWH
-    )
-    assert n_unresolved == 0
-    assert out[0]["stationResolved"] is True
-    assert out[0]["chargePowerKw"] == round(real_kw)
-    assert out[0]["durationMin"] == round(real)
-    # A 150 kW station is far slower than the 400 kW cap -> strictly more minutes.
-    assert out[0]["durationMin"] > round(planned)
-    assert extra == pytest.approx(real - round(planned), abs=1.0)
-
-
-def test_reconcile_flags_unresolved_charger() -> None:
-    stops = [
-        {"arriveSoc": 20.0, "departSoc": 80.0, "durationMin": 50, "station": None}
-    ]
-    out, extra, n_unresolved = _reconcile_charge_times_to_real_power(
-        stops, max_charge_kw=_CAP_KW, battery_kwh=_BATTERY_KWH
-    )
-    # No real charger nearby: flagged, no time added, plan duration untouched.
-    assert n_unresolved == 1
-    assert out[0]["stationResolved"] is False
-    assert extra == 0.0
-    assert out[0]["durationMin"] == 50
-
-
-def test_reconcile_caps_at_truck_rate_no_speedup() -> None:
-    arrive, depart = 20.0, 80.0
-    planned = _charge_minutes(arrive, depart, _CAP_KW, _BATTERY_KWH)
-    stops = [
-        {
-            "arriveSoc": arrive,
-            "departSoc": depart,
-            "durationMin": round(planned),
-            "station": {"effective_power_kw": 1000.0, "max_power_kw": 1000.0},
-        }
-    ]
-    out, extra, _ = _reconcile_charge_times_to_real_power(
-        stops, max_charge_kw=_CAP_KW, battery_kwh=_BATTERY_KWH
-    )
-    # A 1000 kW station can't push the truck past its own 400 kW intake.
-    assert out[0]["chargePowerKw"] == round(_CAP_KW)
-    assert extra == pytest.approx(0.0, abs=1.0)
 
 
 def test_plan_route_tool_forwards_charger_filters(monkeypatch: pytest.MonkeyPatch) -> None:

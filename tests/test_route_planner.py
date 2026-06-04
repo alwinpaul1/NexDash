@@ -271,6 +271,89 @@ def test_charging_stops_inserted_on_long_low_soc_route(monkeypatch):
     assert result["summary"]["chargingStops"] == len(result["chargingStops"])
 
 
+def test_real_charger_power_lengthens_time_not_soc(monkeypatch):
+    """Re-timing charges at a slower REAL charger must lengthen charge time / ETA
+    while leaving the SOC walk, kWh and stop placement byte-identical -- charger
+    power affects only time, never energy or which stop is taken."""
+    monkeypatch.setattr(
+        route_planner.geodata,
+        "enrich_route",
+        lambda geometry, departure_iso=None: _fake_enrichment(
+            gradient_pct=3.0, n_segments=16, dist_km_each=50.0
+        ),
+    )
+    common = dict(
+        distance_km=800.0,
+        duration_s=800.0 / 70.0 * 3600.0,
+        start_soc=60.0,
+        min_soc=15.0,
+        payload_kg=15000.0,
+        departure="2026-05-30T06:00",
+        geometry=GEOMETRY,
+        model_path=DEFAULT_MODEL_PATH,
+    )
+    fast = route_planner.plan_route(**common)  # truck cap (400 kW)
+    n = len(fast["chargingStops"])
+    assert n >= 1
+    slow = route_planner.plan_route(**common, charger_kw_by_stop=[150.0] * n)
+
+    # SOC / energy / placement are power-independent -> byte-identical.
+    assert len(slow["chargingStops"]) == n
+    for a, b in zip(fast["chargingStops"], slow["chargingStops"]):
+        assert a["arriveSoc"] == b["arriveSoc"]
+        assert a["departSoc"] == b["departSoc"]
+        assert a["kWh"] == b["kWh"]
+        assert a["distKm"] == b["distKm"]
+    assert [p["soc"] for p in fast["socProfile"]] == [
+        p["soc"] for p in slow["socProfile"]
+    ]
+
+    # A 150 kW station is slower than the 400 kW cap -> strictly more charge time,
+    # and the EU-561-aware total time / ETA can only move later.
+    assert sum(s["durationMin"] for s in slow["chargingStops"]) > sum(
+        s["durationMin"] for s in fast["chargingStops"]
+    )
+    assert slow["summary"]["chargingTimeMin"] > fast["summary"]["chargingTimeMin"]
+    assert slow["summary"]["totalTimeH"] >= fast["summary"]["totalTimeH"]
+
+
+def test_precomputed_enrichment_skips_network_refetch(monkeypatch):
+    """A second pass with precomputed_enrichment must NOT re-call enrich_route --
+    that is what lets us re-time charges at real power with no extra network."""
+    calls = {"n": 0}
+
+    def counting_enrich(geometry, departure_iso=None, **kw):
+        calls["n"] += 1
+        return _fake_enrichment(gradient_pct=3.0, n_segments=16, dist_km_each=50.0)
+
+    monkeypatch.setattr(route_planner.geodata, "enrich_route", counting_enrich)
+    common = dict(
+        distance_km=800.0,
+        duration_s=800.0 / 70.0 * 3600.0,
+        start_soc=60.0,
+        min_soc=15.0,
+        payload_kg=15000.0,
+        departure="2026-05-30T06:00",
+        geometry=GEOMETRY,
+        model_path=DEFAULT_MODEL_PATH,
+    )
+    first = route_planner.plan_route(**common, return_enrichment=True)
+    assert calls["n"] == 1
+    enr = first["_enrichment"]
+    n = len(first["chargingStops"])
+
+    second = route_planner.plan_route(
+        **common,
+        precomputed_enrichment=enr,
+        charger_kw_by_stop=[150.0] * max(1, n),
+    )
+    assert calls["n"] == 1  # no second fetch
+    # Same SOC walk -> same stop placement across the two passes.
+    assert [p["soc"] for p in first["socProfile"]] == [
+        p["soc"] for p in second["socProfile"]
+    ]
+
+
 def test_field_calibration_scales_displayed_energy_only(monkeypatch):
     """The field-calibration factor lowers the DISPLAYED energy headline but must
     NOT change the SOC walk or any charging decision.
