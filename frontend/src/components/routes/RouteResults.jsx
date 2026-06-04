@@ -14,8 +14,8 @@ function InfoCard({ icon, value, label, tint = "#006d32" }) {
       >
         {icon}
       </span>
-      <p className="mt-1 text-xl font-headline font-bold text-on-surface leading-none tabular-nums">{value}</p>
-      <p className="text-[11px] text-on-surface-variant mt-1">{label}</p>
+      <p className="ck-num mt-1.5 text-xl font-bold text-on-surface leading-none">{value}</p>
+      <p className="ck-label text-[9px] text-on-surface-variant mt-1.5">{label}</p>
     </div>
   );
 }
@@ -207,16 +207,16 @@ export default function RouteResults({ plan }) {
 
         <div className="grid grid-cols-3 gap-2 text-center nx-card-inset px-2 py-3">
           <div className="border-r border-outline-variant/30">
-            <p className="text-xl font-headline font-bold text-on-surface tabular-nums">{fmtH(d.drivingH)}h</p>
-            <p className="text-[10px] uppercase tracking-wide text-on-surface-variant mt-0.5">Driving</p>
+            <p className="ck-num text-xl font-bold text-on-surface">{fmtH(d.drivingH)}h</p>
+            <p className="ck-label text-[9px] text-on-surface-variant mt-1">Driving</p>
           </div>
           <div className="border-r border-outline-variant/30">
-            <p className="text-xl font-headline font-bold text-on-surface tabular-nums">{d.breaks ?? 0}</p>
-            <p className="text-[10px] uppercase tracking-wide text-on-surface-variant mt-0.5">Breaks</p>
+            <p className="ck-num text-xl font-bold text-on-surface">{d.breaks ?? 0}</p>
+            <p className="ck-label text-[9px] text-on-surface-variant mt-1">Breaks</p>
           </div>
           <div>
-            <p className="text-xl font-headline font-bold text-on-surface tabular-nums">{fmtH(d.totalH)}h</p>
-            <p className="text-[10px] uppercase tracking-wide text-on-surface-variant mt-0.5">Total</p>
+            <p className="ck-num text-xl font-bold text-on-surface">{fmtH(d.totalH)}h</p>
+            <p className="ck-label text-[9px] text-on-surface-variant mt-1">Total</p>
           </div>
         </div>
 

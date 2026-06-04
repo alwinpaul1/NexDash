@@ -21,6 +21,10 @@ export default {
         error: "rgb(var(--c-error) / <alpha-value>)",
         "outline-variant": "rgb(var(--c-outline-variant) / <alpha-value>)",
 
+        // Cockpit HUD signature lime (see --ck-* tokens in index.css).
+        "ck-lime": "rgb(var(--ck-lime) / <alpha-value>)",
+        "ck-lime-ink": "rgb(var(--ck-lime-ink) / <alpha-value>)",
+
         // Legacy NexOS dark tokens — kept as static hex for any direct refs.
         "nex-bg": "#0a0d0e",
         "nex-panel": "#0e1413",
