@@ -448,6 +448,20 @@ async def chat(req: ChatRequest) -> JSONResponse:
             status_code=500, content={"error": "chat_failed", "detail": str(exc)}
         )
 
+# --------------------------------------------------------------------------- #
+# Static frontend (single-service production deploy)
+# --------------------------------------------------------------------------- #
+# In production (Docker/Railway) the React app is built to ``frontend/dist`` and
+# served by THIS app, so the whole thing is one origin/URL (no CORS, no second
+# deploy). Mounted LAST so every ``/api/*`` route above still takes precedence;
+# ``html=True`` serves ``index.html`` at ``/``. Absent in dev (Vite serves it).
+_FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
+if _FRONTEND_DIST.is_dir():
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/", StaticFiles(directory=str(_FRONTEND_DIST), html=True), name="frontend")
+
+
 def _load_dotenv() -> None:
     """Load KEY=VALUE pairs from a repo-root ``.env`` into the environment.
 
@@ -482,7 +496,9 @@ def main(host: str = "0.0.0.0", port: Optional[int] = None) -> None:
 
     _load_dotenv()
     if port is None:
-        port = int(os.environ.get("NEXDASH_API_PORT", "8000"))
+        # PORT is the convention on most PaaS hosts (Railway, Render, Heroku);
+        # NEXDASH_API_PORT is what the local dev launcher sets; else 8000.
+        port = int(os.environ.get("PORT") or os.environ.get("NEXDASH_API_PORT") or "8000")
     uvicorn.run(app, host=host, port=port)
 
 

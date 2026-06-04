@@ -88,6 +88,21 @@ pytest            # offline and deterministic (the LLM and network are mocked)
 
 `make setup`, `make train`, `make test`, `make serve`, and `make agent` wrap the common steps.
 
+### Deploy (one URL, Railway / any Docker host)
+
+The repo ships a `Dockerfile` that builds the **whole app as one container** — FastAPI serves the `/api` routes *and* the built React frontend, so it's a single origin (no CORS, no second deploy). The image builds the frontend, trains the model (deterministic), and starts the server on `$PORT`.
+
+On **Railway**: New Project → Deploy from this GitHub repo (it auto-detects the `Dockerfile`/`railway.json`), then add the variables and deploy:
+
+| Variable | Scope | Value |
+|----------|-------|-------|
+| `VITE_TOMTOM_API_KEY` | build | your TomTom key (baked into the frontend bundle) |
+| `TOMTOM_API_KEY` | runtime | same TomTom key (server-side routing) |
+| `MINIMAX_API_KEY` | runtime | your MiniMax key (chat agent) |
+| `VITE_MAPTILER_API_KEY` | build | *optional* — nicer map tiles |
+
+Railway exposes the variables to the Docker build automatically. The health check is `/api/health`. Locally you can `docker build -t nexdash . && docker run -p 8000:8000 -e TOMTOM_API_KEY=… -e MINIMAX_API_KEY=… nexdash`.
+
 **MCP server (bonus).** `predict_energy` and `check_reachability` are also exposed as an MCP server. Register it in any MCP host:
 
 ```json
