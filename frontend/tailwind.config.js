@@ -39,9 +39,9 @@ export default {
         body: ['"Inter"', "sans-serif"],
       },
       borderRadius: {
-        // Named radii scale for consistent rounding rhythm.
+        // Mintlify geometry: square — 4px controls, 16px cards (no pill buttons).
         card: "1rem", // 16px — panels / cards
-        control: "0.75rem", // 12px — buttons / inputs
+        control: "0.25rem", // 4px — buttons / inputs
         pill: "9999px",
       },
       boxShadow: {

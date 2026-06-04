@@ -15,89 +15,90 @@
    Dark values are chosen as MID greys (not pure white/black) so those
    composited usages stay subtle and legible.
    ───────────────────────────────────────────────────────────────────────── */
+/* ── Mintlify named palette (reference) ─────────────────────────────────── */
 :root {
-  /* Brand */
-  --c-primary: 0 109 50; /* #006d32 emerald */
-  --c-accent: 0 209 102; /* #00d166 bright emerald */
-  --c-on-primary: 255 255 255;
-  --c-secondary: 0 89 187; /* #0059bb */
-  --c-error: 186 26 26; /* #ba1a1a */
+  --color-mint-green: #0c8c5e;
+  --color-ink-black: #08090a;
+  --color-paper-white: #ffffff;
+  --color-mist-gray: #f2f2f2;
+  --color-cloud-gray: #dddddd;
+}
 
-  /* Surfaces (low → high elevation reads brighter) */
-  --c-background: 247 249 253; /* refined from #f8f9ff, slightly warmer-neutral */
-  --c-surface-lowest: 255 255 255;
-  --c-surface-low: 239 244 255; /* #eff4ff */
-  --c-surface: 229 238 255; /* #e5eeff */
+:root {
+  /* Brand — strict monochrome + a single mint-green spark (Mintlify). */
+  --c-primary: 12 140 94; /* #0c8c5e mint green */
+  --c-accent: 12 140 94;
+  --c-on-primary: 255 255 255;
+  --c-secondary: 8 9 10; /* #08090a ink-black neutral */
+  --c-error: 186 26 26;
+
+  /* Surfaces — paper-white canvas; white cards separated by cloud-gray borders. */
+  --c-background: 255 255 255; /* paper white */
+  --c-surface-lowest: 255 255 255; /* white cards (border does the work) */
+  --c-surface-low: 248 248 248; /* faintest wash */
+  --c-surface: 242 242 242; /* #f2f2f2 mist */
 
   /* Text */
-  --c-on-surface: 11 28 48; /* #0b1c30 */
-  --c-on-surface-variant: 60 74 61; /* #3c4a3d */
+  --c-on-surface: 8 9 10; /* #08090a ink */
+  --c-on-surface-variant: 107 107 107; /* muted gray */
 
-  /* Lines */
-  --c-outline-variant: 187 203 185; /* #bbcbb9 */
+  /* Lines — cloud-gray hairline */
+  --c-outline-variant: 221 221 221; /* #dddddd */
 
-  /* Elevation (light: soft cool shadows) */
-  --shadow-sm: 0 1px 2px rgb(11 28 48 / 0.06);
-  --shadow-md: 0 4px 14px rgb(11 28 48 / 0.08);
-  --shadow-lg: 0 12px 32px rgb(11 28 48 / 0.12);
-  --shadow-ring: 0 0 0 3px rgb(0 109 50 / 0.28);
+  /* Elevation — whispered (3–5%, 2px offset); depth is felt, not declared. */
+  --shadow-sm: 0 2px 4px rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 12px rgb(8 9 10 / 0.06);
+  --shadow-lg: 0 12px 28px rgb(8 9 10 / 0.08);
+  --shadow-ring: 0 0 0 3px rgb(12 140 94 / 0.25);
 
   /* Theme-aware scrollbar */
-  --scrollbar-thumb: 187 203 185;
-  --scrollbar-thumb-hover: 60 74 61;
+  --scrollbar-thumb: 221 221 221;
+  --scrollbar-thumb-hover: 150 150 150;
 
   /* chat-md table border hook (used below) */
-  --md-border: #d9e2d6;
+  --md-border: #f2f2f2;
 
-  /* ── Cockpit HUD (instrument-cluster) ──────────────────────────────────
-     Signature lime accent + IBM Plex Mono numerals + a faint 44px grid.
-     The .ck-* utilities (see @layer components) are theme-aware so DARK is
-     the cockpit and LIGHT is a daylight variant of the same language. */
-  --ck-lime: 198 242 78; /* #c6f24e — signature lime (fills, arc, glow) */
-  --ck-lime-ink: 101 135 12; /* #65870c — lime for TEXT (legible on light) */
-  --ck-grid: 17 24 20; /* grid-line base: dark lines on a light panel */
-  --ck-grid-alpha: 0.05;
+  /* Cockpit utilities repointed to MINT so any token-driven accent stays
+     within the monochrome-plus-one-green rule. */
+  --ck-lime: 12 140 94; /* mint fills / arc / glow */
+  --ck-lime-ink: 12 140 94; /* mint text */
+  --ck-grid: 17 24 20;
+  --ck-grid-alpha: 0.04;
 
   color-scheme: light;
 }
 
 [data-theme="dark"] {
-  /* Brand — emerald reads slightly brighter on dark for parity. */
-  --c-primary: 16 185 129; /* #10b981 nex-accent */
-  --c-accent: 52 211 153; /* #34d399 nex-accent-bright */
-  --c-on-primary: 6 14 12; /* near-black so text on emerald stays legible */
-  --c-secondary: 96 165 250; /* lifted blue for dark contrast */
-  --c-error: 248 113 113; /* lifted red */
+  /* Dark monochrome variant — same single-accent rule with a brighter mint. */
+  --c-primary: 28 196 132; /* #1cc484 brighter mint on dark */
+  --c-accent: 28 196 132;
+  --c-on-primary: 4 14 10;
+  --c-secondary: 200 200 200;
+  --c-error: 248 113 113;
 
-  /* Surfaces — charcoal panels from the NexOS palette, layered. */
-  --c-background: 10 13 14; /* #0a0d0e nex-bg */
-  --c-surface-lowest: 14 20 19; /* #0e1413 nex-panel */
-  --c-surface-low: 16 24 23; /* #101817 nex-panel-alt */
-  --c-surface: 23 32 31; /* a touch lighter for raised chips */
+  --c-background: 9 10 11; /* near-black */
+  --c-surface-lowest: 22 24 25;
+  --c-surface-low: 28 30 31;
+  --c-surface: 36 38 39;
 
-  /* Text */
-  --c-on-surface: 230 237 240; /* light slate */
-  --c-on-surface-variant: 156 163 175; /* #9ca3af muted */
+  --c-on-surface: 245 245 245;
+  --c-on-surface-variant: 160 160 160;
 
-  /* Lines — MID grey so …/40, …/60 borders are visible but soft, not glaring. */
-  --c-outline-variant: 120 132 128;
+  --c-outline-variant: 70 72 73;
 
-  /* Elevation (dark: deeper, near-black shadows) */
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
-  --shadow-md: 0 6px 18px rgb(0 0 0 / 0.45);
-  --shadow-lg: 0 16px 40px rgb(0 0 0 / 0.55);
-  --shadow-ring: 0 0 0 3px rgb(52 211 153 / 0.35);
+  --shadow-sm: 0 2px 4px rgb(0 0 0 / 0.4);
+  --shadow-md: 0 6px 18px rgb(0 0 0 / 0.5);
+  --shadow-lg: 0 16px 40px rgb(0 0 0 / 0.6);
+  --shadow-ring: 0 0 0 3px rgb(28 196 132 / 0.3);
 
-  /* Theme-aware scrollbar */
   --scrollbar-thumb: 255 255 255;
   --scrollbar-thumb-hover: 255 255 255;
 
-  --md-border: #28322f;
+  --md-border: #242627;
 
-  /* Cockpit HUD — dark variant: bright lime reads great on near-black, grid
-     lines flip to a faint light tint. */
-  --ck-lime-ink: 198 242 78; /* #c6f24e bright lime on dark */
-  --ck-grid: 233 244 240; /* #e9f4f0 — light lines on a dark panel */
+  --ck-lime: 28 196 132;
+  --ck-lime-ink: 28 196 132;
+  --ck-grid: 233 244 240;
   --ck-grid-alpha: 0.05;
 
   color-scheme: dark;
@@ -115,7 +116,9 @@
   h2,
   h3,
   .font-headline {
-    font-family: "Sora", sans-serif;
+    /* Mintlify: Inter is the only family — no display face. */
+    font-family: "Inter", sans-serif;
+    letter-spacing: -0.01em;
   }
 }
 
@@ -198,18 +201,18 @@
     background-size: 44px 44px;
   }
 
-  /* .ck-num — tabular IBM Plex Mono numerals for data readouts. */
+  /* .ck-num — tabular numerals. Mintlify uses Inter everywhere (no mono). */
   .ck-num {
-    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
     font-feature-settings: "tnum" 1;
     font-variant-numeric: tabular-nums;
   }
 
-  /* .ck-label — uppercase, letter-spaced mono caption (HUD section labels). */
+  /* .ck-label — uppercase eyebrow caption in Inter (Mintlify +0.05em). */
   .ck-label {
-    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
     text-transform: uppercase;
-    letter-spacing: 0.18em;
+    letter-spacing: 0.05em;
   }
 
   /* .ck-lime — signature lime ink, theme-aware so it stays legible on light. */
@@ -532,18 +535,18 @@
   width: 16px;
   height: 16px;
   border-radius: 9999px;
-  background: #006d32;
+  background: #0c8c5e;
   border: 2px solid #fff;
-  box-shadow: 0 0 0 2px rgba(0, 109, 50, 0.3);
+  box-shadow: 0 0 0 2px rgba(12, 140, 94, 0.3);
   cursor: pointer;
 }
 .route-slider::-moz-range-thumb {
   width: 16px;
   height: 16px;
   border-radius: 9999px;
-  background: #006d32;
+  background: #0c8c5e;
   border: 2px solid #fff;
-  box-shadow: 0 0 0 2px rgba(0, 109, 50, 0.3);
+  box-shadow: 0 0 0 2px rgba(12, 140, 94, 0.3);
   cursor: pointer;
 }
 
