@@ -3,6 +3,7 @@
 import SocGauge from "./SocGauge.jsx";
 import TripTimeline from "./TripTimeline.jsx";
 import ChargingStopsList from "./ChargingStopsList.jsx";
+import { to12h } from "../../lib/time.js";
 
 function InfoCard({ icon, value, label, tint = "#006d32" }) {
   return (
@@ -96,7 +97,7 @@ export default function RouteResults({ plan }) {
               <span className="material-symbols-outlined" style={{ fontSize: "14px" }}>
                 schedule
               </span>
-              ETA {s.etaLabel || "--:--"}
+              ETA {s.etaLabel ? to12h(s.etaLabel) : "--:--"}
             </span>
           </div>
         </div>
@@ -154,7 +155,7 @@ export default function RouteResults({ plan }) {
                     {st.isFinal ? " · destination" : ""}
                   </p>
                   <p className="text-[11px] text-on-surface-variant tabular-nums">
-                    {Math.round(st.distKm)} km · ETA {st.etaLabel} · arrive {Math.round(st.arriveSoc)}% SOC
+                    {Math.round(st.distKm)} km · ETA {to12h(st.etaLabel)} · arrive {Math.round(st.arriveSoc)}% SOC
                     {st.dropWeightKg > 0 ? ` · drop ${(st.dropWeightKg / 1000).toFixed(1)} t` : ""}
                   </p>
                 </div>

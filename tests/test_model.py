@@ -26,6 +26,7 @@ import pytest
 from nexdash.data_gen import generate_dataset
 from nexdash.features import FEATURE_COLUMNS, TARGET
 from nexdash.model import EnergyModel, predict_energy, train_model
+from nexdash.physics import segment_energy_kwh
 
 
 # Small but non-trivial dataset; deterministic via the generator's seed.
@@ -229,3 +230,70 @@ def test_predict_cache_invalidated_on_retrain(tmp_path) -> None:
     v2 = predict_energy(row, model_path=path)
     # The fresh model must drive the prediction (not the cached first model).
     assert v2 == pytest.approx(float(b.predict(row)[0])), "stale model served after retrain"
+
+
+# --------------------------------------------------------------------------- #
+# Physics-residual structure: no out-of-envelope saturation
+# --------------------------------------------------------------------------- #
+
+
+def test_residual_flag_round_trips(dataset: pd.DataFrame, tmp_path) -> None:
+    """A trained model is a residual model and persists that flag through save/load."""
+    path = tmp_path / "m.joblib"
+    model = train_model(dataset, save=True, path=path)
+    assert model.residual_target is True
+    assert EnergyModel.load(path).residual_target is True
+
+
+def test_no_saturation_on_out_of_envelope_climb(trained: EnergyModel) -> None:
+    """On a far out-of-envelope steep climb the model must TRACK physics, not floor.
+
+    The pre-residual raw-kWh model saturated at its largest seen label (~290 kWh)
+    on a 100 km / +6 % leg while physics rose past 800 kWh — a -64 % under-
+    prediction in the strand-the-truck direction. The physics-residual model adds
+    physics back structurally, so its prediction must land within a tight band of
+    physics there (the tree only supplies a small bounded residual).
+    """
+    for dist, grad in [(100.0, 6.0), (200.0, 4.0), (350.0, 3.0)]:
+        row = {
+            "distance_km": dist,
+            "payload_t": 18.0,
+            "speed_kph": 75.0,
+            "gradient_pct": grad,
+            "temperature_c": 10.0,
+            "wind_mps": 0.0,
+        }
+        model_kwh = float(trained.predict(row)[0])
+        physics_kwh = segment_energy_kwh(**row)
+        # Must be near physics, NOT saturated far below it. Allow a generous 20%
+        # band for the learned residual extrapolation; the OLD model was -64%.
+        rel = (model_kwh - physics_kwh) / physics_kwh
+        assert rel > -0.20, (
+            f"model saturated below physics at {dist}km/{grad}%: "
+            f"model={model_kwh:.1f} physics={physics_kwh:.1f} ({rel*100:.0f}%)"
+        )
+
+
+def test_no_saturation_on_long_flat_distance(trained: EnergyModel) -> None:
+    """On a flat leg past the training max distance, the model must track physics.
+
+    The raw-kWh model flat-lined at ~231 kWh for every distance >= 300 km while
+    physics kept climbing linearly (798 kWh at 700 km, -71 %). The residual model
+    must follow physics' linear distance growth instead.
+    """
+    for dist in [400.0, 500.0, 700.0]:
+        row = {
+            "distance_km": dist,
+            "payload_t": 18.0,
+            "speed_kph": 75.0,
+            "gradient_pct": 0.0,
+            "temperature_c": 10.0,
+            "wind_mps": 0.0,
+        }
+        model_kwh = float(trained.predict(row)[0])
+        physics_kwh = segment_energy_kwh(**row)
+        rel = (model_kwh - physics_kwh) / physics_kwh
+        assert rel > -0.20, (
+            f"model saturated below physics at {dist}km flat: "
+            f"model={model_kwh:.1f} physics={physics_kwh:.1f} ({rel*100:.0f}%)"
+        )

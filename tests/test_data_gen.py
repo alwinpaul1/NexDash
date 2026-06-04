@@ -114,13 +114,21 @@ def test_energy_mostly_positive_but_regen_allows_negative(df: pd.DataFrame) -> N
     A real BEV energy meter logs *net-negative* consumption on a long steep
     descent (regen returns more charge than the segment spends). The generator
     must preserve that signal rather than clamping it away, so we assert (a) the
-    vast majority of segments are positive, and (b) the only negative labels are
+    large majority of segments are positive, and (b) the only negative labels are
     genuine descents (gradient < 0). A generator that clamped all labels positive
     would erase the regenerative-braking failure mode this dataset must teach.
+
+    NOTE: the steep-short densification stratum (~12% of rows, full +/-6% grade
+    over short legs) intentionally adds more steep descents, so the net-negative
+    fraction is a bit higher than in the pre-densification sample (~11% vs ~7%).
+    That is the regen signal we WANT, so the positive-fraction floor is set to a
+    comfortable 0.85 rather than 0.9 — still a large majority, just honest about
+    the deliberately steeper grade mix.
     """
     target = df[TARGET_COLUMN]
-    # Overwhelmingly positive: only descents can go negative, and they are rare.
-    assert (target > 0).mean() > 0.9
+    # Large majority positive: only descents can go negative; the steep-short
+    # stratum makes them a bit more common but still a clear minority.
+    assert (target > 0).mean() > 0.85
     # Every negative label must be a descent — never an uphill/flat segment.
     negatives = df[target < 0]
     assert (negatives["gradient_pct"] < 0).all(), "only descents may record net regen"
@@ -137,19 +145,26 @@ def test_implied_net_climb_is_physically_bounded() -> None:
     climb stays within a realistic ceiling. This is the generator's real, seed-
     independent guarantee, so we check it across MANY random seeds.
 
+    The bound has TWO regimes by design (see data_gen ``_STEEP_SHORT_FRACTION``):
+    the main sample is capped at ``_MAX_NET_CLIMB_M`` (1500 m), while the
+    deliberate steep-short stratum draws distance <= 30 km at up to +/-6 %, whose
+    net climb is at most ``30 km * sin(atan(6/100)) ~ 1800 m`` — still a
+    geographically plausible short Alpine-foothill ramp, not a phantom mountain.
+    We assert the combined ceiling so the steep-short densification is allowed but
+    the old long-leg "phantom mountain" explosion (~5 km climbs) is still caught.
+
     We deliberately do NOT assert that labels stay under the battery capacity: a
     rare long + heavy + cold + headwind leg can legitimately need more than one
-    charge — a real "must charge mid-route" segment, not a bug. We DO assert a
-    generous physical ceiling that still catches the old "phantom mountain"
-    explosion (labels once reached ~5x battery) without falsely banning real
-    extremes.
+    charge — a real "must charge mid-route" segment, not a bug.
     """
     for seed in range(25):
         d = generate_dataset(n_samples=2000, seed=seed)
         net_climb_m = (
             d["distance_km"] * 1000.0 * np.sin(np.arctan(d["gradient_pct"] / 100.0))
         ).abs()
-        assert net_climb_m.max() <= 1510.0, (
+        # Combined ceiling: main sample <=1500 m, steep-short stratum <=~1800 m
+        # (30 km at 6%). 1850 m gives a small numerical margin above that bound.
+        assert net_climb_m.max() <= 1850.0, (
             f"seed {seed}: implied net climb {net_climb_m.max():.0f} m exceeds the cap"
         )
         # Physical sanity ceiling: above any real extreme (~800 kWh) but far below

@@ -717,7 +717,9 @@ export default function RouteMap({ plan, waypoints = [] }) {
                     <span className="bt-label">Battery Level</span>
                     <span className="bt-value">
                       <span className="bt-dot" style={{ background: seg.color }} />
-                      {Math.round(seg.startSoc)}% → {Math.round(seg.endSoc)}%
+                      {Math.round(seg.startSoc) === Math.round(seg.endSoc)
+                        ? `${Math.round(seg.startSoc)}%`
+                        : `${Math.round(seg.startSoc)}% → ${Math.round(seg.endSoc)}%`}
                     </span>
                   </Tooltip>
                 </Polyline>

@@ -157,15 +157,21 @@ def test_output_contract_keys_and_bounds(model_path):
     assert result["energy_available_kwh"] >= 0.0
 
 
-def test_out_of_envelope_segment_flags_low_confidence(model_path):
-    """A physically implausible segment must trip the physics sanity-clamp.
+def test_out_of_envelope_segment_uses_conservative_max(model_path):
+    """An out-of-envelope steep climb must never quote LESS than physics.
 
-    A +4.5% grade sustained over 110 km implies a ~5 km net climb — it cannot
-    occur in the (physically-coupled) training data, so the model extrapolates
-    and *under*-predicts. The decision must NOT use that optimistic number: the
-    cross-check has to flag low confidence and fall back to the conservative
-    physics estimate, or the tool would green-light a trip that strands a truck.
-    This test fails if the clamp is removed or quietly trusts the model.
+    A +4.5% grade sustained over 110 km implies a ~5 km net climb — outside the
+    (physically-coupled) training envelope. The OLD raw-kWh model *saturated* and
+    badly under-predicted here, so the cross-check had to flag low confidence and
+    fall back to physics. The energy model now learns the PHYSICS RESIDUAL
+    (`nexdash.model`), so it TRACKS physics on this leg instead of saturating —
+    model and physics agree to within a few percent, the divergence guard
+    correctly does NOT fire, and confidence is high. That is the fix working.
+
+    The safety contract is unchanged and still asserted here: the decision uses
+    the conservative ``max(model, physics)`` and can never quote less than
+    physics. We do NOT assert the model under-predicts anymore — asserting the old
+    saturation would lock in the very bug this change removed.
     """
     result = check_reachability(
         soc_pct=80.0,
@@ -176,11 +182,17 @@ def test_out_of_envelope_segment_flags_low_confidence(model_path):
         temperature_c=-12.0,
         model_path=model_path,
     )
-    assert result["confidence"] == "low"
-    # Model under-predicts vs first-principles here, and the decision uses the
-    # conservative (higher) value — never the optimistic one.
-    assert result["physics_kwh"] > result["model_kwh"]
-    assert result["energy_needed_kwh"] == pytest.approx(result["physics_kwh"], rel=1e-6)
+    # The conservative max guard is intact: energy_needed is never below physics.
+    assert result["energy_needed_kwh"] == pytest.approx(
+        max(result["model_kwh"], result["physics_kwh"]), rel=1e-6
+    )
+    assert result["energy_needed_kwh"] >= result["physics_kwh"] - 1e-6
+    # The residual model now tracks physics here (no saturation): the two agree
+    # well inside the divergence band, so confidence is high.
+    assert result["confidence"] == "high"
+    assert abs(result["model_kwh"] - result["physics_kwh"]) <= 0.10 * abs(
+        result["physics_kwh"]
+    )
 
 
 def test_in_envelope_segment_is_high_confidence(model_path):
@@ -232,13 +244,17 @@ def test_out_of_range_soc_and_reserve_are_clamped(model_path):
     assert r["usable_after_reserve_kwh"] <= TRUCK.battery_kwh + 1e-9
 
 
-def test_low_confidence_note_names_the_estimate_actually_used(model_path):
-    """When the model and physics diverge, the note must name the value USED.
+def test_confidence_note_names_the_estimate_actually_used(model_path):
+    """The note must name whichever estimate actually drove the decision.
 
     WHY: a previous note always claimed "the conservative physics value is used",
-    which is false when the model value drove the decision. Here (an out-of-
-    envelope steep climb) physics is the conservative pick, so the note must say
-    so via an unambiguous '(physics)' tag matching ``energy_needed_kwh``.
+    which is false when the model value drove the decision. The note tag must
+    always match the value in ``energy_needed_kwh`` (which is the conservative
+    ``max(model, physics)``). Since the physics-residual model now tracks physics
+    on this formerly out-of-envelope steep climb, confidence is high and the model
+    value is used — so the note must NOT claim physics drove it. We assert the tag
+    matches the value used regardless of which branch is taken, so the test stays
+    honest whether or not the guard fires.
     """
     r = check_reachability(
         soc_pct=80.0,
@@ -249,11 +265,17 @@ def test_low_confidence_note_names_the_estimate_actually_used(model_path):
         temperature_c=-12.0,
         model_path=model_path,
     )
-    assert r["confidence"] == "low"
-    expected_tag = "(physics)" if r["energy_needed_kwh"] == r["physics_kwh"] else "(the model)"
-    assert expected_tag in r["confidence_note"]
     # The decision must use the conservative (higher) of the two estimates.
     assert r["energy_needed_kwh"] == pytest.approx(max(r["model_kwh"], r["physics_kwh"]))
+    # The note tag must match the estimate actually used (no dishonest claim).
+    used_physics = r["energy_needed_kwh"] == pytest.approx(r["physics_kwh"])
+    if r["confidence"] == "low":
+        expected_tag = "(physics)" if used_physics else "(the model)"
+        assert expected_tag in r["confidence_note"]
+    else:
+        # High confidence: the model value is used; the note must not claim the
+        # conservative physics fallback drove the number.
+        assert "(physics)" not in r["confidence_note"]
 
 
 def test_routine_descent_is_not_falsely_flagged_out_of_envelope(model_path):

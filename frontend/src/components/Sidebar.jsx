@@ -21,11 +21,7 @@ export default function Sidebar() {
         <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant/70">
           Workspace
         </p>
-        <span className="group relative flex items-center gap-3 px-3 py-2.5 rounded-control bg-primary text-on-primary font-medium shadow-nx-sm">
-          <span
-            aria-hidden="true"
-            className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-1 rounded-pill bg-on-primary/80"
-          />
+        <span className="group flex items-center gap-3 px-3 py-2.5 rounded-control bg-primary text-on-primary font-medium shadow-nx-sm">
           <span className="material-symbols-outlined" style={{ fontSize: "20px" }}>
             route
           </span>

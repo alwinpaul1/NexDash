@@ -9,8 +9,6 @@ direction-agnostic gradient, mass-on-slope interaction).
 
 from __future__ import annotations
 
-import math
-
 import pandas as pd
 import pytest
 
@@ -172,11 +170,13 @@ def test_interaction_and_power_features_are_exact():
     assert out["payload_x_distance"] == pytest.approx(
         SAMPLE["payload_t"] * SAMPLE["distance_km"]
     )
-    # net_climb_km: the EXACT gravitational-work driver = distance * sin(atan(grad/100)).
-    assert "net_climb_km" in ENGINEERED_COLUMNS
-    assert out["net_climb_km"] == pytest.approx(
-        SAMPLE["distance_km"] * math.sin(math.atan(SAMPLE["gradient_pct"] / 100.0))
+    # distance x signed gradient: gravity-work proxy (signed, drives regen credit).
+    assert out["distance_x_gradient"] == pytest.approx(
+        SAMPLE["distance_km"] * SAMPLE["gradient_pct"]
     )
+    # net_climb_km was removed (collinear with distance_x_gradient; physics now
+    # enters structurally via the residual target in nexdash.model).
+    assert "net_climb_km" not in ENGINEERED_COLUMNS
 
 
 def test_raw_features_passed_through_unchanged():

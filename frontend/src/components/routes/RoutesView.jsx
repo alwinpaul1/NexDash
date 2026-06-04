@@ -5,7 +5,6 @@ import PlannerForm from "./PlannerForm.jsx";
 import RouteMap from "./RouteMap.jsx";
 import RouteResults from "./RouteResults.jsx";
 import ElevationProfile from "./ElevationProfile.jsx";
-import SpeedProfile from "./SpeedProfile.jsx";
 import ConditionsPanel from "./ConditionsPanel.jsx";
 
 function nowLocalISO() {
@@ -49,48 +48,12 @@ function isFallbackPlan(p) {
   return Array.isArray(a) && typeof a[0] === "string" && a[0].startsWith("Client-side fallback estimate");
 }
 
-// Compose the one-shot message asking the agent to narrate the ALREADY-COMPUTED
-// plan from final numbers WITHOUT re-calling tools.
-function buildOptimizeSummaryPrompt({ planner, plan }) {
-  const s = plan.summary || {};
-  const fmt = (v, d = 1) => (Number.isFinite(v) ? Number(v).toFixed(d) : "—");
-  const origin = planner.origin?.label || "the origin";
-  const lastDest = [...(planner.destinations || [])].reverse().find((d) => d?.label);
-  const destination = lastDest?.label || "the destination";
-
-  const stops = Array.isArray(plan.chargingStops) ? plan.chargingStops : [];
-  const nStops = Number.isFinite(s.chargingStops) ? s.chargingStops : stops.length;
-  const firstStation = stops[0]?.name;
-  const eu561 = s.driver?.eu561ok;
-  const eu561Text = eu561 === true ? "compliant" : eu561 === false ? "NOT compliant" : "not evaluated";
-
-  const lines = [
-    `Origin: ${origin}`,
-    `Destination: ${destination}`,
-    `Distance: ${fmt(s.distanceKm)} km`,
-    `Energy: ${fmt(s.energyKwh)} kWh (${fmt(s.kwhPer100)} kWh/100km)`,
-    `Arrival battery (SOC): ${fmt(s.arrivalSoc)}%`,
-    `Minimum SOC along the route: ${fmt(s.minSoc)}%`,
-    `Charging stops: ${nStops}${firstStation ? ` (first: ${firstStation})` : ""}`,
-    `Total trip time: ${fmt(s.totalTimeH, 2)} h`,
-    `ETA: ${s.etaLabel || "—"}`,
-    `EU 561 driver-hours: ${eu561Text}`,
-    `Inputs — start SOC ${planner.startSoc}%, min SOC ${planner.minSoc}%, payload ${(planner.payloadKg ?? 0) / 1000} t, reserve ${planner.reservePct}%`,
-  ];
-
-  return (
-    "I just optimized this route — summarize it for the dispatcher in 2-4 sentences " +
-    "(do not call tools; these numbers are final):\n" +
-    lines.join("\n")
-  );
-}
-
 export default function RoutesView() {
   const [planner, setPlanner] = useState(initialPlanner);
   const [status, setStatus] = useState("idle"); // idle | computing | done | error
   const [error, setError] = useState(null);
   const [plan, setPlan] = useState(null);
-  const { postSummary, registerPlanRequestHandler } = useChat();
+  const { registerPlanRequestHandler } = useChat();
 
   const setStartSoc = useCallback((v) => setPlanner((p) => ({ ...p, startSoc: v })), []);
   const setMinSoc = useCallback((v) => setPlanner((p) => ({ ...p, minSoc: v })), []);
@@ -166,29 +129,15 @@ export default function RoutesView() {
         const result = await optimizeRoute(activePlanner);
         setPlan(result);
         setStatus("done");
-
-        // Post an agent-narrated summary of the just-computed plan into the chat.
-        // Only for a REAL plan with a summary (not the offline fallback). The
-        // postSummary key de-dupes so one resolved plan narrates exactly once.
-        // Skipped for chat-initiated plans — the agent already narrated, and
-        // posting again would re-trigger the agent (loop).
-        if (!skipChatSummary && result?.summary && !isFallbackPlan(result)) {
-          const prompt = buildOptimizeSummaryPrompt({ planner: activePlanner, plan: result });
-          const key = [
-            result.summary.distanceKm,
-            result.summary.energyKwh,
-            result.summary.etaLabel,
-            result.summary.arrivalSoc,
-            result.summary.chargingStops,
-          ].join("|");
-          postSummary(prompt, key);
-        }
+        // NOTE: the Optimize button does NOT post to the chat. It only fills the
+        // result panel. Natural-language planning lives entirely in the chat,
+        // where the agent narrates its own reply.
       } catch (err) {
         setError(err?.message || "Could not plan the route.");
         setStatus("error");
       }
     },
-    [planner, postSummary]
+    [planner]
   );
 
   // Apply a chat-initiated planRequest: fill the planner from the agent's
@@ -322,11 +271,6 @@ export default function RoutesView() {
             <>
               <ConditionsPanel conditions={plan.conditions} />
               <ElevationProfile profile={plan.elevationProfile} chargingStops={plan.chargingStops} />
-              <SpeedProfile
-                speedLimits={plan.speedLimits}
-                totalKm={plan.summary?.distanceKm}
-                chargingStops={plan.chargingStops}
-              />
             </>
           )}
 

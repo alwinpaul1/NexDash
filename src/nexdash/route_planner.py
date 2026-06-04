@@ -77,7 +77,9 @@ Honest approximations
   10 h driving day (max 2x/week) is opt-in via ``allow_extended_days`` and any duty
   already worked this week via ``hours_already_driven_this_week``; with both at
   their defaults the daily cap stays 9 h and the week is assumed fresh at
-  departure. The reduced (9 h) daily rest and multi-manning are not modelled.
+  departure. The reduced (9 h) daily rest (max 3x/week) is opt-in via
+  ``allow_reduced_rest_days``; with the default 0 every daily rest is 11 h.
+  Multi-manning is not modelled.
 * **Linear SOC within a chunk.** The SOC profile interpolates linearly across
   each chunk; the model only predicts the chunk endpoints.
 
@@ -143,11 +145,14 @@ EU561_EXT_DAILY_MAX_DRIVE_H: float = 10.0              # extended daily driving 
 EU561_MAX_EXT_DAYS_PER_WEEK: int = 2                   # max 10 h days per week
 EU561_WEEKLY_MAX_DRIVE_H: float = 56.0                 # max weekly driving
 #: Daily rest inserted once the daily driving cap is hit. Regular EU 561 daily
-#: rest is 11 h; the 9 h reduced-rest option (max 3x/week) is not modelled — 11 h
-#: is the conservative, always-legal choice (it inserts rest at least as early).
+#: rest is 11 h (Art 8(2)); the REDUCED daily rest of 9 h (Art 8(4), permitted at
+#: most 3x between two weekly rests) is opt-in via ``allow_reduced_rest_days``.
+#: With the default 0 every rest is the conservative, always-legal 11 h.
 #: The 10 h extended driving day (max 2x/week) is opt-in via
 #: ``allow_extended_days``; with the default 0 the cap stays 9 h.
 EU561_DAILY_REST_H: float = 11.0
+EU561_REDUCED_DAILY_REST_H: float = 9.0               # reduced daily rest (opt-in)
+EU561_MAX_REDUCED_RESTS_PER_WEEK: int = 3             # max reduced daily rests / week
 
 # --- Per-segment speed shaping (geometry mode only) ------------------------- #
 #: A loaded truck loses speed on sustained climbs and is speed-governed (barely
@@ -418,6 +423,7 @@ def plan_route(
     leg_timings: Optional[list[dict[str, Any]]] = None,
     speed_limits: Optional[list[dict[str, Any]]] = None,
     allow_extended_days: int = 0,
+    allow_reduced_rest_days: int = 0,
     hours_already_driven_this_week: float = 0.0,
     model_path: Union[str, Path] = DEFAULT_MODEL_PATH,
 ) -> dict[str, Any]:
@@ -454,6 +460,14 @@ def plan_route(
             is spent later days revert to the 9 h cap (inserting the 11 h rest
             earlier). With the default ``0`` every day caps at 9 h and the output
             is byte-identical to before this option existed.
+        allow_reduced_rest_days: How many of this trip's daily rests may be the
+            EU 561 REDUCED 9 h daily rest (Art 8(4)) instead of the regular 11 h
+            (clamped to ``[0, EU561_MAX_REDUCED_RESTS_PER_WEEK]`` = ``[0, 3]``,
+            the statutory max of 3 reduced rests between two weekly rests). Each
+            inserted daily rest consumes one allowance and is shortened to 9 h;
+            once the allowance is spent later rests revert to 11 h. With the
+            default ``0`` every daily rest is 11 h and the output is byte-identical
+            to before this option existed.
         hours_already_driven_this_week: Driving hours already worked earlier in
             the current EU 561 fixed week, before this trip's departure (clamped
             ``>= 0``). Seeded as prior driving into the heaviest 7-day window so a
@@ -490,6 +504,11 @@ def plan_route(
     # EU 561 narrowings (opt-in; defaults reproduce today's output exactly).
     # allow_extended_days: how many days may use the 10 h cap (clamped [0, 2]).
     allow_extended_days = int(max(0, min(EU561_MAX_EXT_DAYS_PER_WEEK, int(allow_extended_days))))
+    # allow_reduced_rest_days: how many daily rests may be 9 h instead of 11 h
+    # (clamped [0, 3]). Each inserted rest consumes one; once spent, rests revert to 11 h.
+    allow_reduced_rest_days = int(
+        max(0, min(EU561_MAX_REDUCED_RESTS_PER_WEEK, int(allow_reduced_rest_days)))
+    )
     # hours_already_driven_this_week: prior duty seeded into the weekly window.
     hours_already_driven_this_week = max(0.0, float(hours_already_driven_this_week))
 
@@ -538,6 +557,10 @@ def plan_route(
     # flag, recorded on each per_day entry.
     ext_days_used = 0
     day_extended = False
+    # Reduced-rest accounting: each inserted daily rest may be shortened to 9 h
+    # while reduced-rest slots remain (opt-in via allow_reduced_rest_days), else
+    # 11 h. A slot is consumed the moment a rest is inserted at 9 h.
+    reduced_rests_used = 0
 
     def _day_cap_h() -> float:
         """Applied daily driving cap (h) for the current day, EU 561 extended-aware."""
@@ -892,19 +915,27 @@ def plan_route(
                     "extended": day_extended,
                 }
             )
+            # Reduced (9 h) daily rest while opt-in slots remain (Art 8(4)),
+            # else the regular 11 h. With allow_reduced_rest_days=0 this is always
+            # 11 h, byte-identical to before this option existed.
+            if reduced_rests_used < allow_reduced_rest_days:
+                rest_h = EU561_REDUCED_DAILY_REST_H
+                reduced_rests_used += 1
+            else:
+                rest_h = EU561_DAILY_REST_H
             rest_start = clock
-            rest_end = rest_start + timedelta(hours=EU561_DAILY_REST_H)
+            rest_end = rest_start + timedelta(hours=rest_h)
             segments.append(
                 {
                     "type": "daily_rest",
                     "startTime": _hhmm(rest_start),
                     "endTime": _hhmm(rest_end),
-                    "durationMin": round(EU561_DAILY_REST_H * 60.0),
-                    "label": "Daily Rest (11h)",
+                    "durationMin": round(rest_h * 60.0),
+                    "label": f"Daily Rest ({round(rest_h)}h)",
                     "dateLabel": rest_start.strftime("%a %d %b"),
                 }
             )
-            total_daily_rest_min += EU561_DAILY_REST_H * 60.0
+            total_daily_rest_min += rest_h * 60.0
             clock = rest_end
             day_drive_min = 0.0
             drive_since_break_min = 0.0  # the 11 h rest also clears the break clock
@@ -1166,9 +1197,10 @@ def plan_route(
         assumptions.append(
             f"Displayed energy is scaled by a documented field-calibration factor of "
             f"{field_calibration:.2f} so the headline matches observed laden eActros 600 "
-            f"consumption (real-world laden 40 t tests cluster at ~0.96-1.03 kWh/km — Daimler tour "
-            f"1.03, Vandijck 0.96, ADAC 0.88) rather than the higher constant-speed steady-state "
-            f"physics (~1.22 kWh/km warm anchor at the calibrated CdA 5.0). Charging and "
+            f"consumption (real-world laden tests span ~0.88-1.03 kWh/km — ADAC 0.88 (40 t, German "
+            f"roads), Daimler 15,000 km tour 1.03 (40 t), Vandijck 0.96) rather than the higher "
+            f"constant-speed steady-state basis (the energy model's own 40 t / 80 km/h / 20 degC flat "
+            f"anchor is ~1.14 kWh/km at the calibrated cd 0.50 / CdA 5.0). Charging and "
             f"reachability decisions still use "
             f"the un-discounted conservative estimate, so this only affects the displayed total, "
             f"never whether or when the truck charges. See REAL_WORLD_CALIBRATION.md."
@@ -1176,7 +1208,8 @@ def plan_route(
     if _speed_source == "speed-limit":
         assumptions.append(
             "Per-segment speed follows the route's POSTED speed limits (e.g. ~30 km/h in a "
-            "village, 50 in town, 80 on the autobahn — capped at the 80 km/h truck limit), then "
+            "village, 50 in town, 60 on a rural Landstrasse, 80 on the autobahn — capped at the "
+            "80 km/h truck limit), then "
             "scaled uniformly so the total drive time equals the routing engine's measured "
             "(traffic-aware) duration — so road-by-road speeds vary while the overall ETA is exact."
         )
@@ -1199,16 +1232,22 @@ def plan_route(
             "(Art 4(d): a period used exclusively for recuperation) — valid ONLY if the driver "
             "rests during it and does no other work (no charge supervision, paperwork or cargo "
             "handling). It is taken within the 4.5 h driving window, so driving never runs past "
-            "4.5 h without a ≥45-min rest (charge or dedicated). This relies on CORTE enforcement "
-            "guidance, not yet codified in Reg. 561/2006 and possibly read differently by national "
-            "authorities; a charge under 45 min does not count, and a dedicated 45-min rest is "
-            "inserted instead."
+            "4.5 h without a ≥45-min rest (charge or dedicated). This rests on CORTE ENF 007/2024 "
+            "v1.0 (issued March 2024) — temporary, non-binding enforcement guidance that cannot "
+            "override Reg. (EC) 561/2006 and may be read differently by national authorities; the "
+            "≥45-min Art 7 BREAK credit modelled here is the well-supported case (it does not reach "
+            "the harder uninterrupted-daily-rest / repositioning question). A charge under 45 min "
+            "does not count, and a dedicated 45-min rest is inserted instead."
         )
     # With BOTH defaults (allow_extended_days=0, hours_already_driven_this_week=0.0)
     # this caveat is emitted verbatim — byte-identical to before these options
     # existed. When an option is opted into, the corresponding "not modelled"
     # clause NARROWS (it is now modelled), per the honest-limitations contract.
-    if allow_extended_days == 0 and hours_already_driven_this_week == 0.0:
+    if (
+        allow_extended_days == 0
+        and allow_reduced_rest_days == 0
+        and hours_already_driven_this_week == 0.0
+    ):
         assumptions.append(
             "Driver hours follow EU 561: a 45-minute break after 4.5 hours of driving, and an "
             "11-hour daily rest once the 9-hour daily driving limit is reached — so a long route is "
@@ -1217,7 +1256,15 @@ def plan_route(
             "the extended 10-hour day, multi-manning, and hours already worked this week are not modelled."
         )
     else:
-        _not_modelled = ["reduced/compensated rest", "multi-manning"]
+        _not_modelled = ["multi-manning"]
+        if allow_reduced_rest_days > 0:
+            _rest_clause = (
+                f"a daily rest (up to {allow_reduced_rest_days} of this trip's rests may be the "
+                f"reduced 9-hour daily rest, used {reduced_rests_used}; the rest are 11 hours)"
+            )
+        else:
+            _rest_clause = "an 11-hour daily rest"
+            _not_modelled.insert(0, "reduced/compensated rest")
         if allow_extended_days > 0:
             _daily_cap_clause = (
                 f"the daily driving limit is reached (up to {allow_extended_days} day(s) "
@@ -1236,8 +1283,8 @@ def plan_route(
             _week_clause = "is capped at 56 hours assuming a fresh week at departure"
             _not_modelled.append("hours already worked this week")
         assumptions.append(
-            "Driver hours follow EU 561: a 45-minute break after 4.5 hours of driving, and an "
-            f"11-hour daily rest once {_daily_cap_clause} — so a long route is "
+            "Driver hours follow EU 561: a 45-minute break after 4.5 hours of driving, and "
+            f"{_rest_clause} once {_daily_cap_clause} — so a long route is "
             "split across calendar days and arrival times include the overnight rests. Weekly driving "
             f"{_week_clause}; " + ", ".join(_not_modelled) + " are not modelled."
         )

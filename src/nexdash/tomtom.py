@@ -18,13 +18,23 @@ agent tool layer can turn it into ``{"error": ...}`` for the model.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
 
-__all__ = ["TomTomError", "geocode", "truck_route", "get_api_key"]
+# httpx logs each request URL at INFO level, and our TomTom URLs carry the API
+# key as a ``?key=`` query parameter — so silence httpx's request logger to keep
+# the key out of local logs/stderr (defence-in-depth; it is already scrubbed from
+# any client-facing error via _redact()).
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+# get_api_key is intentionally NOT exported: it returns the secret TomTom key,
+# so it must not be reachable via ``from nexdash.tomtom import *``. Internal
+# callers reference it by its qualified name (``tomtom.get_api_key``).
+__all__ = ["TomTomError", "geocode", "truck_route", "_redact"]
 
 # Single source of truth for the routed vehicle — copied verbatim from the
 # frontend TRUCK_SPEC so the server-routed truck never diverges from the browser
@@ -97,16 +107,50 @@ def get_api_key() -> str:
 # --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
+def _redact(text: str) -> str:
+    """Strip the TomTom API key (and any ``key=...`` query param) from ``text``.
+
+    Defence-in-depth: TomTom error bodies and httpx exception strings can echo
+    the full request URL, which carries ``?key=<TOMTOM_API_KEY>``. Anything that
+    might reach a log or an MCP client is passed through this first so the secret
+    never leaks. Resolving the key here must itself never raise.
+    """
+    if not text:
+        return text
+    try:
+        key = os.environ.get("TOMTOM_API_KEY") or _parse_env_key(_ENV_FILE)
+    except Exception:  # noqa: BLE001 - redaction must never raise
+        key = None
+    if key:
+        text = text.replace(key, "[REDACTED]")
+    # Also mask any literal ``key=<value>`` even if the key resolves differently.
+    text = re.sub(r"(?i)(key=)[^&\s\"']+", r"\1[REDACTED]", text)
+    return text
+
+
 def _get_json(url: str) -> dict[str, Any]:
-    """GET ``url`` and return parsed JSON, mapping any failure to TomTomError."""
+    """GET ``url`` and return parsed JSON, mapping any failure to TomTomError.
+
+    Built so the API key can never escape: the URL is never echoed, transport
+    exceptions are reported by type only, and any upstream error body is redacted
+    before it could reach a caller/log.
+    """
     import httpx
 
     try:
-        resp = httpx.get(url, timeout=_TIMEOUT_S)
+        # follow_redirects=False: an upstream 3xx must not be used to bounce the
+        # request (with its key) at an internal/metadata IP (SSRF hardening).
+        resp = httpx.get(url, timeout=_TIMEOUT_S, follow_redirects=False)
     except Exception as exc:  # noqa: BLE001 - any transport failure -> graceful
-        raise TomTomError(f"Could not reach TomTom: {exc}") from exc
+        # Report only the exception TYPE: httpx exception strings embed the full
+        # URL (which contains ?key=...). Never interpolate ``exc`` itself.
+        raise TomTomError(
+            f"Could not reach TomTom ({type(exc).__name__})."
+        ) from exc
     if resp.status_code != 200:
-        raise TomTomError(f"TomTom returned HTTP {resp.status_code}: {resp.text[:200]}")
+        # Do NOT include resp.text: TomTom error bodies routinely echo the
+        # request URL (with the key). Status code alone is enough to diagnose.
+        raise TomTomError(f"TomTom request failed (HTTP {resp.status_code}).")
     try:
         return resp.json() or {}
     except ValueError as exc:

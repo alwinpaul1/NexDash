@@ -381,9 +381,13 @@ def plan_route_tool(**kwargs: Any) -> dict[str, Any]:
             ]
         )
     except tomtom.TomTomError as exc:
-        return {"error": str(exc)}
+        # TomTomError messages are already scrubbed of the key in tomtom.py, but
+        # redact again as defence-in-depth before returning to an MCP client.
+        return {"error": tomtom._redact(str(exc))}
     except Exception as exc:  # noqa: BLE001 - never throw out of a tool wrapper
-        return {"error": f"Route lookup failed: {type(exc).__name__}: {exc}"}
+        # Report the exception TYPE only — a raw exception string can embed an
+        # httpx URL-with-key or a filesystem path. Never interpolate ``exc``.
+        return {"error": f"Route lookup failed ({type(exc).__name__})."}
 
     # The destination waypoint carries the delivery deadline so the planner can
     # flag on-time / late arrival.
@@ -415,7 +419,8 @@ def plan_route_tool(**kwargs: Any) -> dict[str, Any]:
             model_path=model_path,
         )
     except Exception as exc:  # noqa: BLE001 - simulation failure -> structured error
-        return {"error": f"Route simulation failed: {type(exc).__name__}: {exc}"}
+        # Type only: the simulation can raise with a model_path in the message.
+        return {"error": f"Route simulation failed ({type(exc).__name__})."}
 
     # Record the resolved params + coords so the server can surface a structured
     # planRequest for the frontend (fills the planner + runs Optimize).
