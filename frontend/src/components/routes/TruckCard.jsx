@@ -1,11 +1,10 @@
 import { useState } from "react";
 
-/* TruckCard — the eActros 600 with a pseudo-3D tilt and a specs popover.
+/* TruckCard — vehicle selector (dropdown) + specs popover.
  *
- * The truck image tilts toward the cursor (perspective + rotateX/rotateY) for a
- * "3D" feel. A true 360° spin would need an actual 3D model (.glb) rendered with
- * three.js / <model-viewer>; with a single side-view PNG we do an interactive
- * tilt. Drop a .glb in and this can be swapped for real 3D.
+ * One vehicle for now (the eActros 600), presented as a dropdown so the user
+ * is "choosing" the truck and more models can be added by extending VEHICLES.
+ * The info button toggles the spec sheet.
  */
 
 const SPECS = [
@@ -17,33 +16,50 @@ const SPECS = [
   { icon: "trip_origin", label: "Axles", value: "5" },
 ];
 
+const VEHICLES = [{ id: "eactros-600", name: "Mercedes-Benz eActros 600" }];
+
 export default function TruckCard() {
   const [showSpecs, setShowSpecs] = useState(false);
+  const [vehicle, setVehicle] = useState(VEHICLES[0].id);
 
   return (
-    <div className="nx-card nx-hover-lift relative p-4">
-      {/* Framed render box — truck on a light "render bay" with the signature
-          44px HUD grid backdrop. */}
-      <div className="relative overflow-hidden rounded-control border border-outline-variant/50 bg-gradient-to-br from-white to-slate-200 p-2">
-        <div aria-hidden="true" className="pointer-events-none absolute inset-0 ck-grid-bg" />
-        <img
-          src="/eactros-600.png"
-          alt="Mercedes-Benz eActros 600"
-          className="relative w-full h-44 object-contain"
-          style={{ mixBlendMode: "multiply" }}
-        />
-      </div>
+    <div className="nx-card relative p-4">
+      <label className="flex items-center gap-1.5 text-[11px] font-semibold text-on-surface-variant uppercase tracking-[0.08em] mb-2">
+        <span className="material-symbols-outlined text-on-surface-variant/80" style={{ fontSize: "16px" }}>
+          local_shipping
+        </span>
+        Vehicle
+      </label>
 
-      <div className="mt-3 flex items-center justify-between">
-        <div className="min-w-0">
-          <h3 className="font-headline font-bold text-xl tracking-tight text-on-surface">eActros 600</h3>
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1 min-w-0">
+          <select
+            value={vehicle}
+            onChange={(e) => setVehicle(e.target.value)}
+            aria-label="Select vehicle"
+            className="w-full appearance-none rounded-control bg-surface-lowest border border-outline-variant/50 pl-3 pr-9 py-2.5 text-sm font-medium text-on-surface outline-none hover:border-outline-variant/70 focus:border-primary/50 focus:ring-2 focus:ring-primary/30 transition duration-snappy cursor-pointer"
+          >
+            {VEHICLES.map((v) => (
+              <option key={v.id} value={v.id}>
+                {v.name}
+              </option>
+            ))}
+          </select>
+          <span
+            aria-hidden="true"
+            className="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-on-surface-variant"
+            style={{ fontSize: "20px" }}
+          >
+            expand_more
+          </span>
         </div>
+
         <button
           type="button"
           onClick={() => setShowSpecs((s) => !s)}
           aria-label="Vehicle specifications"
           aria-pressed={showSpecs}
-          className={`w-9 h-9 shrink-0 rounded-full border flex items-center justify-center transition-all duration-snappy ease-nx-out active:scale-95 ${
+          className={`w-10 h-10 shrink-0 rounded-control border flex items-center justify-center transition-all duration-snappy ease-nx-out active:scale-95 ${
             showSpecs
               ? "border-primary/40 bg-primary/10 text-primary"
               : "border-outline-variant/50 bg-surface-lowest text-on-surface-variant hover:text-primary hover:border-primary/30 hover:bg-primary/10"
