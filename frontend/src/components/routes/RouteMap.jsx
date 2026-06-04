@@ -874,7 +874,7 @@ export default function RouteMap({ plan, waypoints = [] }) {
               position={[inc.lat, inc.lng]}
               icon={incidentIcon(inc)}
               zIndexOffset={500}
-              title="Traffic incident on route"
+              title="Traffic incident near the route (its delay is local — the route may steer around it)"
             >
               <Tooltip direction="top" offset={[0, -14]} className="map-tip">
                 <span
