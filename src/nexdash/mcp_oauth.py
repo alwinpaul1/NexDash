@@ -212,8 +212,9 @@ a{{color:#34d399}} .err{{color:#f87171;font-size:12px;margin-top:10px}}
 .hint{{font-size:12px;color:#7a8a86;line-height:1.5;margin-top:12px}}
 </style></head><body><div class="card">
 <h1>Connect NexDash MCP</h1>
-<p>NexDash plans eActros 600 truck routes on <b>your</b> TomTom key. It's validated, then
-sealed inside your own access token and <b>never stored</b> on our server. Paste your key to finish.</p>
+<p>The NexDash MCP gives your AI tool EV-truck route &amp; range intelligence, running on
+<b>your</b> TomTom key. It's validated, then sealed inside your own access token and
+<b>never stored</b> on our server. Paste your key to finish.</p>
 <p class="hint"><b>No key?</b> <a href="https://developer.tomtom.com" target="_blank">Sign up free at TomTom</a> (~1 min).
 A default key — <i>"My first API key"</i> — is created for you automatically; copy it from the
 <b>API &amp; SDK keys</b> tab of your dashboard and paste it above.</p>
