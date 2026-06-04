@@ -11,10 +11,6 @@ export default function TopBar() {
       </button>
 
       <div className="hidden sm:flex items-center gap-3">
-        <span
-          aria-hidden="true"
-          className="hidden lg:block h-9 w-px bg-outline-variant/40"
-        />
         <div>
           <h1 className="font-headline font-bold text-xl text-on-surface tracking-tight">
             Dispatcher Console
