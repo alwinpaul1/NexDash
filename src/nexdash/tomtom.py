@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
+import math
 import os
 import re
 from pathlib import Path
@@ -216,6 +217,19 @@ def geocode(query: str) -> dict[str, Any]:
     raise TomTomError(f"No location found for {query!r}.")
 
 
+def _haversine_km(a: list[float], b: list[float]) -> float:
+    """Great-circle distance (km) between ``[lat, lng]`` points — same Earth
+    radius the frontend ``haversineKm`` and ``geodata`` use, so the cumulative
+    distance that maps speedLimit sections to km spans matches the browser."""
+    r = 6371.0088
+    lat1, lon1 = math.radians(a[0]), math.radians(a[1])
+    lat2, lon2 = math.radians(b[0]), math.radians(b[1])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    h = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(h))
+
+
 # --------------------------------------------------------------------------- #
 # Routing (TomTom calculateRoute, truck profile) — mirrors frontend tomtomRoute()
 # --------------------------------------------------------------------------- #
@@ -226,8 +240,11 @@ def truck_route(points: list[dict[str, Any]]) -> dict[str, Any]:
     -------
     dict
         ``{geometry: [[lat,lng], ...], leg_timings: [{lengthM, travelTimeS}],
-        distance_km, duration_s}`` — the exact shape ``route_planner.plan_route``
-        consumes for ``geometry`` + ``leg_timings``.
+        speed_limits: [{fromKm, toKm, kmh}], distance_km, duration_s}`` — the exact
+        shape ``route_planner.plan_route`` consumes for ``geometry`` +
+        ``leg_timings`` + ``speed_limits``. ``speed_limits`` mirrors the browser
+        planner so a server-routed trip shapes per-segment speed by the real posted
+        limits (autobahn 80 / town 50 / village 30) exactly as the web dashboard.
 
     Raises
     ------
@@ -259,6 +276,10 @@ def truck_route(points: list[dict[str, Any]]) -> dict[str, Any]:
         f"&vehicleWidth={TRUCK_SPEC['widthM']}"
         f"&vehicleHeight={TRUCK_SPEC['heightM']}"
         f"&vehicleCommercial=true"
+        # Posted speed-limit sections along the route so the energy model can shape
+        # per-segment speed by the real road (autobahn 80 / town 50 / village 30)
+        # instead of one flat average — identical to the browser planner.
+        f"&sectionType=speedLimit"
     )
     data = _get_json(url)
     routes = data.get("routes") or []
@@ -267,13 +288,22 @@ def truck_route(points: list[dict[str, Any]]) -> dict[str, Any]:
     route = routes[0]
 
     geometry: list[list[float]] = []
+    # Cumulative distance (km) at each geometry point — parallel to ``geometry`` —
+    # so the speedLimit sections (which index into the route's point array) can be
+    # mapped to km spans. Mirrors the frontend's ``cumKm`` exactly.
+    cum_km: list[float] = []
+    _cum = 0.0
     leg_timings: list[dict[str, Any]] = []
     for leg in route.get("legs", []) or []:
         for pt in leg.get("points", []) or []:
             lat = pt.get("latitude")
             lng = pt.get("longitude")
             if isinstance(lat, (int, float)) and isinstance(lng, (int, float)):
-                geometry.append([float(lat), float(lng)])
+                p = [float(lat), float(lng)]
+                if geometry:
+                    _cum += _haversine_km(geometry[-1], p)
+                geometry.append(p)
+                cum_km.append(_cum)
         ls = leg.get("summary") or {}
         leg_timings.append(
             {
@@ -282,10 +312,30 @@ def truck_route(points: list[dict[str, Any]]) -> dict[str, Any]:
             }
         )
 
+    # Posted speed limits -> distance spans (km), capped at the truck's legal max.
+    # route_planner uses these as the per-segment speed SHAPE, anchored to the
+    # measured leg time so the total ETA is unchanged. Same parsing as the browser.
+    cap = float(TRUCK_SPEC["maxSpeedKph"])
+    speed_limits: list[dict[str, Any]] = []
+    for sec in route.get("sections", []) or []:
+        st = sec.get("sectionType")
+        if st and st != "SPEED_LIMIT":
+            continue
+        try:
+            kmh = float(sec.get("maxSpeedLimitInKmh"))
+            a = cum_km[int(sec.get("startPointIndex"))]
+            b = cum_km[int(sec.get("endPointIndex"))]
+        except (TypeError, ValueError, IndexError):
+            continue
+        if kmh <= 0 or b <= a:
+            continue
+        speed_limits.append({"fromKm": a, "toKm": b, "kmh": min(kmh, cap)})
+
     summary = route.get("summary") or {}
     return {
         "geometry": geometry,
         "leg_timings": leg_timings,
+        "speed_limits": speed_limits,
         "distance_km": (summary.get("lengthInMeters", 0) or 0) / 1000.0,
         "duration_s": summary.get("travelTimeInSeconds", 0) or 0,
     }
