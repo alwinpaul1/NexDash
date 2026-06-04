@@ -15,93 +15,89 @@
    Dark values are chosen as MID greys (not pure white/black) so those
    composited usages stay subtle and legible.
    ───────────────────────────────────────────────────────────────────────── */
-/* ── Dayos named palette (Swiss editorial) ──────────────────────────────── */
 :root {
-  --color-canvas-mist: #e5e7eb;
-  --color-pure-white: #ffffff;
-  --color-surface-mist: #f3f3f3;
-  --color-ink-black: #000000;
-  --color-steel-gray: #979797;
-  --color-graphite: #444444;
-  --color-mint-pulse: #d1ffca;
-  --color-electric-yellow: #fff100;
-}
-
-:root {
-  /* Brand — near-monochrome; ink-black does the work, accents are surgical. */
-  --c-primary: 0 0 0; /* #000 ink black — buttons, strong UI */
-  --c-accent: 209 255 202; /* #d1ffca mint-pulse wash */
+  /* Brand */
+  --c-primary: 0 109 50; /* #006d32 emerald */
+  --c-accent: 0 209 102; /* #00d166 bright emerald */
   --c-on-primary: 255 255 255;
-  --c-secondary: 68 68 68; /* #444 graphite */
-  --c-error: 186 26 26;
+  --c-secondary: 0 89 187; /* #0059bb */
+  --c-error: 186 26 26; /* #ba1a1a */
 
-  /* Surfaces — the SIGNATURE: a soft gray canvas with white cards floating. */
-  --c-background: 229 231 235; /* #e5e7eb canvas mist */
-  --c-surface-lowest: 255 255 255; /* white cards */
-  --c-surface-low: 243 243 243; /* #f3f3f3 subtle surface */
-  --c-surface: 233 234 237; /* a step toward the canvas for chips */
+  /* Surfaces (low → high elevation reads brighter) */
+  --c-background: 247 249 253; /* refined from #f8f9ff, slightly warmer-neutral */
+  --c-surface-lowest: 255 255 255;
+  --c-surface-low: 239 244 255; /* #eff4ff */
+  --c-surface: 229 238 255; /* #e5eeff */
 
   /* Text */
-  --c-on-surface: 0 0 0; /* ink black */
-  --c-on-surface-variant: 107 110 114; /* steel/graphite muted */
+  --c-on-surface: 11 28 48; /* #0b1c30 */
+  --c-on-surface-variant: 60 74 61; /* #3c4a3d */
 
-  /* Lines — faint canvas-gray hairline on white. */
-  --c-outline-variant: 209 213 219; /* #d1d5db */
+  /* Lines */
+  --c-outline-variant: 187 203 185; /* #bbcbb9 */
 
-  /* Elevation — FLAT. Separation is white-on-gray, never shadow. */
-  --shadow-sm: none;
-  --shadow-md: 0 4px 16px rgb(0 0 0 / 0.05);
-  --shadow-lg: 0 12px 28px rgb(0 0 0 / 0.07);
-  --shadow-ring: 0 0 0 3px rgb(0 0 0 / 0.15);
+  /* Elevation (light: soft cool shadows) */
+  --shadow-sm: 0 1px 2px rgb(11 28 48 / 0.06);
+  --shadow-md: 0 4px 14px rgb(11 28 48 / 0.08);
+  --shadow-lg: 0 12px 32px rgb(11 28 48 / 0.12);
+  --shadow-ring: 0 0 0 3px rgb(0 109 50 / 0.28);
 
   /* Theme-aware scrollbar */
-  --scrollbar-thumb: 209 213 219;
-  --scrollbar-thumb-hover: 151 151 151;
+  --scrollbar-thumb: 187 203 185;
+  --scrollbar-thumb-hover: 60 74 61;
 
   /* chat-md table border hook (used below) */
-  --md-border: #e5e7eb;
+  --md-border: #d9e2d6;
 
-  /* Accent utilities — electric yellow is the loud "stop the eye" hue (gauge,
-     glow); ink-black is the legible text counterpart. */
-  --ck-lime: 255 241 0; /* #fff100 electric yellow */
-  --ck-lime-ink: 0 0 0; /* black text */
-  --ck-grid: 17 24 20;
-  --ck-grid-alpha: 0.03;
+  /* ── Cockpit HUD (instrument-cluster) ──────────────────────────────────
+     Signature lime accent + IBM Plex Mono numerals + a faint 44px grid.
+     The .ck-* utilities (see @layer components) are theme-aware so DARK is
+     the cockpit and LIGHT is a daylight variant of the same language. */
+  --ck-lime: 198 242 78; /* #c6f24e — signature lime (fills, arc, glow) */
+  --ck-lime-ink: 101 135 12; /* #65870c — lime for TEXT (legible on light) */
+  --ck-grid: 17 24 20; /* grid-line base: dark lines on a light panel */
+  --ck-grid-alpha: 0.05;
 
   color-scheme: light;
 }
 
 [data-theme="dark"] {
-  /* Dark editorial variant — charcoal ground, white cards, same surgical accents. */
-  --c-primary: 255 255 255; /* white controls on dark */
-  --c-accent: 209 255 202;
-  --c-on-primary: 0 0 0;
-  --c-secondary: 200 200 200;
-  --c-error: 248 113 113;
+  /* Brand — emerald reads slightly brighter on dark for parity. */
+  --c-primary: 16 185 129; /* #10b981 nex-accent */
+  --c-accent: 52 211 153; /* #34d399 nex-accent-bright */
+  --c-on-primary: 6 14 12; /* near-black so text on emerald stays legible */
+  --c-secondary: 96 165 250; /* lifted blue for dark contrast */
+  --c-error: 248 113 113; /* lifted red */
 
-  --c-background: 18 18 20; /* charcoal canvas */
-  --c-surface-lowest: 30 30 33;
-  --c-surface-low: 38 38 41;
-  --c-surface: 46 46 50;
+  /* Surfaces — charcoal panels from the NexOS palette, layered. */
+  --c-background: 10 13 14; /* #0a0d0e nex-bg */
+  --c-surface-lowest: 14 20 19; /* #0e1413 nex-panel */
+  --c-surface-low: 16 24 23; /* #101817 nex-panel-alt */
+  --c-surface: 23 32 31; /* a touch lighter for raised chips */
 
-  --c-on-surface: 245 245 245;
-  --c-on-surface-variant: 160 160 160;
+  /* Text */
+  --c-on-surface: 230 237 240; /* light slate */
+  --c-on-surface-variant: 156 163 175; /* #9ca3af muted */
 
-  --c-outline-variant: 72 72 76;
+  /* Lines — MID grey so …/40, …/60 borders are visible but soft, not glaring. */
+  --c-outline-variant: 120 132 128;
 
-  --shadow-sm: none;
-  --shadow-md: 0 6px 18px rgb(0 0 0 / 0.5);
-  --shadow-lg: 0 16px 40px rgb(0 0 0 / 0.6);
-  --shadow-ring: 0 0 0 3px rgb(255 255 255 / 0.2);
+  /* Elevation (dark: deeper, near-black shadows) */
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-md: 0 6px 18px rgb(0 0 0 / 0.45);
+  --shadow-lg: 0 16px 40px rgb(0 0 0 / 0.55);
+  --shadow-ring: 0 0 0 3px rgb(52 211 153 / 0.35);
 
+  /* Theme-aware scrollbar */
   --scrollbar-thumb: 255 255 255;
   --scrollbar-thumb-hover: 255 255 255;
 
-  --md-border: #2a2a2e;
+  --md-border: #28322f;
 
-  --ck-lime: 255 241 0;
-  --ck-lime-ink: 255 241 0; /* yellow reads on charcoal */
-  --ck-grid: 233 244 240;
+  /* Cockpit HUD — dark variant: bright lime reads great on near-black, grid
+     lines flip to a faint light tint. */
+  --ck-lime-ink: 198 242 78; /* #c6f24e bright lime on dark */
+  --ck-grid: 233 244 240; /* #e9f4f0 — light lines on a dark panel */
   --ck-grid-alpha: 0.05;
 
   color-scheme: dark;
@@ -119,10 +115,7 @@
   h2,
   h3,
   .font-headline {
-    /* Dayos: ultra-condensed display face, tight tracking, near-1.0 leading. */
-    font-family: "Barlow Condensed", "Inter", sans-serif;
-    font-weight: 700;
-    letter-spacing: -0.02em;
+    font-family: "Sora", sans-serif;
   }
 }
 
@@ -205,18 +198,18 @@
     background-size: 44px 44px;
   }
 
-  /* .ck-num — tabular numerals in the body face (Dayos: Inter for data). */
+  /* .ck-num — tabular IBM Plex Mono numerals for data readouts. */
   .ck-num {
-    font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
     font-feature-settings: "tnum" 1;
     font-variant-numeric: tabular-nums;
   }
 
-  /* .ck-label — the Dayos 12px mono micro-tag voice (category/section labels). */
+  /* .ck-label — uppercase, letter-spaced mono caption (HUD section labels). */
   .ck-label {
     font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
     text-transform: uppercase;
-    letter-spacing: -0.02em;
+    letter-spacing: 0.18em;
   }
 
   /* .ck-lime — signature lime ink, theme-aware so it stays legible on light. */
@@ -539,18 +532,18 @@
   width: 16px;
   height: 16px;
   border-radius: 9999px;
-  background: #000000;
+  background: #006d32;
   border: 2px solid #fff;
-  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 0 0 2px rgba(0, 109, 50, 0.3);
   cursor: pointer;
 }
 .route-slider::-moz-range-thumb {
   width: 16px;
   height: 16px;
   border-radius: 9999px;
-  background: #000000;
+  background: #006d32;
   border: 2px solid #fff;
-  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 0 0 2px rgba(0, 109, 50, 0.3);
   cursor: pointer;
 }
 

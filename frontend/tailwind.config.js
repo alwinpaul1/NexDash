@@ -39,9 +39,9 @@ export default {
         body: ['"Inter"', "sans-serif"],
       },
       borderRadius: {
-        // Dayos geometry: oversized rounded cards, small confident controls.
-        card: "2rem", // 32px — oversized cards float on the gray canvas
-        control: "0.5rem", // 8px — buttons / inputs
+        // Named radii scale for consistent rounding rhythm.
+        card: "1rem", // 16px — panels / cards
+        control: "0.75rem", // 12px — buttons / inputs
         pill: "9999px",
       },
       boxShadow: {
