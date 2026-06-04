@@ -92,8 +92,10 @@ function EmptyState() {
         </span>
         <p>
           Ask in plain language about range, energy use, or whether a truck will make
-          its next stop — or describe a full trip (e.g. &ldquo;Berlin to Munich, 12 t,
-          cold, deliver by Friday 9pm&rdquo;) and the route result panel fills in.
+          its next stop — or describe a full trip with the <strong>where, when and load</strong>
+          {" "}(e.g. &ldquo;Berlin to Munich, 12 t, depart 9 am, deliver by Friday 9 pm&rdquo;)
+          and the route result panel fills in. Weather and elevation along the route are
+          pulled in automatically from live data.
         </p>
       </div>
     </div>
@@ -168,7 +170,7 @@ export default function ChatPanel() {
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           disabled={loading}
-          placeholder="Ask about a leg, SOC, payload, weather…"
+          placeholder="Ask about a route, payload, departure time, deadline…"
           className="flex-1 resize-none max-h-40 px-4 py-3 rounded-control bg-surface-lowest border border-outline-variant/60 text-base leading-snug text-on-surface placeholder:text-on-surface-variant/60 transition-shadow duration-snappy ease-nx-out focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/40 disabled:opacity-70"
         />
         <button
