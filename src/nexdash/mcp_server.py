@@ -91,9 +91,31 @@ from __future__ import annotations
 import logging
 import sys
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
+from nexdash import tomtom
 from nexdash import tools
+
+
+def _tomtom_key_from_request(ctx: "Context | None") -> "str | None":
+    """Pull a caller-supplied TomTom key from the HTTP request headers — either
+    ``X-TomTom-Key`` or ``Authorization: Bearer <key>`` — so a remote user runs
+    ``plan_route`` on THEIR key, never the host's. Returns ``None`` when there is
+    no HTTP request (stdio transport) or no such header.
+    """
+    try:
+        headers = ctx.request_context.request.headers  # Starlette Request (HTTP mode)
+    except Exception:  # noqa: BLE001 - stdio has no HTTP request / headers
+        return None
+    try:
+        key = headers.get("x-tomtom-key")
+        if not key:
+            auth = headers.get("authorization") or ""
+            if auth.lower().startswith("bearer "):
+                key = auth[7:]
+    except Exception:  # noqa: BLE001
+        return None
+    return key.strip() if key and key.strip() else None
 
 # Log to STDERR only. For a stdio MCP server, STDOUT is the JSON-RPC protocol
 # channel -- any write to it corrupts message framing. Server-side diagnostics
@@ -271,6 +293,7 @@ def plan_route(
     min_soc: float = 15.0,
     reserve_pct: float = 10.0,
     max_charge_kw: float = 400.0,
+    ctx: Context | None = None,
 ) -> dict:
     """Plan a COMPLETE door-to-door trip for a Mercedes-Benz eActros 600 truck.
 
@@ -319,6 +342,28 @@ def plan_route(
         ``assumptions``. On geocode/route/simulation failure it returns
         ``{"error": ...}`` (secret-free) instead of throwing.
     """
+    # Bring-your-own-key: use the caller's TomTom key (from the request header)
+    # for this trip so the host's key is never spent. If none is supplied AND no
+    # host/env key is configured, return a clear, actionable message instead of
+    # routing — the other three tools need no key and keep working.
+    user_key = _tomtom_key_from_request(ctx)
+    key_token = None
+    if user_key:
+        key_token = tomtom.set_request_api_key(user_key)
+    else:
+        try:
+            tomtom.get_api_key()  # raises if no per-request / env key is available
+        except Exception:  # noqa: BLE001
+            return {
+                "error": "tomtom_key_required",
+                "detail": (
+                    "plan_route needs a TomTom API key. Supply your own by adding an "
+                    "'X-TomTom-Key: <key>' header (or 'Authorization: Bearer <key>') "
+                    "when you connect this MCP server, so the trip routes on YOUR key. "
+                    "Get a free key at https://developer.tomtom.com. The other tools "
+                    "(predict_energy, check_reachability, model_info) need no key."
+                ),
+            }
     try:
         if not isinstance(origin, str) or not origin.strip():
             raise _ToolInputError("origin is required.")
@@ -341,6 +386,9 @@ def plan_route(
         )
     except Exception as exc:  # noqa: BLE001 - MCP boundary: never crash the call.
         return _safe_error(exc)
+    finally:
+        if key_token is not None:
+            tomtom.reset_request_api_key(key_token)
 
 
 # ---------------------------------------------------------------------------
