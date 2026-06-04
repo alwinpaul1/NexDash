@@ -91,11 +91,9 @@ function EmptyState() {
           tips_and_updates
         </span>
         <p>
-          Ask in plain language about range, energy use, or whether a truck will make
-          its next stop — or describe a full trip with the <strong>where, when and load</strong>
-          {" "}(e.g. &ldquo;Berlin to Munich, 12 t, depart 9 am, deliver by Friday 9 pm&rdquo;)
-          and the route result panel fills in. Weather and elevation along the route are
-          pulled in automatically from live data.
+          Ask about range, energy, or a truck&rsquo;s next stop — or describe a full trip
+          (<strong>where, when, load</strong>): e.g. &ldquo;Berlin to Munich, 12 t, depart 9 am,
+          deliver by Friday 9 pm&rdquo;. Weather and elevation are added automatically.
         </p>
       </div>
     </div>
