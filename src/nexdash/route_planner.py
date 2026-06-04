@@ -1198,7 +1198,7 @@ def plan_route(
             f"Displayed energy is scaled by a documented field-calibration factor of "
             f"{field_calibration:.2f} so the headline matches observed laden eActros 600 "
             f"consumption (real-world laden tests span ~0.88-1.03 kWh/km — ADAC 0.88 (40 t, German "
-            f"roads), Daimler 15,000 km tour 1.03 (40 t), Vandijck 0.96) rather than the higher "
+            f"roads), Daimler 15,000 km tour 1.03 (40 t), Vandijck 0.96 (33.2 t)) rather than the higher "
             f"constant-speed steady-state basis (the energy model's own 40 t / 80 km/h / 20 degC flat "
             f"anchor is ~1.14 kWh/km at the calibrated cd 0.50 / CdA 5.0). Charging and "
             f"reachability decisions still use "

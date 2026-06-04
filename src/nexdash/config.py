@@ -95,7 +95,7 @@ MAPE_FLOOR_KWH: float = 1.0
 #: Field-calibration factor mapping the model's STEADY-STATE energy estimate DOWN
 #: to field-observed laden eActros 600 consumption on real mixed routes. Real-world
 #: laden tests cluster at ~0.96-1.03 kWh/km (Daimler 15,000 km European tour 1.03 at
-#: 40 t; Vandijck 0.96; ADAC German-roads 0.88), vs Mercedes' ~1.19 spec estimate.
+#: 40 t; Vandijck 0.96 at 33.2 t; ADAC German-roads 0.88), vs Mercedes' ~1.19 spec estimate.
 #: Real driving (coasting, eco-driving, traffic flow) runs below constant-speed
 #: physics, a gap the steady-state model cannot capture; the calibration doc already
 #: attributes the steady-state-vs-field gap to exactly this.
