@@ -439,7 +439,7 @@ def plan_route(
         ``n_charging_stops``, ``driving_time_h``, ``total_time_h``, ``departure``,
         ``eta``/``eta_iso``, ``deliver_by``, ``on_time``, ``eu561_ok``,
         ``conditions`` (the live Open-Meteo wind / elevation-gain+loss /
-        gradient / temperature the trip was optimised against), ``traffic`` (live
+        temperature the trip was optimised against), ``traffic`` (live
         delay + ETA-relevant incidents on the route) and ``assumptions``. Each
         ``charging_stops`` entry carries a ``station`` object naming the real CCS
         charger (operator, power, live availability, opening hours, price) or

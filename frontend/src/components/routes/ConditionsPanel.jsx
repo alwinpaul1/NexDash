@@ -1,4 +1,4 @@
-// Route conditions strip: avg temperature, avg wind, max gradient, total climb.
+// Route conditions strip: avg temperature, avg wind, total climb.
 // Reads plan.conditions (enriched server-side from Open-Meteo).
 
 function fmt(v, decimals = 1) {
@@ -60,7 +60,7 @@ export default function ConditionsPanel({ conditions = {} }) {
           <span className="text-[11px] text-on-surface-variant ml-auto px-2 py-0.5 rounded-pill bg-surface ring-1 ring-outline-variant/40">via Open-Meteo</span>
         )}
       </div>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
         <Tile icon="thermostat" value={fmt(c.avgTempC, 1)} unit="°C" label="Avg Temperature" tint="#f59e0b" />
         <Tile
           icon="air"
@@ -69,7 +69,6 @@ export default function ConditionsPanel({ conditions = {} }) {
           label={compass ? `Avg Wind · ${compass}` : "Avg Wind"}
           tint="#0059bb"
         />
-        <Tile icon="trending_up" value={fmt(c.maxGradientPct, 1)} unit="%" label="Max Gradient" tint="#ba1a1a" />
         <Tile icon="landscape" value={fmt(c.climbM, 0)} unit="m" label="Total Climb" tint="#006d32" />
       </div>
       {degraded && (
@@ -78,7 +77,7 @@ export default function ConditionsPanel({ conditions = {} }) {
           <span className="text-on-surface">
             <span className="font-semibold" style={{ color: "#d97706" }}>{what} data unavailable</span>{" "}
             (live provider rate-limited) — used seasonal/flat defaults, so energy and
-            gradient figures are approximate. Try again shortly for live conditions.
+            elevation figures are approximate. Try again shortly for live conditions.
           </span>
         </div>
       )}
