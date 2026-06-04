@@ -300,6 +300,45 @@ export default function PlannerForm({
         {/* Vehicle */}
         <TruckCard />
 
+        {/* Payload (moved up from advanced options — a primary vehicle input) */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label className="flex items-center gap-1.5 text-[11px] font-semibold text-on-surface-variant uppercase tracking-[0.08em]">
+              <span className="material-symbols-outlined text-on-surface-variant/80" style={{ fontSize: "16px" }}>
+                scale
+              </span>
+              Payload
+            </label>
+            <div className="flex items-center gap-1.5">
+              <input
+                type="number"
+                min={0}
+                max={MAX_PAYLOAD_KG}
+                step={500}
+                value={planner.payloadKg}
+                aria-label="Payload in kilograms"
+                onChange={(e) =>
+                  onPayloadKg(
+                    Math.max(0, Math.min(MAX_PAYLOAD_KG, Math.round(Number(e.target.value) || 0)))
+                  )
+                }
+                className="w-24 px-2.5 py-1 rounded-control bg-surface-lowest border border-outline-variant/50 text-sm font-medium tabular-nums text-on-surface text-right outline-none hover:border-outline-variant/70 focus:border-primary/50 focus:ring-2 focus:ring-primary/30 transition duration-snappy"
+              />
+              <span className="text-xs text-on-surface-variant">kg</span>
+            </div>
+          </div>
+          <Slider
+            value={planner.payloadKg}
+            min={0}
+            max={MAX_PAYLOAD_KG}
+            step={250}
+            onChange={onPayloadKg}
+          />
+          <p className="mt-1 text-[10px] text-on-surface-variant/70">
+            {(planner.payloadKg / 1000).toFixed(1)} t / {MAX_PAYLOAD_KG / 1000} t max
+          </p>
+        </div>
+
         {/* Starting Battery */}
         <div>
           <FieldLabel icon="battery_charging_full" hint={`${planner.startSoc}%`}>
@@ -453,43 +492,6 @@ export default function PlannerForm({
                   Max Charging Speed
                 </FieldLabel>
                 <Slider value={planner.maxChargeKw} min={100} max={400} step={10} onChange={onMaxChargeKw} />
-              </div>
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="flex items-center gap-1.5 text-[11px] font-semibold text-on-surface-variant uppercase tracking-[0.08em]">
-                    <span className="material-symbols-outlined text-on-surface-variant/80" style={{ fontSize: "16px" }}>
-                      scale
-                    </span>
-                    Payload
-                  </label>
-                  <div className="flex items-center gap-1.5">
-                    <input
-                      type="number"
-                      min={0}
-                      max={MAX_PAYLOAD_KG}
-                      step={500}
-                      value={planner.payloadKg}
-                      aria-label="Payload in kilograms"
-                      onChange={(e) =>
-                        onPayloadKg(
-                          Math.max(0, Math.min(MAX_PAYLOAD_KG, Math.round(Number(e.target.value) || 0)))
-                        )
-                      }
-                      className="w-24 px-2.5 py-1 rounded-control bg-surface-lowest border border-outline-variant/50 text-sm font-medium tabular-nums text-on-surface text-right outline-none hover:border-outline-variant/70 focus:border-primary/50 focus:ring-2 focus:ring-primary/30 transition duration-snappy"
-                    />
-                    <span className="text-xs text-on-surface-variant">kg</span>
-                  </div>
-                </div>
-                <Slider
-                  value={planner.payloadKg}
-                  min={0}
-                  max={MAX_PAYLOAD_KG}
-                  step={250}
-                  onChange={onPayloadKg}
-                />
-                <p className="mt-1 text-[10px] text-on-surface-variant/70">
-                  {(planner.payloadKg / 1000).toFixed(1)} t / {MAX_PAYLOAD_KG / 1000} t max
-                </p>
               </div>
             </div>
           )}
