@@ -442,8 +442,20 @@ def plan_route_tool(**kwargs: Any) -> dict[str, Any]:
     summary = plan.get("summary") or {}
     driver = summary.get("driver") or {}
 
+    # Resolve each simulated charging stop to the ACTUAL time-optimal CCS station
+    # near it (TomTom EV charging POIs) — operator name, power, live availability,
+    # opening hours, price — exactly like the browser planner's enrichStations().
+    # Best-effort: on any failure the stop keeps its synthetic name and station=None.
+    raw_stops = plan.get("chargingStops") or []
+    try:
+        raw_stops = tomtom.enrich_charging_stations(
+            raw_stops, max_charge_kw=max_charge_kw
+        )
+    except Exception:  # noqa: BLE001 - never fail the plan over POI enrichment
+        pass
+
     charging_stops = []
-    for s in plan.get("chargingStops") or []:
+    for s in raw_stops:
         charging_stops.append(
             {
                 "name": s.get("name"),
@@ -451,6 +463,10 @@ def plan_route_tool(**kwargs: Any) -> dict[str, Any]:
                 "arrive_soc": s.get("arriveSoc"),
                 "depart_soc": s.get("departSoc"),
                 "kwh": s.get("kWh"),
+                # The real station it charges at (None if no charger could be
+                # resolved): name, address, off_route_km, connectors, max/eff power,
+                # live availability, opening hours, price_per_kwh.
+                "station": s.get("station"),
             }
         )
 
@@ -484,6 +500,23 @@ def plan_route_tool(**kwargs: Any) -> dict[str, Any]:
         else None
     )
 
+    # Live traffic the route was planned around: the delay already baked into the
+    # ETA (routeType=fastest + traffic=true) plus the ETA-relevant incidents
+    # (accidents / jams / closures / roadworks) on the corridor — the browser
+    # planner's trafficDelayS + fetchIncidents, surfaced server-side. Best-effort.
+    try:
+        incidents = tomtom.fetch_traffic_incidents(route.get("geometry") or [])
+    except Exception:  # noqa: BLE001 - incidents are advisory, never fatal
+        incidents = []
+    delay_s = int(route.get("traffic_delay_s") or 0)
+    traffic = {
+        "delay_s": delay_s,
+        "delay_min": round(delay_s / 60.0, 1) if delay_s else 0.0,
+        "incident_count": len(incidents),
+        "incidents": incidents,
+        "source": "TomTom (live traffic + incident details)",
+    }
+
     return {
         "origin": {"label": a["label"], "lat": a["lat"], "lng": a["lng"]},
         "destination": {"label": b["label"], "lat": b["lat"], "lng": b["lng"]},
@@ -503,6 +536,7 @@ def plan_route_tool(**kwargs: Any) -> dict[str, Any]:
         "on_time": on_time,
         "eu561_ok": driver.get("eu561ok"),
         "conditions": conditions,
+        "traffic": traffic,
         "assumptions": summary.get("assumptions"),
     }
 

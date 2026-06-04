@@ -392,9 +392,12 @@ def plan_route(
     truck road network, (3) enriches that route with live per-segment wind,
     elevation/gradient and temperature from Open-Meteo and factors them into the
     energy estimate, (4) simulates state-of-charge drain, (5) inserts DC
-    fast-charging stops where needed, (6) computes ETA and -- if ``deliver_by``
-    is set -- whether arrival is on time, and (7) checks EU 561 driver-hours
-    (a >=45-min charge counts as the required break).
+    fast-charging stops where needed -- resolving each to the actual time-optimal
+    CCS station nearby (operator name, power, live availability, opening hours,
+    price), (6) computes ETA and -- if ``deliver_by`` is set -- whether arrival is
+    on time, (7) checks EU 561 driver-hours (a >=45-min charge counts as the
+    required break), and (8) reports the live traffic delay + ETA-relevant
+    incidents (accidents / jams / closures) on the corridor.
 
     The plan is therefore optimised against real headwind/tailwind and the
     climbs/descents along the actual roads -- not just flat distance. Those live
@@ -436,8 +439,11 @@ def plan_route(
         ``n_charging_stops``, ``driving_time_h``, ``total_time_h``, ``departure``,
         ``eta``/``eta_iso``, ``deliver_by``, ``on_time``, ``eu561_ok``,
         ``conditions`` (the live Open-Meteo wind / elevation-gain+loss /
-        gradient / temperature the trip was optimised against) and
-        ``assumptions``. On geocode/route/simulation failure it returns
+        gradient / temperature the trip was optimised against), ``traffic`` (live
+        delay + ETA-relevant incidents on the route) and ``assumptions``. Each
+        ``charging_stops`` entry carries a ``station`` object naming the real CCS
+        charger (operator, power, live availability, opening hours, price) or
+        ``None``. On geocode/route/simulation failure it returns
         ``{"error": ...}`` (secret-free) instead of throwing.
     """
     # Bring-your-own-key: use the caller's TomTom key (from the request header)
