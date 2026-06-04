@@ -195,7 +195,9 @@ def test_errors_never_leak_api_key(mcp_server, monkeypatch):
     """A failing tool must never surface the API key or raw URL in its error."""
     from nexdash import tools as nexdash_tools
 
-    secret = "SECRET_TOMTOM_KEY_123"
+    # Obviously-fake, low-entropy placeholder (not a real credential) — kept
+    # un-secret-like so secret scanners don't false-positive on this fixture.
+    secret = "dummy-not-a-real-key"
 
     def boom(**kwargs):
         raise RuntimeError(
