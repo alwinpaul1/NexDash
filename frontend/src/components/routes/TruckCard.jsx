@@ -23,12 +23,9 @@ export default function TruckCard() {
   return (
     <div className="nx-card nx-hover-lift relative p-4">
       {/* Framed render box — truck on a light "render bay" with the signature
-          44px HUD grid backdrop and a lime CCS power tag. */}
+          44px HUD grid backdrop. */}
       <div className="relative overflow-hidden rounded-control border border-outline-variant/50 bg-gradient-to-br from-white to-slate-200 p-2">
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 ck-grid-bg" />
-        <span className="absolute top-2 right-2 z-10 ck-label text-[10px] font-semibold px-2.5 py-1 rounded-pill bg-ck-lime/15 text-ck-lime-ink ring-1 ring-ck-lime/40">
-          400 kW CCS
-        </span>
         <img
           src="/eactros-600.png"
           alt="Mercedes-Benz eActros 600"
@@ -40,7 +37,6 @@ export default function TruckCard() {
       <div className="mt-3 flex items-center justify-between">
         <div className="min-w-0">
           <h3 className="font-headline font-bold text-xl tracking-tight text-on-surface">eActros 600</h3>
-          <p className="ck-num text-[11px] text-on-surface-variant mt-0.5">621 kWh · 500 km · 22 t</p>
         </div>
         <button
           type="button"
