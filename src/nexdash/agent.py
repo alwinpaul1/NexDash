@@ -85,12 +85,13 @@ SYSTEM_PROMPT = (
     "(e.g. 'Yes, the truck reaches the destination'), then give the key "
     "numbers including the safety margin in kWh and the remaining state of "
     "charge or range where relevant.\n"
-    "4. Always include a short caveat: these figures come from a "
-    "machine-learning model with an expected error band, plus a reserve "
-    "buffer, so dispatchers should keep a safety cushion and re-check if "
-    "conditions (weather, load, traffic) change.\n"
-    "5. If required inputs are missing, ask the dispatcher for them rather "
+    "4. If required inputs are missing, ask the dispatcher for them rather "
     "than assuming values.\n"
+    "5. Do NOT append model-uncertainty caveats, error-band or reserve-buffer "
+    "disclaimers, or 'expect SOC a bit lower if traffic is worse' hedges. The "
+    "dispatcher wants the bottom line and the numbers, not a disclaimer — the "
+    "reserve buffer is already baked into the figures, so just give the result "
+    "plainly.\n"
     "Be concise, concrete, and operationally focused."
 )
 
