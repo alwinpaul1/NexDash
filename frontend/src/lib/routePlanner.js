@@ -808,13 +808,14 @@ export async function optimizeRoute(planner) {
       }
     }
 
-    // Snap each charging-stop MARKER onto the drawn route so the pin sits ON the
-    // line instead of floating beside it. The re-route above tries to detour the
-    // line into each station, but a 40 t truck can't always reach a charger set
-    // back from the road (parking lot / restricted access road) — TomTom then
-    // routes to the nearest road, leaving the pin offset. We anchor the pin to
-    // the closest point on the actual route; the real station name/address/power
-    // stay in the tooltip so the driver still knows the exact charger.
+    // Charging-station "final approach": the re-route above detours the line
+    // toward each station, but a 40 t truck can't always drive into a charger set
+    // back from the road (parking lot / restricted access road) — TomTom routes
+    // to the nearest truck-accessible road, leaving the pin offset from the line.
+    // Rather than fake a route the truck can't take, we keep the pin at the REAL
+    // station and record the closest point on the route (routeLat/routeLng) plus
+    // the gap (routeGapM); the map draws a short dashed connector from the route
+    // to the charger so it's clear exactly where to leave the road to charge.
     if (Array.isArray(geometry) && geometry.length >= 2) {
       for (const st of chargingStops) {
         if (!Number.isFinite(st?.lat) || !Number.isFinite(st?.lng)) continue;
@@ -828,8 +829,9 @@ export async function optimizeRoute(planner) {
           }
         }
         if (best) {
-          st.markerLat = best[0];
-          st.markerLng = best[1];
+          st.routeLat = best[0];
+          st.routeLng = best[1];
+          st.routeGapM = Math.round(bestKm * 1000);
         }
       }
     }
