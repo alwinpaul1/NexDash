@@ -1,0 +1,34 @@
+# Keep the build context small and reproducible — everything below is rebuilt
+# or regenerated inside the image (frontend dist, model, dataset) or is local-only.
+.git
+.gitignore
+.venv
+venv
+env
+**/__pycache__
+**/*.py[cod]
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Node — reinstalled in the frontend build stage.
+frontend/node_modules
+frontend/dist
+
+# Generated artifacts — model/dataset are retrained at build; reports regenerated.
+data/*.csv
+models/*.joblib
+models/*.provenance.json
+models/registry
+reports/figures/*.png
+
+# Local-only / scratch / secrets.
+.env
+frontend/.env
+artifacts
+docs
+*.pdf
+.claude
+.codegraph
+.DS_Store
