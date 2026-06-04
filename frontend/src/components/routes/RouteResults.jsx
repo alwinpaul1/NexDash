@@ -82,56 +82,69 @@ export default function RouteResults({ plan }) {
     stops.length > 1 ||
     stops.some((st) => st.dropWeightKg > 0 || st.deliverBy || st.unloadMin > 0);
   const assumptions = s.assumptions || [];
+  // Live-traffic totals — TomTom routes around congestion (fastest + traffic),
+  // so this delay is already baked into the ETA. Surfaced both as a dashboard
+  // readout and the explanatory banner below it.
+  const traffic = plan.traffic || {};
+  const delayMin = Math.round((traffic.delayS || 0) / 60);
+  const nInc = (traffic.incidents || []).length;
 
   return (
     <div className="space-y-5">
-      {/* SOC gauge + badges */}
+      {/* Instrument dashboard — SOC speedometer + the key energy/route readouts,
+          up top so it's the first thing the dispatcher sees. */}
       <div className="nx-card p-6">
-        <div className="flex flex-col items-center">
-          <SocGauge arrivalSoc={s.arrivalSoc} startSoc={s.startSoc} minSoc={s.minSocFloor ?? s.minSoc} />
-          <div className="flex items-center gap-2 mt-4">
-            <span className="px-2.5 py-1 rounded-pill bg-surface text-on-surface-variant text-xs font-medium ring-1 ring-outline-variant/50">
-              eActros 600
-            </span>
-            <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-pill bg-primary/10 text-primary text-xs font-semibold ring-1 ring-primary/25">
-              <span className="material-symbols-outlined" style={{ fontSize: "14px" }}>
-                schedule
+        <p className="ck-label text-[10px] text-on-surface-variant/70 mb-4">Energy · Route Dashboard</p>
+        <div className="flex flex-col lg:flex-row lg:items-center gap-6">
+          {/* Speedometer */}
+          <div className="flex flex-col items-center shrink-0">
+            <SocGauge arrivalSoc={s.arrivalSoc} startSoc={s.startSoc} minSoc={s.minSocFloor ?? s.minSoc} />
+            <div className="flex flex-wrap items-center justify-center gap-2 mt-4">
+              <span className="px-2.5 py-1 rounded-pill bg-surface text-on-surface-variant text-xs font-medium ring-1 ring-outline-variant/50">
+                eActros 600
               </span>
-              ETA {s.etaLabel ? to12h(s.etaLabel) : "--:--"}
-            </span>
-          </div>
-        </div>
-
-        {/* Route info cards */}
-        <h3 className="text-[11px] uppercase tracking-[0.1em] font-semibold text-on-surface-variant mb-2.5 mt-6">Route Info</h3>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          <InfoCard icon="ev_station" value={s.chargingStops ?? 0} label="Charging Stops" tint="#f59e0b" />
-          <InfoCard icon="straighten" value={`${Math.round(s.distanceKm || 0)} km`} label="Total Distance" tint="#0059bb" />
-          <InfoCard icon="schedule" value={fmtHm((s.totalTimeH || 0) * 60)} label="Total Time" />
-          <InfoCard icon="bolt" value={fmtHm(s.chargingTimeMin || 0)} label="Charging Time" tint="#f59e0b" />
-        </div>
-
-        {/* Live traffic — TomTom routes around closures/congestion (fastest +
-            traffic), so this delay is already baked into the ETA above. */}
-        {(() => {
-          const t = plan.traffic || {};
-          const delayMin = Math.round((t.delayS || 0) / 60);
-          const nInc = (t.incidents || []).length;
-          if (delayMin <= 0 && nInc === 0) return null;
-          return (
-            <div className="mt-4 flex items-center gap-2.5 rounded-control border px-3 py-2.5 text-sm" style={{ background: "#f59e0b14", borderColor: "#f59e0b40", color: "#b45309" }}>
-              <span className="material-symbols-outlined shrink-0" style={{ fontSize: "18px", color: "#d97706" }}>
-                traffic
-              </span>
-              <span className="text-on-surface">
-                <span className="font-semibold" style={{ color: "#d97706" }}>Live traffic:</span>{" "}
-                {delayMin > 0 ? `+${delayMin} min delay` : "no significant delay"}
-                {nInc > 0 ? ` · ${nInc} incident${nInc > 1 ? "s" : ""} on route` : ""}
-                <span className="text-on-surface-variant"> — already factored into ETA</span>
+              <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-pill bg-primary/10 text-primary text-xs font-semibold ring-1 ring-primary/25">
+                <span className="material-symbols-outlined" style={{ fontSize: "14px" }}>schedule</span>
+                ETA {s.etaLabel ? to12h(s.etaLabel) : "--:--"}
               </span>
             </div>
-          );
-        })()}
+          </div>
+          {/* Readout cluster */}
+          <div className="flex-1 w-full grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <InfoCard icon="battery_charging_full" value={`${Math.round(s.energyKwh || 0)}`} label="Total kWh" />
+            <InfoCard icon="speed" value={`${Math.round(s.kwhPer100 || 0)}`} label="kWh / 100km" tint="#0059bb" />
+            <InfoCard icon="straighten" value={`${Math.round(s.distanceKm || 0)} km`} label="Distance" tint="#0059bb" />
+            <InfoCard icon="schedule" value={fmtHm((s.totalTimeH || 0) * 60)} label="Total Time" />
+            <InfoCard icon="ev_station" value={`${s.chargingStops ?? 0}`} label="Charging Stops" tint="#f59e0b" />
+            <InfoCard icon="bolt" value={fmtHm(s.chargingTimeMin || 0)} label="Charging Time" tint="#f59e0b" />
+            <InfoCard icon="trending_up" value={`${Math.round(s.elevationGainM || 0)} m`} label="Elevation" tint="#f59e0b" />
+            <InfoCard
+              icon="traffic"
+              value={delayMin > 0 ? `+${delayMin} min` : "0 min"}
+              label={`Traffic${nInc ? ` · ${nInc} inc` : ""}`}
+              tint="#d97706"
+            />
+          </div>
+        </div>
+        <p className="mt-3 text-[10px] leading-tight text-on-surface-variant/70">
+          Total kWh is field-calibrated to real-world consumption; charging and range
+          margin use a higher conservative estimate (see modelling assumptions below).
+        </p>
+
+        {/* Live traffic — already baked into the ETA; the banner explains the readout above. */}
+        {(delayMin > 0 || nInc > 0) && (
+          <div className="mt-4 flex items-center gap-2.5 rounded-control border px-3 py-2.5 text-sm" style={{ background: "#f59e0b14", borderColor: "#f59e0b40", color: "#b45309" }}>
+            <span className="material-symbols-outlined shrink-0" style={{ fontSize: "18px", color: "#d97706" }}>
+              traffic
+            </span>
+            <span className="text-on-surface">
+              <span className="font-semibold" style={{ color: "#d97706" }}>Live traffic:</span>{" "}
+              {delayMin > 0 ? `+${delayMin} min total delay` : "no significant delay"}
+              {nInc > 0 ? ` · ${nInc} incident${nInc > 1 ? "s" : ""} on route` : ""}
+              <span className="text-on-surface-variant"> — already factored into ETA</span>
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Per-stop arrivals (per-leg simulation): arrival SOC, ETA, deliver-by */}
@@ -276,21 +289,6 @@ export default function RouteResults({ plan }) {
 
       {/* Charging stops — real TomTom stations: connectors, power, availability */}
       <ChargingStopsList stops={plan.chargingStops} />
-
-      {/* Energy overview */}
-      <div className="nx-card p-5">
-        <h3 className="text-[11px] uppercase tracking-[0.1em] font-semibold text-on-surface-variant mb-3">Energy Overview</h3>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          <InfoCard icon="battery_charging_full" value={`${Math.round(s.energyKwh || 0)}`} label="Total kWh" />
-          <InfoCard icon="speed" value={`${Math.round(s.kwhPer100 || 0)}`} label="kWh / 100km" tint="#0059bb" />
-          <InfoCard icon="trending_up" value={`${Math.round(s.elevationGainM || 0)} m`} label="Elevation Gain" tint="#f59e0b" />
-          <InfoCard icon="ev_station" value={`${s.chargingStops || 0}`} label="Charging Stops" />
-        </div>
-        <p className="mt-2 text-[10px] leading-tight text-on-surface-variant/70">
-          Total kWh is field-calibrated to real-world consumption; charging and range
-          margin use a higher conservative estimate (see modelling assumptions below).
-        </p>
-      </div>
 
       {/* Honest modelling assumptions — surfaced from the backend so the
           dispatcher sees the caveats, not just a confident number. */}
