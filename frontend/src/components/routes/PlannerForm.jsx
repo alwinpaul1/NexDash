@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import LocationSearch from "./LocationSearch.jsx";
 import TruckCard from "./TruckCard.jsx";
 
@@ -63,6 +63,8 @@ function DestinationRow({
   dest,
   index,
   count,
+  maxDrop,
+  capActive,
   onUpdate,
   onRemove,
   onDragStartRow,
@@ -71,6 +73,18 @@ function DestinationRow({
 }) {
   const [dragOver, setDragOver] = useState(false);
   const [open, setOpen] = useState(false);
+
+  // Cumulative-payload enforcement: a stop can only drop what is still on board
+  // after the preceding stops, so its cap is `maxDrop` (= payload − Σ earlier
+  // drops). If an earlier stop grows, the payload is lowered, or stops are
+  // reordered, a now-too-large value is clamped back down to the remaining load.
+  useEffect(() => {
+    if (dest.dropWeightKg > maxDrop) {
+      onUpdate(dest.id, { dropWeightKg: Math.max(0, maxDrop) });
+    }
+  }, [maxDrop, dest.dropWeightKg, dest.id, onUpdate]);
+
+  const remainingAfter = Math.max(0, maxDrop - dest.dropWeightKg);
 
   return (
     <div
@@ -183,13 +197,13 @@ function DestinationRow({
                 <input
                   type="number"
                   min={0}
-                  max={MAX_PAYLOAD_KG}
+                  max={maxDrop}
                   step={500}
                   value={dest.dropWeightKg}
                   aria-label={`Drop-off weight at stop ${index + 1} in kilograms`}
                   onChange={(e) =>
                     onUpdate(dest.id, {
-                      dropWeightKg: Math.max(0, Math.min(MAX_PAYLOAD_KG, Math.round(Number(e.target.value) || 0))),
+                      dropWeightKg: Math.max(0, Math.min(maxDrop, Math.round(Number(e.target.value) || 0))),
                     })
                   }
                   className="w-24 px-2.5 py-1 rounded-control bg-surface-lowest border border-outline-variant/50 text-sm font-medium tabular-nums text-on-surface text-right outline-none hover:border-outline-variant/70 focus:border-primary/50 focus:ring-2 focus:ring-primary/30 transition duration-snappy"
@@ -198,14 +212,20 @@ function DestinationRow({
               </div>
             </div>
             <Slider
-              value={dest.dropWeightKg}
+              value={Math.min(dest.dropWeightKg, maxDrop)}
               min={0}
-              max={MAX_PAYLOAD_KG}
+              max={Math.max(maxDrop, 1)}
               step={250}
               ariaLabel={`Drop-off weight at stop ${index + 1}`}
-              ariaValueText={`${(dest.dropWeightKg / 1000).toFixed(1)} tonnes dropped`}
-              onChange={(v) => onUpdate(dest.id, { dropWeightKg: v })}
+              ariaValueText={`${(dest.dropWeightKg / 1000).toFixed(1)} tonnes dropped, ${(remainingAfter / 1000).toFixed(1)} tonnes left on board`}
+              onChange={(v) => onUpdate(dest.id, { dropWeightKg: Math.min(v, maxDrop) })}
             />
+            {capActive && (
+              <p className="mt-1 text-[10px] text-on-surface-variant/70 tabular-nums">
+                {remainingAfter.toLocaleString()} kg left on board after this stop
+                {" · "}max {maxDrop.toLocaleString()} kg here
+              </p>
+            )}
           </div>
           {/* Unloading Time: editable min box. */}
           <div className="flex items-center justify-between">
@@ -281,7 +301,27 @@ export default function PlannerForm({
   const hasOrigin = !!(planner.origin && planner.origin.lat != null);
   const validDestinations = planner.destinations.filter((d) => d.lat != null).length;
   const computing = status === "computing";
-  const canOptimize = hasOrigin && validDestinations >= 1 && !computing;
+
+  // Cumulative drop-off cap: the truck can only drop what is still on board, so
+  // each stop is capped at payload minus everything dropped at earlier stops —
+  // dropCaps[i] = payload − Σ drops[0..i-1] (clamped ≥ 0). The cap only engages
+  // once a payload is set (> 0); with no payload yet the form keeps the truck's
+  // physical 22 t per-stop ceiling so it stays usable before payload is entered.
+  const payloadKg = Math.max(0, planner.payloadKg ?? 0);
+  const capActive = payloadKg > 0;
+  let cumDropped = 0;
+  const dropCaps = planner.destinations.map((d) => {
+    const before = cumDropped;
+    cumDropped += Math.max(0, d.dropWeightKg || 0);
+    return capActive ? Math.max(0, payloadKg - before) : MAX_PAYLOAD_KG;
+  });
+  const totalDropKg = planner.destinations.reduce(
+    (s, d) => s + Math.max(0, d.dropWeightKg || 0),
+    0
+  );
+  const overCapacity = capActive && totalDropKg > payloadKg;
+
+  const canOptimize = hasOrigin && validDestinations >= 1 && !overCapacity && !computing;
 
   return (
     <div className="nx-card overflow-hidden">
@@ -387,6 +427,8 @@ export default function PlannerForm({
                 dest={d}
                 index={i}
                 count={planner.destinations.length}
+                maxDrop={dropCaps[i]}
+                capActive={capActive}
                 onUpdate={onUpdateDestination}
                 onRemove={onRemoveDestination}
                 onDragStartRow={handleDragStart}
@@ -398,6 +440,20 @@ export default function PlannerForm({
               <p className="text-xs text-on-surface-variant px-1">No stops yet. Add at least one destination.</p>
             )}
           </div>
+          {/* Cumulative load check: total dropped vs payload on board. */}
+          {capActive && planner.destinations.length > 0 && (
+            <p
+              className={`mt-2 flex items-center justify-between px-1 text-[11px] font-medium tabular-nums ${
+                overCapacity ? "text-error" : "text-on-surface-variant/80"
+              }`}
+            >
+              <span>Total drop-off</span>
+              <span>
+                {totalDropKg.toLocaleString()} / {payloadKg.toLocaleString()} kg
+                {overCapacity ? " — exceeds payload" : ` · ${Math.max(0, payloadKg - totalDropKg).toLocaleString()} kg unassigned`}
+              </span>
+            </p>
+          )}
         </div>
 
         {/* Departure */}
