@@ -103,21 +103,39 @@ On **Railway**: New Project → Deploy from this GitHub repo (it auto-detects th
 
 Railway exposes the variables to the Docker build automatically. The health check is `/api/health`. Locally you can `docker build -t nexdash . && docker run -p 8000:8000 -e TOMTOM_API_KEY=… -e MINIMAX_API_KEY=… nexdash`.
 
-**MCP server (bonus).** `predict_energy` and `check_reachability` are also exposed as an MCP server. Register it in any MCP host:
+**MCP server (bonus).** The same tools are exposed as an MCP server so any MCP host (Claude Desktop, Cursor, your own agent…) can call them directly — no NexDash LLM in the loop. It exposes four tools: `predict_energy`, `check_reachability`, `plan_route`, and `model_info`. Transport is **stdio** (`FastMCP.run` default — local only, no network port).
 
-```json
-{
-  "mcpServers": {
-    "nexdash": {
-      "command": "python",
-      "args": ["-m", "nexdash.mcp_server"],
-      "env": { "PYTHONPATH": "/absolute/path/to/NexDash/src" }
-    }
-  }
-}
-```
+**Run it (on the same machine or any other):**
 
-Smoke-test it on its own with `python -m nexdash.mcp_server`.
+1. Install and train once, so the deps and the model exist:
+   ```bash
+   pip install -e .          # makes `python -m nexdash.mcp_server` importable
+   python run_pipeline.py    # writes models/energy_model.joblib (required)
+   ```
+2. Smoke-test it standalone (it'll wait on stdio — Ctrl-C to exit):
+   ```bash
+   python -m nexdash.mcp_server
+   ```
+3. Register it in your MCP host's config (e.g. `claude_desktop_config.json`). Point `command` at the **interpreter that has the package installed** (your venv), and set the keys:
+   ```json
+   {
+     "mcpServers": {
+       "nexdash": {
+         "command": "/absolute/path/to/NexDash/.venv/bin/python",
+         "args": ["-m", "nexdash.mcp_server"],
+         "env": {
+           "PYTHONPATH": "/absolute/path/to/NexDash/src",
+           "TOMTOM_API_KEY": "<your-tomtom-key>"
+         }
+       }
+     }
+   }
+   ```
+
+Notes:
+- If `pip install -e .` ran in that environment, you can drop the `PYTHONPATH` line (the package is already importable).
+- `TOMTOM_API_KEY` is only needed for `plan_route` (geocode + routing); `predict_energy` / `check_reachability` / `model_info` run fully offline.
+- The trained model must be present on that machine — copy `models/energy_model.joblib` over, or run `python run_pipeline.py` there (deterministic, seed 42).
 
 ---
 
