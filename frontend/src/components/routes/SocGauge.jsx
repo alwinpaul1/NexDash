@@ -2,11 +2,11 @@
 // SVG arc (270deg sweep) colored by arrival SOC (green -> amber -> red),
 // big arrival % in the center, START / MIN labels under the arc ends.
 
-// Cockpit HUD palette: healthy reads as the signature lime, dropping through
-// caution-yellow / low-amber to critical red so risk is still legible at a glance.
+// Healthy reads as Dayos electric-yellow (the "stop the eye" hue), dropping
+// through amber to red so risk stays legible at a glance.
 function socColor(soc) {
-  if (soc >= 55) return "#c6f24e"; // healthy — signature lime
-  if (soc >= 35) return "#eab308"; // caution — yellow
+  if (soc >= 55) return "#fff100"; // healthy — electric yellow (Dayos accent)
+  if (soc >= 35) return "#f5b700"; // caution — gold
   if (soc >= 20) return "#f59e0b"; // low — amber
   return "#ef4444"; // critical — red
 }
