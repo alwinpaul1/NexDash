@@ -36,11 +36,13 @@ def _clear_caches():
     stubbed HTTP (a prior test's failure must not leave the breaker open)."""
     geodata._elev_cache.clear()
     geodata._weather_cache.clear()
-    geodata._cooldown_until = 0.0
+    geodata._circuit_open = False
+    geodata._retry_after_until = 0.0
     yield
     geodata._elev_cache.clear()
     geodata._weather_cache.clear()
-    geodata._cooldown_until = 0.0
+    geodata._circuit_open = False
+    geodata._retry_after_until = 0.0
 
 
 # A short west->east polyline across a few densely-spaced vertices.
@@ -328,9 +330,10 @@ def test_get_json_retries_transient_but_not_permanent(monkeypatch):
     assert geodata._get_json("https://x") is None
     assert transient["n"] == geodata._HTTP_RETRIES + 1  # retried to exhaustion
 
-    # The exhausted 503 above opened the circuit breaker; clear it so the next
-    # sub-case actually reaches the network again.
-    geodata._cooldown_until = 0.0
+    assert geodata._circuit_open is True  # exhausted 5xx opened the per-request circuit
+
+    # Re-arm (enrich_route does this each plan) so the next sub-case probes again.
+    geodata._circuit_open = False
     rate_limited = {"n": 0}
     def raise_429(*_a, **_k):
         rate_limited["n"] += 1
@@ -338,16 +341,42 @@ def test_get_json_retries_transient_but_not_permanent(monkeypatch):
     monkeypatch.setattr(geodata.urllib.request, "urlopen", raise_429)
     assert geodata._get_json("https://x") is None
     assert rate_limited["n"] == 1  # 429 fails fast: a rate-limit window won't clear on retry
+    assert geodata._circuit_open is True
 
-    geodata._cooldown_until = 0.0  # 429 also tripped the breaker; reset for the 4xx case
+    geodata._circuit_open = False  # re-arm for the 4xx case
     permanent = {"n": 0}
     def raise_400(*_a, **_k):
         permanent["n"] += 1
         raise urllib.error.HTTPError("u", 400, "bad request", {}, None)
     monkeypatch.setattr(geodata.urllib.request, "urlopen", raise_400)
     assert geodata._get_json("https://x") is None
-    assert permanent["n"] == 1  # permanent error: no retry, breaker NOT tripped
-    assert geodata._cooldown_until == 0.0  # a 400 must not open the breaker
+    assert permanent["n"] == 1  # permanent error: no retry
+    assert geodata._circuit_open is False  # a 400 must NOT open the circuit
+
+
+def test_429_retry_after_is_honoured(monkeypatch):
+    """A 429 carrying ``Retry-After: N`` opens a time-window honoured across
+    requests; without the header it degrades to the per-request circuit only."""
+    import urllib.error
+
+    monkeypatch.setattr(geodata.time, "sleep", lambda *_a, **_k: None)
+
+    def raise_429_with_retry(*_a, **_k):
+        raise urllib.error.HTTPError("u", 429, "slow down", {"Retry-After": "30"}, None)
+    monkeypatch.setattr(geodata.urllib.request, "urlopen", raise_429_with_retry)
+    assert geodata._get_json("https://x") is None
+    # The server-issued window is set dynamically (not a hardcoded constant).
+    assert geodata._retry_after_until > geodata.time.monotonic()
+    # Re-arming the per-request circuit does NOT clear the server's Retry-After:
+    # a follow-up call still bails without touching the network.
+    geodata._circuit_open = False
+    hit = {"n": 0}
+    def should_not_run(*_a, **_k):
+        hit["n"] += 1
+        raise AssertionError("network touched during Retry-After window")
+    monkeypatch.setattr(geodata.urllib.request, "urlopen", should_not_run)
+    assert geodata._get_json("https://x") is None
+    assert hit["n"] == 0
 
 
 def test_bearing_due_north_and_east():
