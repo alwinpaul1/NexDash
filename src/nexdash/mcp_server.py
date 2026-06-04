@@ -25,8 +25,11 @@ Security posture (MCP best practices)
   no ``0.0.0.0`` bind, and no DNS-rebinding surface. Do NOT switch to an HTTP
   transport unless you also bind 127.0.0.1, require an auth token, and enable
   ``TransportSecuritySettings`` Host/Origin validation.
-* SECRETS NEVER LEAVE THE SERVER. ``TOMTOM_API_KEY`` / ``MINIMAX_API_KEY`` are
-  the server's OWN credentials, resolved from the environment by the tool layer.
+* SECRETS NEVER LEAVE THE SERVER. The ONLY credential this server uses is
+  ``TOMTOM_API_KEY`` (geocode + routing) -- resolved from the environment by the
+  tool layer, or supplied per-request by the caller (BYO key / OAuth). It does
+  NOT use ``MINIMAX_API_KEY``: that powers the dashboard's in-process chat agent
+  only -- over MCP the *connecting* LLM is the agent, so no model key is needed.
   No tool returns, echoes or logs a key. Tool errors are mapped to short,
   generic, secret-free categories (raw exception text -- which can embed a
   filesystem path or an httpx URL-with-key -- is never returned); the full
