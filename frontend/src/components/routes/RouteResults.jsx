@@ -110,35 +110,10 @@ export default function RouteResults({ plan }) {
           <InfoCard icon="schedule" value={fmtHm((s.totalTimeH || 0) * 60)} label="Total Time" />
           <InfoCard icon="bolt" value={fmtHm(s.chargingTimeMin || 0)} label="Charging Time" tint="#f59e0b" />
         </div>
-
-        {/* Live traffic. The delay is TomTom's ROUTE-level figure (fastest +
-            traffic already steers around incidents), so it is the net extra time
-            the truck actually experiences — NOT the sum of each incident's local
-            delay. The incidents are disruptions detected along the corridor; a
-            tooltip explains why the total is less than they'd add up to. */}
-        {(() => {
-          const t = plan.traffic || {};
-          const delayMin = Math.round((t.delayS || 0) / 60);
-          const nInc = (t.incidents || []).length;
-          if (delayMin <= 0 && nInc === 0) return null;
-          return (
-            <div
-              className="mt-4 flex items-center gap-2.5 rounded-control border px-3 py-2.5 text-sm"
-              style={{ background: "#f59e0b14", borderColor: "#f59e0b40", color: "#b45309" }}
-              title="The delay is the extra time on your actual route. The route already steers around most incidents, so it's the NET delay — less than each incident's individual delay added together."
-            >
-              <span className="material-symbols-outlined shrink-0" style={{ fontSize: "18px", color: "#d97706" }}>
-                traffic
-              </span>
-              <span className="text-on-surface">
-                <span className="font-semibold" style={{ color: "#d97706" }}>Live traffic:</span>{" "}
-                {delayMin > 0 ? `+${delayMin} min net delay on your route` : "no significant delay on your route"}
-                {nInc > 0 ? ` · ${nInc} incident${nInc > 1 ? "s" : ""} near the route` : ""}
-                <span className="text-on-surface-variant"> — already factored into ETA</span>
-              </span>
-            </div>
-          );
-        })()}
+        {/* Live-traffic banner removed: TomTom's route-level delay is genuinely
+            small (the fastest+traffic route steers around incidents), and summing
+            the per-incident delays would overstate what the truck experiences.
+            Individual incidents stay on the map with their own local delay. */}
       </div>
 
       {/* Per-stop arrivals (per-leg simulation): arrival SOC, ETA, deliver-by */}
