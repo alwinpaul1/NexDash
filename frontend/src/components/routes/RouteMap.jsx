@@ -288,13 +288,14 @@ function buildSocSegments(geometry, socProfile, totalKm, chargingStops) {
     return endSoc;
   };
 
-  // Break a new sub-segment whenever the colour bucket changes OR the rounded
-  // battery percentage ticks by 1 (so each hoverable piece carries a tight
-  // "X% → Y%" transition), AND force a hard break at every charge vertex.
+  // Break a new sub-segment only when the colour BUCKET changes (or at a charge
+  // vertex). Breaking on every 1% tick produced dozens of tiny round-capped
+  // polylines that read as a string of beads; one polyline per colour band
+  // (≈5 over a route) draws as a smooth continuous line. Each kept segment
+  // still carries start/end SOC for the hover tooltip (now a band range).
   const soc0 = socAtVertex(0);
   const segs = [];
   let cur = { positions: [geometry[0]], color: socColor(soc0), startSoc: soc0, endSoc: soc0 };
-  let curBand = Math.round(soc0);
   for (let i = 1; i < geometry.length; i++) {
     const charge = chargeAt.get(i);
     const soc = charge ? charge.arrive : socAtVertex(i);
@@ -307,15 +308,12 @@ function buildSocSegments(geometry, socProfile, totalKm, chargingStops) {
       if (cur.positions.length > 1) segs.push(cur);
       const leave = charge.depart;
       cur = { positions: [geometry[i]], color: socColor(leave), startSoc: leave, endSoc: leave };
-      curBand = Math.round(leave);
       continue;
     }
     const color = socColor(soc);
-    const band = Math.round(soc);
-    if ((color !== cur.color || band !== curBand) && i < geometry.length - 1) {
+    if (color !== cur.color && i < geometry.length - 1) {
       segs.push(cur);
       cur = { positions: [geometry[i]], color, startSoc: soc, endSoc: soc };
-      curBand = band;
     }
   }
   if (cur.positions.length > 1) segs.push(cur);
@@ -695,20 +693,22 @@ export default function RouteMap({ plan, waypoints = [] }) {
         {/* Route — SOC-gradient when Battery Drain on, plain primary line otherwise. */}
         {layers.route &&
           (layers.drain ? (
-            socSegs.map((seg, i) => (
+            <>
+              {/* One continuous dark casing under the WHOLE route so the line
+                  reads crisply over light/satellite tiles with no per-segment
+                  caps to bead the line. */}
+              <Polyline
+                positions={geometry}
+                pathOptions={{
+                  color: "#0b1c30",
+                  weight: 12,
+                  opacity: 0.18,
+                  lineCap: "round",
+                  lineJoin: "round",
+                }}
+              />
+              {socSegs.map((seg, i) => (
               <Fragment key={`soc-${i}`}>
-                {/* Subtle dark casing beneath each SOC segment so the coloured
-                    line reads crisply over both light and satellite tiles. */}
-                <Polyline
-                  positions={seg.positions}
-                  pathOptions={{
-                    color: "#0b1c30",
-                    weight: 12,
-                    opacity: 0.18,
-                    lineCap: "round",
-                    lineJoin: "round",
-                  }}
-                />
                 <Polyline
                   positions={seg.positions}
                   pathOptions={{
@@ -736,7 +736,8 @@ export default function RouteMap({ plan, waypoints = [] }) {
                   </Tooltip>
                 </Polyline>
               </Fragment>
-            ))
+              ))}
+            </>
           ) : geometry.length >= 2 ? (
             <Fragment>
               <Polyline
