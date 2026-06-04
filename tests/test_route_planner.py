@@ -839,6 +839,85 @@ def test_extended_day_constants_match_eu561():
 
 
 # --------------------------------------------------------------------------- #
+# EU 561 REDUCED 9 h daily rest (Art 8(4), opt-in, max 3x/week)
+# --------------------------------------------------------------------------- #
+# A ~12.9 h-driving trip (900 km @ 70 km/h, no geometry) -> splits across days,
+# inserting daily rests we can shorten from 11 h to 9 h.
+_RED_TRIP = dict(
+    distance_km=900.0, duration_s=900.0 / 70.0 * 3600.0, start_soc=100.0,
+    min_soc=0.0, payload_kg=5000.0, departure="2026-05-30T06:00",
+    model_path=DEFAULT_MODEL_PATH,
+)
+
+
+def test_reduced_rest_default_is_byte_identical():
+    """WHY (regression-safe): with the default allow_reduced_rest_days=0 every daily
+    rest stays the regular 11 h and the whole plan is byte-identical to before this
+    option existed. If the default drifted, every existing plan would silently change."""
+    base = route_planner.plan_route(**_RED_TRIP)
+    rests = [s for s in base["segments"] if s.get("type") == "daily_rest"]
+    assert rests, "the ~12.9 h trip must insert at least one daily rest"
+    assert all(s["durationMin"] == round(route_planner.EU561_DAILY_REST_H * 60.0) for s in rests)
+    assert all(s["label"] == "Daily Rest (11h)" for s in rests)
+    # The default opt-out caveat must still disclose reduced rest as NOT modelled.
+    blob = " ".join(base["summary"]["assumptions"])
+    assert "reduced/compensated rest" in blob
+
+
+def test_reduced_rest_shortens_one_rest_and_shaves_arrival():
+    """WHY: the headline of the feature — allowing one reduced 9 h daily rest must
+    shorten exactly ONE inserted rest from 11 h to 9 h, shaving ~2 h off a multi-day
+    arrival, while the plan stays EU 561-compliant (a 9 h reduced rest is legal up to
+    3x/week). The 'reduced rest not modelled' caveat must drop once it IS modelled."""
+    base = route_planner.plan_route(**_RED_TRIP)
+    red = route_planner.plan_route(allow_reduced_rest_days=1, **_RED_TRIP)
+    base_rests = [s for s in base["segments"] if s.get("type") == "daily_rest"]
+    red_rests = [s for s in red["segments"] if s.get("type") == "daily_rest"]
+    # Same number of rests (the split structure is unchanged) but exactly one is 9 h.
+    assert len(red_rests) == len(base_rests)
+    short = [s for s in red_rests if s["durationMin"] == round(route_planner.EU561_REDUCED_DAILY_REST_H * 60.0)]
+    assert len(short) == 1
+    assert short[0]["label"] == "Daily Rest (9h)"
+    # ~2 h shaved off total time and arrival (11 h - 9 h = 2 h).
+    base_total = base["summary"]["totalTimeH"]
+    red_total = red["summary"]["totalTimeH"]
+    assert base_total - red_total == pytest.approx(2.0, abs=0.05)
+    assert red["summary"]["driver"]["eu561ok"] is True
+    blob = " ".join(red["summary"]["assumptions"])
+    assert "reduced/compensated rest" not in blob
+
+
+def test_reduced_rest_allowance_is_clamped_and_spent_in_order():
+    """WHY: the allowance is a scarce, clamped resource — once spent, later rests
+    revert to 11 h (EU 561 permits the 9 h reduced rest at most 3x between weekly
+    rests). A clamp above 3 must not grant a fourth reduced rest. On a trip with
+    several rests, allow=1 shortens exactly one; a huge value shortens at most all."""
+    # A ~50 h trip splits into many daily rests.
+    long_trip = dict(
+        distance_km=3500.0, duration_s=3500.0 / 70.0 * 3600.0, start_soc=100.0,
+        min_soc=0.0, payload_kg=5000.0, departure="2026-05-30T06:00",
+        model_path=DEFAULT_MODEL_PATH,
+    )
+    short_min = round(route_planner.EU561_REDUCED_DAILY_REST_H * 60.0)
+    one = route_planner.plan_route(allow_reduced_rest_days=1, **long_trip)
+    one_short = [s for s in one["segments"]
+                 if s.get("type") == "daily_rest" and s["durationMin"] == short_min]
+    assert len(one_short) == 1                              # only the first rest reduced
+    clamped = route_planner.plan_route(allow_reduced_rest_days=9, **long_trip)
+    clamped_short = [s for s in clamped["segments"]
+                     if s.get("type") == "daily_rest" and s["durationMin"] == short_min]
+    # Clamp: asking for 9 cannot reduce more than the 3/week statutory ceiling.
+    assert len(clamped_short) <= route_planner.EU561_MAX_REDUCED_RESTS_PER_WEEK
+
+
+def test_reduced_rest_constants_match_eu561():
+    """WHY: the assumptions panel and rest machine key off these constants; they must
+    encode the statutory values (9 h reduced daily rest, max 3 between weekly rests)."""
+    assert route_planner.EU561_REDUCED_DAILY_REST_H == 9.0
+    assert route_planner.EU561_MAX_REDUCED_RESTS_PER_WEEK == 3
+
+
+# --------------------------------------------------------------------------- #
 # A2-4 — prior-week duty seed (mid-week driver closer to the 56 h weekly cap)
 # --------------------------------------------------------------------------- #
 # ~50 h of fresh driving (3500 km @ 70 km/h) — compliant on a fresh week.
