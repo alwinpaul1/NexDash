@@ -288,14 +288,15 @@ function buildSocSegments(geometry, socProfile, totalKm, chargingStops) {
     return endSoc;
   };
 
-  // Break a new sub-segment only when the colour BUCKET changes (or at a charge
-  // vertex). Breaking on every 1% tick produced dozens of tiny round-capped
-  // polylines that read as a string of beads; one polyline per colour band
-  // (≈5 over a route) draws as a smooth continuous line. Each kept segment
-  // still carries start/end SOC for the hover tooltip (now a band range).
+  // FINE segmentation: break on colour change OR each 1% SOC tick OR a charge
+  // vertex, so every piece carries a tight "X% -> Y%" transition for the hover
+  // tooltip. These fine pieces drive the (invisible) hit-lines; the VISIBLE
+  // line uses mergeBands() to fuse same-colour runs into smooth per-colour
+  // bands, so the route never reads as a string of beads.
   const soc0 = socAtVertex(0);
   const segs = [];
   let cur = { positions: [geometry[0]], color: socColor(soc0), startSoc: soc0, endSoc: soc0 };
+  let curBand = Math.round(soc0);
   for (let i = 1; i < geometry.length; i++) {
     const charge = chargeAt.get(i);
     const soc = charge ? charge.arrive : socAtVertex(i);
@@ -308,16 +309,37 @@ function buildSocSegments(geometry, socProfile, totalKm, chargingStops) {
       if (cur.positions.length > 1) segs.push(cur);
       const leave = charge.depart;
       cur = { positions: [geometry[i]], color: socColor(leave), startSoc: leave, endSoc: leave };
+      curBand = Math.round(leave);
       continue;
     }
     const color = socColor(soc);
-    if (color !== cur.color && i < geometry.length - 1) {
+    const band = Math.round(soc);
+    if ((color !== cur.color || band !== curBand) && i < geometry.length - 1) {
       segs.push(cur);
       cur = { positions: [geometry[i]], color, startSoc: soc, endSoc: soc };
+      curBand = band;
     }
   }
   if (cur.positions.length > 1) segs.push(cur);
   return segs;
+}
+
+// Fuse consecutive same-colour FINE segments into per-colour BANDS for the
+// visible line. Each fine segment starts at the vertex the previous one ended
+// on, so concatenating (minus the shared first point) yields one continuous
+// polyline per colour — smooth, with no per-1% round-cap beading.
+function mergeBands(segs) {
+  const out = [];
+  for (const s of segs) {
+    const last = out[out.length - 1];
+    if (last && last.color === s.color) {
+      last.positions = last.positions.concat(s.positions.slice(1));
+      last.endSoc = s.endSoc;
+    } else {
+      out.push({ positions: [...s.positions], color: s.color, startSoc: s.startSoc, endSoc: s.endSoc });
+    }
+  }
+  return out;
 }
 
 // A single marker that travels the route source -> destination on a loop,
@@ -620,6 +642,9 @@ export default function RouteMap({ plan, waypoints = [] }) {
     () => buildSocSegments(geometry, plan?.socProfile, plan?.summary?.distanceKm, plan?.chargingStops),
     [geometry, plan?.socProfile, plan?.summary?.distanceKm, plan?.chargingStops]
   );
+  // Smooth visible line = same-colour fine segments fused into bands; the fine
+  // socSegs stay as the precise hover-tooltip hit-lines.
+  const socBands = useMemo(() => mergeBands(socSegs), [socSegs]);
 
   // Identify origin/destinations by ROLE, not array position: when the user
   // adds a destination before setting an origin, the destination must NOT be
@@ -707,9 +732,10 @@ export default function RouteMap({ plan, waypoints = [] }) {
                   lineJoin: "round",
                 }}
               />
-              {socSegs.map((seg, i) => (
-              <Fragment key={`soc-${i}`}>
+              {/* Visible line: one smooth polyline per colour band. */}
+              {socBands.map((seg, i) => (
                 <Polyline
+                  key={`band-${i}`}
                   positions={seg.positions}
                   pathOptions={{
                     color: seg.color,
@@ -719,9 +745,12 @@ export default function RouteMap({ plan, waypoints = [] }) {
                     lineJoin: "round",
                   }}
                 />
-                {/* Invisible wide hit-line widens the hover target; the sticky
-                    tooltip then follows the cursor showing the battery drain. */}
+              ))}
+              {/* Fine invisible hit-lines: a wide hover target per 1%-SOC piece,
+                  so the sticky tooltip shows a tight "X% → Y%" local transition. */}
+              {socSegs.map((seg, i) => (
                 <Polyline
+                  key={`hit-${i}`}
                   positions={seg.positions}
                   pathOptions={{ color: seg.color, weight: 16, opacity: 0 }}
                 >
@@ -735,7 +764,6 @@ export default function RouteMap({ plan, waypoints = [] }) {
                     </span>
                   </Tooltip>
                 </Polyline>
-              </Fragment>
               ))}
             </>
           ) : geometry.length >= 2 ? (
