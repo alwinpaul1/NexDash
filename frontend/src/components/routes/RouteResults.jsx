@@ -81,7 +81,6 @@ export default function RouteResults({ plan }) {
   const showStops =
     stops.length > 1 ||
     stops.some((st) => st.dropWeightKg > 0 || st.deliverBy || st.unloadMin > 0);
-  const assumptions = s.assumptions || [];
 
   return (
     <div className="space-y-5">
@@ -270,27 +269,9 @@ export default function RouteResults({ plan }) {
         </div>
         <p className="mt-2 text-[10px] leading-tight text-on-surface-variant/70">
           Total kWh is field-calibrated to real-world consumption; charging and range
-          margin use a higher conservative estimate (see modelling assumptions below).
+          margin use a higher conservative estimate.
         </p>
       </div>
-
-      {/* Honest modelling assumptions — surfaced from the backend so the
-          dispatcher sees the caveats, not just a confident number. */}
-      {assumptions.length > 0 && (
-        <details className="nx-card p-4 text-sm text-on-surface-variant group">
-          <summary className="cursor-pointer font-medium text-on-surface flex items-center gap-1.5 nx-focus rounded-control -m-1 p-1">
-            <span className="material-symbols-outlined text-on-surface-variant transition-transform duration-snappy ease-nx-out group-open:rotate-90" style={{ fontSize: "16px" }}>
-              chevron_right
-            </span>
-            Modelling assumptions &amp; limitations
-          </summary>
-          <ul className="mt-3 list-disc pl-5 space-y-1.5 text-on-surface-variant">
-            {assumptions.map((a, i) => (
-              <li key={i}>{a}</li>
-            ))}
-          </ul>
-        </details>
-      )}
     </div>
   );
 }
