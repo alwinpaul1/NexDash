@@ -32,12 +32,15 @@ from nexdash import geodata
 
 @pytest.fixture(autouse=True)
 def _clear_caches():
-    """Reset the in-process caches so each test sees its own stubbed HTTP."""
+    """Reset the in-process caches + circuit breaker so each test sees its own
+    stubbed HTTP (a prior test's failure must not leave the breaker open)."""
     geodata._elev_cache.clear()
     geodata._weather_cache.clear()
+    geodata._cooldown_until = 0.0
     yield
     geodata._elev_cache.clear()
     geodata._weather_cache.clear()
+    geodata._cooldown_until = 0.0
 
 
 # A short west->east polyline across a few densely-spaced vertices.
@@ -311,7 +314,8 @@ def test_recent_past_departure_uses_historical_forecast_endpoint(monkeypatch):
 
 
 def test_get_json_retries_transient_but_not_permanent(monkeypatch):
-    """_get_json retries 5xx/429 with backoff, but never retries a 4xx."""
+    """_get_json retries transient 5xx with backoff, but fails FAST on a 429
+    rate-limit and never retries other 4xx."""
     import urllib.error
 
     monkeypatch.setattr(geodata.time, "sleep", lambda *_a, **_k: None)  # no real waiting
@@ -324,13 +328,26 @@ def test_get_json_retries_transient_but_not_permanent(monkeypatch):
     assert geodata._get_json("https://x") is None
     assert transient["n"] == geodata._HTTP_RETRIES + 1  # retried to exhaustion
 
+    # The exhausted 503 above opened the circuit breaker; clear it so the next
+    # sub-case actually reaches the network again.
+    geodata._cooldown_until = 0.0
+    rate_limited = {"n": 0}
+    def raise_429(*_a, **_k):
+        rate_limited["n"] += 1
+        raise urllib.error.HTTPError("u", 429, "too many requests", {}, None)
+    monkeypatch.setattr(geodata.urllib.request, "urlopen", raise_429)
+    assert geodata._get_json("https://x") is None
+    assert rate_limited["n"] == 1  # 429 fails fast: a rate-limit window won't clear on retry
+
+    geodata._cooldown_until = 0.0  # 429 also tripped the breaker; reset for the 4xx case
     permanent = {"n": 0}
     def raise_400(*_a, **_k):
         permanent["n"] += 1
         raise urllib.error.HTTPError("u", 400, "bad request", {}, None)
     monkeypatch.setattr(geodata.urllib.request, "urlopen", raise_400)
     assert geodata._get_json("https://x") is None
-    assert permanent["n"] == 1  # permanent error: no retry
+    assert permanent["n"] == 1  # permanent error: no retry, breaker NOT tripped
+    assert geodata._cooldown_until == 0.0  # a 400 must not open the breaker
 
 
 def test_bearing_due_north_and_east():
