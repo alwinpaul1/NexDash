@@ -599,10 +599,12 @@ function SearchBox({ onPick }) {
   );
 }
 
-// Segmented tile-style switcher (Streets / Satellite / Dark).
+// Compact pill dock to switch base tiles (Streets / Satellite / Dark). The
+// selected option is a raised neutral chip with an accent-coloured icon, so it
+// reads clearly without a loud fill.
 function TileSwitcher({ value, onChange }) {
   return (
-    <div className="absolute bottom-5 left-5 z-[1000] flex gap-1 rounded-card bg-surface-lowest/95 backdrop-blur border border-outline-variant/50 shadow-nx-md overflow-hidden p-1">
+    <div className="absolute bottom-5 left-5 z-[1000] flex items-center gap-0.5 rounded-pill bg-surface-lowest/90 backdrop-blur-md border border-outline-variant/50 shadow-nx-md p-1">
       {Object.entries(TILE_STYLES).map(([key, s]) => {
         const on = value === key;
         return (
@@ -610,13 +612,17 @@ function TileSwitcher({ value, onChange }) {
             key={key}
             type="button"
             onClick={() => onChange(key)}
-            className={`flex items-center gap-2 rounded-control px-3.5 py-2.5 text-sm font-medium transition-all duration-smooth ease-nx-out ${
+            aria-pressed={on}
+            className={`flex items-center gap-1.5 rounded-pill px-3 py-1.5 text-[13px] font-medium transition-colors duration-snappy ease-nx-out nx-focus ${
               on
-                ? "bg-primary/15 text-primary ring-1 ring-inset ring-primary/30"
-                : "text-on-surface-variant hover:bg-on-surface/5 hover:text-on-surface"
+                ? "bg-surface text-on-surface shadow-nx-sm ring-1 ring-outline-variant/60"
+                : "text-on-surface-variant hover:text-on-surface"
             }`}
           >
-            <span className="material-symbols-outlined" style={{ fontSize: "20px" }}>
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: "18px", color: on ? "rgb(var(--c-primary))" : undefined }}
+            >
               {s.icon}
             </span>
             {s.label}
