@@ -218,6 +218,7 @@ export default function RouteResults({ plan }) {
           </div>
         </div>
 
+        {/* Multi-day schedule breakdown — hidden for now.
         {d.days > 1 && Array.isArray(d.perDay) && (
           <div className="pt-3 nx-divider">
             <p className="text-[10px] uppercase tracking-wide text-on-surface-variant mb-1 mt-3">
@@ -236,6 +237,7 @@ export default function RouteResults({ plan }) {
             </div>
           </div>
         )}
+        */}
       </div>
 
       {/* Trip timeline */}
