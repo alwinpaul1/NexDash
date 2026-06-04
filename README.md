@@ -1,4 +1,4 @@
-# NexDash: EV Truck Range Intelligence
+# NexDash Case Study
 
 > *"Truck 14 is at 62% charge in Hamburg, loaded to 18 t, with a 240 km run to Bremen on the A1. It's −4 °C and windy. Does it make it without charging?"*
 
