@@ -1,4 +1,38 @@
+import { useEffect, useState } from "react";
 import ThemeToggle from "./ThemeToggle.jsx";
+
+// Live wall-clock for the header: local time (12-hour, with seconds) over the
+// weekday/date. Ticks once a second; cleared on unmount. Uses the cockpit mono
+// numerals (.ck-num) so the digits don't reflow as they change.
+function Clock() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const time = now.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const date = now.toLocaleDateString("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+  return (
+    <div className="hidden md:flex items-center gap-2 pr-1" title={date}>
+      <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: "18px" }}>
+        schedule
+      </span>
+      <div className="flex flex-col items-end leading-tight">
+        <span className="ck-num text-sm font-semibold text-on-surface tabular-nums">{time}</span>
+        <span className="text-[10px] text-on-surface-variant -mt-0.5">{date}</span>
+      </div>
+    </div>
+  );
+}
 
 export default function TopBar() {
   return (
@@ -19,7 +53,8 @@ export default function TopBar() {
         </div>
       </div>
 
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex items-center gap-3">
+        <Clock />
         <ThemeToggle />
       </div>
     </header>
