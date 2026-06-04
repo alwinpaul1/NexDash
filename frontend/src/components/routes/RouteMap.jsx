@@ -220,15 +220,15 @@ function buildSocSegments(geometry, socProfile, totalKm, chargingStops) {
       Math.cos(toRad(a[0])) * Math.cos(toRad(b[0])) * Math.sin(dLng / 2) ** 2;
     cum.push(cum[i - 1] + 2 * R * Math.asin(Math.sqrt(h)));
   }
-  const geomTotal = cum[cum.length - 1] || totalKm;
-
-  // Map a geometry-cumulative-distance -> socProfile distance. By default this is
-  // a uniform scale (totalKm / geomTotal). But the displayed route DETOURS into
-  // each charging station, adding geometry length the socProfile (computed on the
-  // direct route) doesn't have — a uniform scale would smear that, painting the
-  // post-charge stretch with the pre-charge colour. So we ANCHOR each station's
-  // nearest geometry vertex to its socProfile distance and interpolate piecewise,
-  // making the charge SOC jump land exactly at the station regardless of detour.
+  // Charge KNOTS drive the colouring. The displayed route detours into each
+  // charging station (extra geometry the direct-route socProfile doesn't have),
+  // so mapping by distance smears the post-charge colour and paints a long red
+  // stretch AFTER the stop. Instead we pin each station to its nearest geometry
+  // vertex and treat SOC as a drain BETWEEN knots: it falls from the previous
+  // knot's depart-SOC to the next knot's arrive-SOC, then jumps UP at the
+  // station vertex (arrive → depart). The jump is a hard break exactly at the
+  // marker, so everything before reads as the low arrival colour (red) and
+  // everything after reads as the topped-up colour (green) — no leak.
   const hav = (a, b) => {
     const R = 6371;
     const dLat = toRad(b[0] - a[0]);
@@ -238,68 +238,80 @@ function buildSocSegments(geometry, socProfile, totalKm, chargingStops) {
       Math.cos(toRad(a[0])) * Math.cos(toRad(b[0])) * Math.sin(dLng / 2) ** 2;
     return 2 * R * Math.asin(Math.sqrt(h));
   };
-  const anchors = [{ g: 0, s: 0 }];
+  const lastIdx = geometry.length - 1;
+  const startSoc = socProfile[0].soc;
+  const endSoc = socProfile[socProfile.length - 1].soc;
+
+  // Each charge stop → its nearest geometry vertex, carrying arrive/depart SOC.
+  const charges = [];
   if (Array.isArray(chargingStops)) {
     for (const st of chargingStops) {
-      if (!Number.isFinite(st?.lat) || !Number.isFinite(st?.lng) || !Number.isFinite(st?.distKm)) continue;
+      if (!Number.isFinite(st?.lat) || !Number.isFinite(st?.lng)) continue;
+      if (!Number.isFinite(st?.arriveSoc) || !Number.isFinite(st?.departSoc)) continue;
       let bi = 0;
       let bd = Infinity;
       for (let i = 0; i < geometry.length; i++) {
         const d = hav(geometry[i], [st.lat, st.lng]);
         if (d < bd) { bd = d; bi = i; }
       }
-      anchors.push({ g: cum[bi], s: st.distKm });
+      charges.push({ vi: bi, arrive: st.arriveSoc, depart: st.departSoc });
     }
   }
-  anchors.push({ g: geomTotal, s: totalKm });
-  anchors.sort((a, b) => a.g - b.g);
-  // Keep anchors strictly increasing in g and non-decreasing in s (drop dupes).
-  const mono = [anchors[0]];
-  for (let i = 1; i < anchors.length; i++) {
-    const prev = mono[mono.length - 1];
-    if (anchors[i].g > prev.g + 1e-6 && anchors[i].s >= prev.s) mono.push(anchors[i]);
+  charges.sort((a, b) => a.vi - b.vi);
+
+  // Knots: vertex 0 (leave = startSoc) → each charge (enter = arrive, leave =
+  // depart) → final vertex (enter = endSoc). Drop charges that don't advance.
+  const knots = [{ vi: 0, leave: startSoc }];
+  const chargeAt = new Map(); // vertexIndex -> { arrive, depart }
+  let prevVi = 0;
+  for (const c of charges) {
+    if (c.vi <= prevVi || c.vi >= lastIdx) continue;
+    knots.push({ vi: c.vi, enter: c.arrive, leave: c.depart });
+    chargeAt.set(c.vi, c);
+    prevVi = c.vi;
   }
-  const mapToSocDist = (g) => {
-    for (let i = 1; i < mono.length; i++) {
-      if (g <= mono[i].g) {
-        const a = mono[i - 1];
-        const b = mono[i];
-        const f = (g - a.g) / ((b.g - a.g) || 1);
-        return a.s + f * (b.s - a.s);
+  knots.push({ vi: lastIdx, enter: endSoc });
+
+  // SOC entering vertex i: linear in geometry distance from the previous knot's
+  // depart-SOC down to the next knot's arrive-SOC.
+  const socAtVertex = (i) => {
+    for (let k = 0; k < knots.length - 1; k++) {
+      const a = knots[k];
+      const b = knots[k + 1];
+      if (i >= a.vi && i <= b.vi) {
+        const ga = cum[a.vi];
+        const gb = cum[b.vi];
+        const f = gb > ga ? (cum[i] - ga) / (gb - ga) : 0;
+        return a.leave + f * (b.enter - a.leave);
       }
     }
-    return mono[mono.length - 1].s;
+    return endSoc;
   };
 
-  const socAt = (km) => {
-    if (km <= socProfile[0].distKm) return socProfile[0].soc;
-    const last = socProfile[socProfile.length - 1];
-    if (km >= last.distKm) return last.soc;
-    for (let i = 1; i < socProfile.length; i++) {
-      if (socProfile[i].distKm >= km) {
-        const a = socProfile[i - 1];
-        const b = socProfile[i];
-        const f = (km - a.distKm) / (b.distKm - a.distKm || 1);
-        return a.soc + f * (b.soc - a.soc);
-      }
-    }
-    return last.soc;
-  };
-
-  // Break a new sub-segment whenever the bucket color changes OR the rounded
-  // battery percentage ticks down by 1, so each hoverable piece carries a tight
-  // "X% → Y%" transition (matching the reference battery-level tooltip).
-  const soc0 = socAt(mapToSocDist(0));
+  // Break a new sub-segment whenever the colour bucket changes OR the rounded
+  // battery percentage ticks by 1 (so each hoverable piece carries a tight
+  // "X% → Y%" transition), AND force a hard break at every charge vertex.
+  const soc0 = socAtVertex(0);
   const segs = [];
   let cur = { positions: [geometry[0]], color: socColor(soc0), startSoc: soc0, endSoc: soc0 };
   let curBand = Math.round(soc0);
   for (let i = 1; i < geometry.length; i++) {
-    const km = mapToSocDist(cum[i]);
-    const soc = socAt(km);
-    const color = socColor(soc);
-    const band = Math.round(soc);
+    const charge = chargeAt.get(i);
+    const soc = charge ? charge.arrive : socAtVertex(i);
     cur.positions.push(geometry[i]);
     cur.endSoc = soc;
+    if (charge) {
+      // Hard jump at the station: close the pre-charge (low/red) segment here,
+      // then open a fresh post-charge (topped-up/green) segment at the SAME
+      // vertex so nothing downstream inherits the pre-charge colour.
+      if (cur.positions.length > 1) segs.push(cur);
+      const leave = charge.depart;
+      cur = { positions: [geometry[i]], color: socColor(leave), startSoc: leave, endSoc: leave };
+      curBand = Math.round(leave);
+      continue;
+    }
+    const color = socColor(soc);
+    const band = Math.round(soc);
     if ((color !== cur.color || band !== curBand) && i < geometry.length - 1) {
       segs.push(cur);
       cur = { positions: [geometry[i]], color, startSoc: soc, endSoc: soc };
