@@ -66,15 +66,34 @@ _HTTP_BACKOFF_S = 0.5  # base backoff, doubled each retry
 # Genuinely transient 5xx / connection / timeout errors are still retried.
 _RETRYABLE_STATUS = frozenset({500, 502, 503, 504})
 
-# Circuit breaker. A route plan makes ~6 Open-Meteo calls (one elevation batch +
-# several weather samples). When the provider is rate-limited or down, retrying
-# every one of them stacks up to a 60s+ stall. So the FIRST hard failure (a 429
-# rate-limit, or an exhausted 5xx/timeout) "opens" the breaker: for the next
-# _COOLDOWN_S seconds every call bails out instantly and the planner degrades to
-# seasonal/flat defaults — fast and honest (the UI shows the degraded flags).
-# It auto-closes after the cooldown, so live data returns on its own.
-_COOLDOWN_S = 60.0
-_cooldown_until = 0.0  # monotonic deadline; while now < this, _get_json bails fast
+# Dynamic rate-limit handling — NO fixed cooldown timer. A route plan makes ~6
+# Open-Meteo calls (one elevation batch + several weather samples); when the
+# provider is rate-limited or down, retrying each of them stacks up to a 60s+
+# stall. So the FIRST hard failure (a 429, or an exhausted 5xx/timeout) opens a
+# PER-REQUEST circuit: the remaining calls in that plan bail instantly and it
+# degrades to seasonal/flat defaults (the UI shows the degraded flags).
+# ``enrich_route`` RE-ARMS the circuit at the start of every plan, so the next
+# request re-probes the provider and self-heals the moment the limit clears — no
+# hardcoded wait. If a 429 carries a ``Retry-After``, we honour exactly that
+# (the server's own dynamic value), waiting it out across requests.
+_circuit_open = False  # per-request: set on a hard failure, re-armed by enrich_route()
+_retry_after_until = 0.0  # monotonic deadline from a 429 Retry-After header (if any)
+
+
+def _parse_retry_after(exc) -> "float | None":
+    """Seconds to wait from a 429's ``Retry-After`` header, or ``None``.
+
+    Supports the numeric (delta-seconds) form; capped at 5 min so a bogus value
+    can't wedge enrichment. The HTTP-date form is ignored (degrades to the
+    per-request circuit, which re-probes next plan anyway).
+    """
+    try:
+        val = (exc.headers.get("Retry-After") or "").strip()
+    except Exception:  # noqa: BLE001 - header access must never raise here
+        return None
+    if val.isdigit():
+        return min(float(val), 300.0)
+    return None
 
 _ELEV_API = "https://api.open-meteo.com/v1/elevation"
 _FORECAST_API = "https://api.open-meteo.com/v1/forecast"
@@ -104,10 +123,11 @@ def _get_json(url: str):
     exhausted (or on a non-retryable error) it returns ``None`` and the caller
     degrades to defaults, so the planner still runs offline.
     """
-    global _cooldown_until
-    # Circuit OPEN: a recent hard failure tripped the breaker, so skip the
-    # network entirely and degrade instantly (no per-call timeout to absorb).
-    if _cooldown_until and time.monotonic() < _cooldown_until:
+    global _circuit_open, _retry_after_until
+    # Circuit OPEN (this plan already saw a hard failure) or a server-issued
+    # Retry-After is still in effect: skip the network and degrade instantly —
+    # no per-call timeout to absorb.
+    if _circuit_open or (_retry_after_until and time.monotonic() < _retry_after_until):
         return None
 
     for attempt in range(_HTTP_RETRIES + 1):
@@ -121,22 +141,28 @@ def _get_json(url: str):
                 time.sleep(_HTTP_BACKOFF_S * (2 ** attempt))
                 continue
             # No more retries. A 429 (rate-limit) or an exhausted 5xx means the
-            # provider is overloaded -> open the breaker so sibling calls bail
-            # fast. A permanent 4xx (e.g. 400 out-of-range) does NOT trip it.
+            # provider is overloaded -> open the per-request circuit so sibling
+            # calls bail fast. A 429 may also tell us EXACTLY how long to wait
+            # (Retry-After) — honour that across requests. A permanent 4xx
+            # (e.g. 400 out-of-range) does NOT trip the circuit.
             if exc.code == 429 or exc.code in _RETRYABLE_STATUS:
-                _cooldown_until = time.monotonic() + _COOLDOWN_S
+                _circuit_open = True
+                if exc.code == 429:
+                    ra = _parse_retry_after(exc)
+                    if ra is not None:
+                        _retry_after_until = time.monotonic() + ra
             return None
         except (urllib.error.URLError, socket.timeout, TimeoutError):
             # Transient connection / timeout: back off and retry.
             if attempt < _HTTP_RETRIES:
                 time.sleep(_HTTP_BACKOFF_S * (2 ** attempt))
                 continue
-            # Sustained outage -> open the breaker.
-            _cooldown_until = time.monotonic() + _COOLDOWN_S
+            # Sustained outage -> open the per-request circuit.
+            _circuit_open = True
             return None
         except Exception:
             # Bad JSON or anything unexpected: don't retry, degrade. The provider
-            # is reachable, so don't trip the breaker.
+            # is reachable, so don't trip the circuit.
             return None
     return None
 
@@ -463,6 +489,12 @@ def enrich_route(geometry, departure_iso=None, leg_timings=None) -> dict:
     Never raises: on any failure (empty/degenerate geometry, network down) it
     returns a coherent default-filled structure instead.
     """
+    # Re-arm the per-request circuit so this plan re-probes the provider; if it's
+    # recovered, live data flows again with no fixed wait. A still-pending
+    # Retry-After (server-issued) is left intact and respected.
+    global _circuit_open
+    _circuit_open = False
+
     empty = {
         "segments": [],
         "elevationProfile": [],
