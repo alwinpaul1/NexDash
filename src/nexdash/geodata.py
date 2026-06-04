@@ -59,7 +59,22 @@ _HTTP_TIMEOUT_S = 8
 # silently flattening terrain for the energy model — worse than a brief stall.
 _HTTP_RETRIES = 2  # extra attempts after the first (so up to 3 total)
 _HTTP_BACKOFF_S = 0.5  # base backoff, doubled each retry
-_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+# 429 (Too Many Requests) is deliberately NOT retried: a rate-limit persists for
+# the whole window, so retrying with sub-second backoff just stalls the request
+# (and the request count keeps the limit tripped). Fail FAST to defaults instead
+# — the conditions.weatherDegraded / elevationDegraded flags then tell the UI.
+# Genuinely transient 5xx / connection / timeout errors are still retried.
+_RETRYABLE_STATUS = frozenset({500, 502, 503, 504})
+
+# Circuit breaker. A route plan makes ~6 Open-Meteo calls (one elevation batch +
+# several weather samples). When the provider is rate-limited or down, retrying
+# every one of them stacks up to a 60s+ stall. So the FIRST hard failure (a 429
+# rate-limit, or an exhausted 5xx/timeout) "opens" the breaker: for the next
+# _COOLDOWN_S seconds every call bails out instantly and the planner degrades to
+# seasonal/flat defaults — fast and honest (the UI shows the degraded flags).
+# It auto-closes after the cooldown, so live data returns on its own.
+_COOLDOWN_S = 60.0
+_cooldown_until = 0.0  # monotonic deadline; while now < this, _get_json bails fast
 
 _ELEV_API = "https://api.open-meteo.com/v1/elevation"
 _FORECAST_API = "https://api.open-meteo.com/v1/forecast"
@@ -89,6 +104,12 @@ def _get_json(url: str):
     exhausted (or on a non-retryable error) it returns ``None`` and the caller
     degrades to defaults, so the planner still runs offline.
     """
+    global _cooldown_until
+    # Circuit OPEN: a recent hard failure tripped the breaker, so skip the
+    # network entirely and degrade instantly (no per-call timeout to absorb).
+    if _cooldown_until and time.monotonic() < _cooldown_until:
+        return None
+
     for attempt in range(_HTTP_RETRIES + 1):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "NexDash/1.0"})
@@ -99,15 +120,23 @@ def _get_json(url: str):
             if exc.code in _RETRYABLE_STATUS and attempt < _HTTP_RETRIES:
                 time.sleep(_HTTP_BACKOFF_S * (2 ** attempt))
                 continue
+            # No more retries. A 429 (rate-limit) or an exhausted 5xx means the
+            # provider is overloaded -> open the breaker so sibling calls bail
+            # fast. A permanent 4xx (e.g. 400 out-of-range) does NOT trip it.
+            if exc.code == 429 or exc.code in _RETRYABLE_STATUS:
+                _cooldown_until = time.monotonic() + _COOLDOWN_S
             return None
         except (urllib.error.URLError, socket.timeout, TimeoutError):
             # Transient connection / timeout: back off and retry.
             if attempt < _HTTP_RETRIES:
                 time.sleep(_HTTP_BACKOFF_S * (2 ** attempt))
                 continue
+            # Sustained outage -> open the breaker.
+            _cooldown_until = time.monotonic() + _COOLDOWN_S
             return None
         except Exception:
-            # Bad JSON or anything unexpected: don't retry, degrade.
+            # Bad JSON or anything unexpected: don't retry, degrade. The provider
+            # is reachable, so don't trip the breaker.
             return None
     return None
 
