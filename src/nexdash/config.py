@@ -92,25 +92,32 @@ G: float = 9.81
 #: denominators would make MAPE explode meaninglessly.
 MAPE_FLOOR_KWH: float = 1.0
 
-#: Field-calibration factor mapping the first-principles STEADY-STATE energy
-#: (constant-speed, full-tractive-demand physics; ~1.216 kWh/km warm anchor at
-#: 40 t / 80 km/h / 20 C with the calibrated CdA 5.0) DOWN to field-observed laden
-#: eActros 600 consumption on real mixed routes. Real-world laden tests cluster at
-#: ~0.96-1.03 kWh/km (Daimler 15,000 km European tour 1.03 at 40 t; Vandijck 0.96;
-#: ADAC German-roads 0.88), vs Mercedes' ~1.19 spec estimate. 0.83 x the ~1.216
-#: steady-state anchor ~= 1.01 kWh/km -- on the Daimler tour anchor; a lighter ~36 t
-#: German autobahn run then lands ~0.93, between ADAC 0.88 and Daimler 1.03.
-#: Real driving (coasting, eco-driving, traffic flow)
-#: runs below constant-speed physics, a gap the steady-state model cannot capture;
-#: the calibration doc already attributes the steady-state-vs-field gap to exactly
-#: this. Applied ONLY to the DISPLAYED energy headline (summary.energyKwh /
-#: kwhPer100); the SOC walk and EVERY charging/reachability decision use the
-#: un-discounted conservative estimate, so the factor can never delay a charge or
-#: strand the truck. Clamped to (0, 1] at the call site (>1 cannot inflate energy);
-#: 1.0 disables it. REMOVAL CONDITION: retune or remove once the ML model is
-#: retrained against field (not steady-state) labels, or the energy-side speed
-#: model changes. [S3][S4][S5] (see docs/REAL_WORLD_CALIBRATION.md)
-FIELD_CALIBRATION_FACTOR: float = 0.83
+#: Field-calibration factor mapping the model's STEADY-STATE energy estimate DOWN
+#: to field-observed laden eActros 600 consumption on real mixed routes. Real-world
+#: laden tests cluster at ~0.96-1.03 kWh/km (Daimler 15,000 km European tour 1.03 at
+#: 40 t; Vandijck 0.96; ADAC German-roads 0.88), vs Mercedes' ~1.19 spec estimate.
+#: Real driving (coasting, eco-driving, traffic flow) runs below constant-speed
+#: physics, a gap the steady-state model cannot capture; the calibration doc already
+#: attributes the steady-state-vs-field gap to exactly this.
+#:
+#: RETUNED 2026-06-04 from 0.83 -> 0.887 after the physics-residual model retrain.
+#: The factor is anchored to the model's OWN flat-route output, not raw physics, and
+#: the residual reparametrisation shifted that output: at the 40 t / 80 km/h / 20 C /
+#: flat anchor the OLD raw-kWh model read 124.74 kWh/100km (x0.83 = 103.5, mid-band),
+#: while the NEW residual model reads 113.88 kWh/100km there (it tracks physics
+#: closely now instead of over-predicting +2.6%). Keeping 0.83 would have landed
+#: 94.5 kWh/100km — just BELOW the 95-105 field band. 0.887 x 113.88 = 101.0
+#: kWh/100km = 1.01 kWh/km, ON the Daimler tour anchor; a lighter 18 t / 83 km/h
+#: autobahn run then lands ~105 kWh/100km, at the top of the band (between ADAC 0.88
+#: and Daimler 1.03, as expected for a lighter/faster leg). Applied ONLY to the
+#: DISPLAYED energy headline (summary.energyKwh / kwhPer100); the SOC walk and EVERY
+#: charging/reachability decision use the un-discounted conservative
+#: max(model, physics) estimate, so the factor can never delay a charge or strand the
+#: truck. Clamped to (0, 1] at the call site (>1 cannot inflate energy); 1.0 disables
+#: it. REMOVAL CONDITION: retune or remove once the ML model is retrained against
+#: field (not steady-state) labels, or the energy-side speed model changes.
+#: [S3][S4][S5] (see docs/REAL_WORLD_CALIBRATION.md)
+FIELD_CALIBRATION_FACTOR: float = 0.887
 
 # --------------------------------------------------------------------------- #
 # Filesystem paths

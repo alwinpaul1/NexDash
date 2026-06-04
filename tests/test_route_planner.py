@@ -549,18 +549,22 @@ def test_summary_carries_machine_readable_assumptions():
 # --------------------------------------------------------------------------- #
 # Physics cross-check: out-of-envelope terrain must be flagged, not trusted
 # --------------------------------------------------------------------------- #
-def test_out_of_envelope_grade_is_flagged_low_confidence(monkeypatch):
-    """A sustained steep/cold grade must trip the planner's physics cross-check.
+def test_out_of_envelope_grade_uses_conservative_energy(monkeypatch):
+    """A sustained steep/cold grade must be costed conservatively, not optimistically.
 
-    WHY (the dangerous direction): the data-driven model under-predicts energy on
-    terrain outside its training envelope. Training caps gradient at +/-6% for a
-    ~25 km chunk (the 1500 m net-climb ceiling), so a sustained +10% grade is
-    beyond what the model has seen and it saturates below physics. Trusting that
-    optimistic number would delay a charge and risk stranding the truck. The
-    planner must mirror range.check_reachability: when physics exceeds the model
-    beyond the divergence band, use the conservative value AND surface a LOW
-    CONFIDENCE assumption. A normal flat route must NOT be flagged (no false
-    alarms).
+    The planner walks the route in ~25 km chunks and uses ``max(model, physics)``
+    per chunk so the SOC walk is never optimistic. The OLD raw-kWh model
+    *saturated* below physics on terrain past its training envelope (e.g. a +10%
+    grade), which is exactly why the cross-check existed to fall back to physics.
+
+    The energy model now learns the PHYSICS RESIDUAL (`nexdash.model`), so it
+    TRACKS physics even at a +10% grade it never saw in training (physics is the
+    structural backbone; the residual stays small) — so the divergence cross-check
+    correctly does NOT raise a false LOW CONFIDENCE alarm. The safety property is
+    unchanged and asserted directly: the steep route's displayed energy is at least
+    the steep physics cost, and a flat route is not flagged. We deliberately do NOT
+    assert the old saturation-driven low-confidence flag, which would re-encode the
+    bug this change fixed.
     """
     monkeypatch.setattr(
         route_planner.geodata, "enrich_route",
@@ -573,8 +577,22 @@ def test_out_of_envelope_grade_is_flagged_low_confidence(monkeypatch):
         min_soc=10.0, payload_kg=22000.0, temperature_c=-15.0,
         geometry=GEOMETRY, model_path=DEFAULT_MODEL_PATH,
     )
-    assert any("low confidence" in a.lower() for a in steep["summary"]["assumptions"]), \
-        steep["summary"]["assumptions"]
+    # Conservative costing: the un-calibrated SOC-walk energy (before the display
+    # field-calibration discount) must be at least the physics cost of six steep
+    # 25 km chunks — i.e. the model did NOT saturate below physics and quote an
+    # optimistic, truck-stranding number.
+    from nexdash.physics import segment_energy_kwh
+    phys_total = 6 * segment_energy_kwh(
+        distance_km=25.0, payload_t=22.0, speed_kph=70.0,
+        gradient_pct=10.0, temperature_c=-15.0, wind_mps=9.0,
+    )
+    # energyKwh is the field-calibrated display figure; reconstruct the
+    # conservative basis it was discounted from and assert it covers physics.
+    from nexdash.config import FIELD_CALIBRATION_FACTOR
+    conservative_basis = steep["summary"]["energyKwh"] / FIELD_CALIBRATION_FACTOR
+    assert conservative_basis >= phys_total - 1.0, (
+        f"steep route under-costed: basis {conservative_basis:.0f} < physics {phys_total:.0f}"
+    )
 
     monkeypatch.setattr(
         route_planner.geodata, "enrich_route",

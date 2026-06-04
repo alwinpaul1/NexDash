@@ -7,8 +7,20 @@ operating features (distance, payload, speed, gradient, temperature, wind).
 Design notes
 ------------
 * The primary estimator is a :class:`~sklearn.ensemble.HistGradientBoostingRegressor`
-  which captures the non-linear interactions in the physics-derived target
-  (e.g. payload x gradient, temperature extremes).
+  trained on the **physics residual** ``r = energy_kwh - segment_energy_kwh(...)``
+  rather than on raw kWh. At inference the prediction is reconstructed as
+  ``physics_baseline + model.predict(residual)``. This makes the deterministic
+  physics the structural backbone: physics carries the dominant gradient/distance
+  work term *analytically* (and so extrapolates linearly past the training
+  envelope), while the tree only learns the bounded, near-zero-mean correction
+  (label noise, speed/driver effects) where data is dense. A tree cannot
+  extrapolate above the largest label it saw, so a raw-kWh target SATURATES on
+  out-of-envelope steep climbs / long distances (the dangerous under-prediction
+  direction); the residual reparametrisation removes that failure by construction
+  because physics — not the tree — supplies the linear tail.
+* The :class:`~sklearn.linear_model.LinearRegression` baseline is still trained on
+  the RAW kWh target so the comparison table honestly contrasts the
+  physics-residual HGB against a plain linear fit of energy.
 * A :class:`~sklearn.linear_model.LinearRegression` baseline is *also* trained on
   the same engineered features so we can report how much the gradient-boosted
   model improves over a simple linear fit. Both sets of metrics are kept on
@@ -36,7 +48,8 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from . import features
-from .config import DEFAULT_MODEL_PATH, MAPE_FLOOR_KWH
+from .config import DEFAULT_MODEL_PATH, MAPE_FLOOR_KWH, TRUCK
+from .physics import segment_energy_kwh
 
 __all__ = [
     "EnergyModel",
@@ -117,6 +130,39 @@ def _regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, flo
     }
 
 
+def _physics_baseline(rows: pd.DataFrame) -> np.ndarray:
+    """Vectorise :func:`nexdash.physics.segment_energy_kwh` over raw feature rows.
+
+    Computes the deterministic physics energy (kWh) for each row using ONLY the
+    canonical raw :data:`nexdash.features.FEATURE_COLUMNS` (so the train-time and
+    inference-time baselines are byte-identical and there is no train/serve skew).
+    This is the structural backbone of the residual model: the tree learns
+    ``energy_kwh - physics_baseline`` and inference adds the baseline back, so the
+    prediction follows physics (which extrapolates linearly) on out-of-envelope
+    steep/long inputs instead of saturating at the tree's largest seen label.
+
+    Args:
+        rows: A DataFrame containing every :data:`FEATURE_COLUMNS` column.
+
+    Returns:
+        A 1-D numpy array of physics kWh, one per row, aligned to ``rows``.
+    """
+    cols = features.FEATURE_COLUMNS
+    arr = rows[cols].to_numpy(dtype=float)
+    out = np.empty(len(arr), dtype=float)
+    for i, (d, p, s, g, t, w) in enumerate(arr):
+        out[i] = segment_energy_kwh(
+            distance_km=float(d),
+            payload_t=float(p),
+            speed_kph=float(s),
+            gradient_pct=float(g),
+            temperature_c=float(t),
+            wind_mps=float(w),
+            truck=TRUCK,
+        )
+    return out
+
+
 class EnergyModel:
     """Trained energy-consumption model with a gradient-boosted primary fit.
 
@@ -135,6 +181,12 @@ class EnergyModel:
         self.baseline: Pipeline = _build_baseline()
         self.metrics: dict[str, Any] = {}
         self.feature_columns: list[str] = list(features.ENGINEERED_COLUMNS)
+        #: When True, the primary pipeline predicts the physics RESIDUAL and
+        #: :meth:`predict` reconstructs energy as ``physics_baseline + residual``.
+        #: A freshly-trained model sets this True; old artifacts that stored raw
+        #: kWh load with the default False (backward-compatible: they predict raw
+        #: energy and never add a phantom physics term).
+        self.residual_target: bool = True
 
     # ------------------------------------------------------------------ #
     # Training
@@ -163,21 +215,40 @@ class EnergyModel:
         """
         X, y = features.build_features(df)
         self.feature_columns = list(X.columns)
+        self.residual_target = True
 
         if df_eval is not None:
             X_eval, y_eval = features.build_features(df_eval)
             X_eval = X_eval.reindex(columns=self.feature_columns)
             X_train, y_train = X, y
             X_test, y_test = X_eval, y_eval
+            df_train_raw, df_test_raw = df, df_eval
         else:
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=test_size, random_state=seed
-            )
+            # Split the engineered matrix, target AND the raw frame together so
+            # the physics baseline is computed on exactly the test rows.
+            (
+                X_train,
+                X_test,
+                y_train,
+                y_test,
+                df_train_raw,
+                df_test_raw,
+            ) = train_test_split(X, y, df, test_size=test_size, random_state=seed)
 
-        self.pipeline.fit(X_train, y_train)
+        # Physics baseline per row (raw features only) — the residual backbone.
+        p_train = _physics_baseline(df_train_raw)
+        p_test = _physics_baseline(df_test_raw)
+
+        # Primary HGB learns the RESIDUAL (energy - physics); the linear baseline
+        # stays on raw kWh so the comparison table contrasts the residual-physics
+        # hybrid against a plain linear fit of energy, honestly.
+        resid_train = y_train.to_numpy() - p_train
+        self.pipeline.fit(X_train, resid_train)
         self.baseline.fit(X_train, y_train)
 
-        hgb_pred = self.pipeline.predict(X_test)
+        # Reconstruct kWh-scale predictions so MAE/RMSE/R2/MAPE stay on the kWh
+        # scale the report and range.py consume (NOT the residual scale).
+        hgb_pred = p_test + self.pipeline.predict(X_test)
         lin_pred = self.baseline.predict(X_test)
 
         self.metrics = {
@@ -185,6 +256,7 @@ class EnergyModel:
             "linear": _regression_metrics(y_test.to_numpy(), lin_pred),
             "n_train": int(len(X_train)),
             "n_test": int(len(X_test)),
+            "residual_target": True,
         }
         return self.metrics
 
@@ -205,7 +277,16 @@ class EnergyModel:
         X = features.transform(rows)
         # Guard column order/identity against the trained pipeline.
         X = X.reindex(columns=self.feature_columns)
-        return np.asarray(self.pipeline.predict(X), dtype=float)
+        pred = np.asarray(self.pipeline.predict(X), dtype=float)
+
+        # Residual reconstruction: add the deterministic physics baseline back so
+        # the prediction tracks physics on out-of-envelope inputs (no saturation).
+        # ``X`` already carries the raw FEATURE_COLUMNS as its leading columns
+        # (ENGINEERED_COLUMNS == FEATURE_COLUMNS + derived), so the baseline uses
+        # the SAME features handed to the tree — no train/serve skew.
+        if getattr(self, "residual_target", False):
+            pred = _physics_baseline(X) + pred
+        return pred
 
     # ------------------------------------------------------------------ #
     # Persistence
@@ -219,6 +300,7 @@ class EnergyModel:
             "baseline": self.baseline,
             "metrics": self.metrics,
             "feature_columns": self.feature_columns,
+            "residual_target": getattr(self, "residual_target", True),
         }
         joblib.dump(payload, path)
 
@@ -245,6 +327,10 @@ class EnergyModel:
         obj.feature_columns = payload.get(
             "feature_columns", list(features.ENGINEERED_COLUMNS)
         )
+        # Default False for backward-compat: a pre-residual artifact stored raw
+        # kWh, so it must NOT add a physics term at inference. The retrained
+        # artifact persists True and reconstructs energy = physics + residual.
+        obj.residual_target = payload.get("residual_target", False)
         return obj
 
 

@@ -30,19 +30,36 @@ from nexdash.promote import (
 
 @pytest.fixture(scope="module")
 def models(tmp_path_factory):
-    """A frozen dataset plus a weak champion and a strong challenger.
+    """A frozen dataset plus a genuinely weak champion and a strong challenger.
 
-    The champion is trained on a tiny subset (under-fit, higher held-out error);
-    the challenger on a large dataset. Both are scored on the same frozen split,
-    so the challenger should win with a CI clear of zero.
+    The champion is trained on heavily LABEL-CORRUPTED data (±30% multiplicative
+    plus ±15 kWh additive noise on top of the clean labels), so it is
+    unambiguously worse on the frozen clean held-out split. The challenger trains
+    on clean data. Both are scored on the same frozen split, so the challenger
+    wins with a bootstrap CI clear of zero.
+
+    NOTE: we corrupt labels rather than just shrinking the champion's training
+    set. With the physics-residual model (`nexdash.model`) physics carries the
+    structure, so even a tiny-data model fits the small residual well — a
+    "fewer rows" champion is now nearly as good as a large-data one, which made
+    the old data-size-only weakening too marginal to give a significant win.
+    Corrupting the labels produces a robustly worse champion regardless of the
+    model's data efficiency.
     """
     d = tmp_path_factory.mktemp("promote")
     dataset = d / "dataset.csv"
     save_dataset(generate_dataset(n_samples=2000, seed=42), dataset)
 
+    weak = generate_dataset(n_samples=2000, seed=7).copy()
+    rng = np.random.default_rng(0)
+    weak["energy_kwh"] = (
+        weak["energy_kwh"] * (1.0 + rng.normal(0.0, 0.30, len(weak)))
+        + rng.normal(0.0, 15.0, len(weak))
+    )
+
     champion = d / "champion.joblib"
     challenger = d / "challenger.joblib"
-    train_model(generate_dataset(n_samples=120, seed=7), save=True, path=champion)
+    train_model(weak, save=True, path=champion)
     train_model(generate_dataset(n_samples=2000, seed=42), save=True, path=challenger)
     return dataset, champion, challenger
 

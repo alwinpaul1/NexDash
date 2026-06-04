@@ -22,6 +22,16 @@ cannot hold a steep grade without implying an impossible net elevation change
 any further structure the model learns comes from the physics relationship and
 the genuine variability of the operating envelope, not from synthetic shortcuts.
 
+In addition, a small **steep-short stratum** (``_STEEP_SHORT_FRACTION`` ~ 12% of
+rows) is drawn with a short distance (Uniform[2, 30] km) and the full +/-6 %
+gradient range unconditionally. The net-climb cap otherwise starves the
+(short-distance, steep-grade) quadrant — yet that is exactly the ~25 km steep
+chunk the route planner queries at inference. This stratum is geographically
+plausible (a <=30 km leg at 6 % implies <=1800 m net climb) and is documented
+here honestly: it deliberately over-samples the steep-short cells so the
+physics-residual energy model has real data to correct against there, rather than
+relying on the physics backbone alone. The seed/noise contract is unchanged.
+
 .. note::
    This generator is a deliberate *stand-in* for future real telematics data.
    When live fleet telemetry from eActros 600 units becomes available it should
@@ -63,6 +73,20 @@ COLUMNS: list[str] = [
 #: ~+10 kWh, and inject gradient-correlated structure into the label noise. We
 #: only reject numerically absurd values far below any plausible regen return.
 _ENERGY_FLOOR_KWH: float = -50.0
+
+#: Fraction of rows drawn from a dedicated STEEP-SHORT stratum (Lever 1-lite).
+#: The main sample caps |gradient| per row by the net-climb ceiling, so a long
+#: leg can never hold a steep grade; that leaves the (short-distance, steep-grade)
+#: quadrant sparse exactly where the route planner queries (~25 km chunks at up to
+#: +/-6 %). This stratum draws distance Uniform[2, 30] km and gradient over the
+#: FULL +/-6 % range unconditionally (these short legs are geographically plausible
+#: at full grade — a <=30 km leg at 6 % implies <=1800 m climb), densifying the
+#: steep-short cells so the physics-residual tree has real samples to correct
+#: against there rather than relying on the physics backbone alone. It does NOT
+#: raise the ceiling for long legs (no phantom-mountain labels).
+_STEEP_SHORT_FRACTION: float = 0.12
+_STEEP_SHORT_DIST_MIN_KM: float = 2.0
+_STEEP_SHORT_DIST_MAX_KM: float = 30.0
 
 #: Maximum implied net elevation change (m) for a single segment. The gradient is
 #: capped per row so ``distance * sin(atan(gradient/100))`` never exceeds this,
@@ -138,6 +162,24 @@ def generate_dataset(
     climb_ratio = np.minimum(1.0, _MAX_NET_CLIMB_M / distance_m)
     grad_cap_pct = np.minimum(100.0 * np.tan(np.arcsin(climb_ratio)), 6.0)
     gradient_pct = np.clip(raw_gradient, -grad_cap_pct, grad_cap_pct)
+
+    # --- Steep-short densification stratum (Lever 1-lite) ------------------- #
+    # Override a fraction of rows with a short distance and the FULL +/-6 % grade
+    # range, unconditionally. These are the steep ~25 km chunks the route planner
+    # actually queries; the net-climb cap above starves them in the main sample.
+    # Drawing them explicitly gives the residual tree real data in the
+    # steep-grade quadrant instead of leaning on the physics backbone alone there.
+    n_steep = int(round(n_samples * _STEEP_SHORT_FRACTION))
+    if n_steep > 0:
+        steep_idx = rng.choice(n_samples, size=n_steep, replace=False)
+        steep_dist = rng.uniform(
+            _STEEP_SHORT_DIST_MIN_KM, _STEEP_SHORT_DIST_MAX_KM, size=n_steep
+        )
+        steep_grad = np.clip(
+            rng.normal(loc=0.0, scale=3.5, size=n_steep), -6.0, 6.0
+        )
+        distance_km[steep_idx] = steep_dist
+        gradient_pct[steep_idx] = steep_grad
 
     # German ambient temperature across the year (-15..40 C).
     temperature_c = np.clip(rng.normal(loc=12.0, scale=11.0, size=n_samples), -15.0, 40.0)

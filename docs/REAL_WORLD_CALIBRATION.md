@@ -118,17 +118,25 @@ mixed-route regen) runs below constant-speed physics, a gap the steady-state
 model structurally cannot close.
 
 To make the **displayed** energy headline track field reality, NexDash applies a
-single documented multiplier `config.FIELD_CALIBRATION_FACTOR = 0.83` to
+single documented multiplier `config.FIELD_CALIBRATION_FACTOR = 0.887` to
 `summary.energyKwh` / `summary.kwhPer100` only:
 
-- For the run above: chunked conservative basis ~112 kWh/100 km × 0.83 =
-  **~93 kWh/100 km displayed** (≈ 0.93 kWh/km) — inside the real-world laden
-  field band (**~0.88–1.03 kWh/km**: ADAC German-roads 0.88, Daimler 15,000 km
-  European tour 1.03 at 40 t, Vandijck 0.96), between the ADAC and Daimler-tour
-  anchors. More generally, 0.83 maps the **~1.216 kWh/km** flat 40 t warm anchor
-  to **~1.01 kWh/km** — the field centre — vs Mercedes' optimistic ~1.19 spec.
-  (0.83 was re-anchored from the prior 0.80: 0.80 mapped the old cd=0.55 anchor
-  ~1.265; 0.83 maps the new cd=0.50 anchor ~1.216 to the same ~1.01.) [S4][S5]
+- The factor is anchored to the **energy model's own** flat-route output (that is
+  what the displayed headline is built from), not to raw physics. At the 40 t /
+  80 km/h / 20 °C / flat anchor the model now reads **113.88 kWh/100 km**, and
+  **0.887 × 113.88 = 101.0 kWh/100 km** (≈ 1.01 kWh/km) — the field centre, on the
+  Daimler 15,000 km European-tour anchor (1.03 at 40 t). A lighter 18 t / 83 km/h
+  autobahn run lands ~105 kWh/100 km, at the top of the **~0.88–1.03 kWh/km** band
+  (ADAC German-roads 0.88, Vandijck 0.96), as expected for a lighter/faster leg.
+- **Retuned 2026-06-04 from 0.83 → 0.887** alongside the physics-residual model
+  retrain. This is the honest, required consequence of changing the model: the
+  *old* raw-kWh model **over-predicted** flat consumption (124.74 kWh/100 km at the
+  anchor, +2.6 % above physics), so 0.83 × 124.74 = 103.5 landed mid-band. The new
+  residual model tracks physics closely and reads **lower** there (113.88), so
+  keeping 0.83 would have displayed 94.5 kWh/100 km — just *below* the band.
+  Re-anchoring to 0.887 restores the displayed headline to 101 kWh/100 km. The
+  factor moved because the model's flat output moved, exactly the documented
+  REMOVAL/RETUNE condition in `config.FIELD_CALIBRATION_FACTOR`. [S4][S5]
 - **It is NOT a physics change.** The locked `Cd / Crr / drivetrain_eff / A`
   anchors and the 1.22 / 1.42 / 1.49 kWh/km steady-state figures above are
   unchanged. The factor only reconciles the *reported* number with field data.

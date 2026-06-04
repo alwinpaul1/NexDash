@@ -59,13 +59,18 @@ TARGET: str = "energy_kwh"
 #:   term ``m*g*(distance*sin(slope))`` is ~proportional to ``distance*gradient``,
 #:   so this gives the model the energy-proportional climb/descent scaling
 #:   DIRECTLY (signed: positive on climbs adds energy, negative on descents credits
-#:   regen). Without it the gradient-boosted trees must reconstruct that linear
-#:   scaling from sparse joint splits and saturate on steep/long legs.
-#: * ``net_climb_km``        — distance x sin(atan(gradient/100)); the EXACT net
-#:   elevation change (km) over the segment, i.e. the true gravitational-work
-#:   driver ``E_grade ~ m*g*net_climb``. Handing the trees this physical quantity
-#:   directly is what removes the climb saturation the raw-gradient splits caused;
-#:   signed, so descents are negative and carry the regen credit.
+#:   regen). It localises the small systematic offset the residual tree learns.
+#:
+#: NOTE on saturation: a ``net_climb_km`` feature (distance x sin(atan(gradient/100)))
+#: was previously carried here on the claim that it "removes climb saturation". It
+#: did NOT — it is ~99.9% collinear with ``distance_x_gradient`` (the sin(atan(.))
+#: correction is <=0.18% even at 6%), and a gradient-boosted tree still cannot
+#: extrapolate a linear quantity past the largest label it saw, no matter how
+#: cleanly that quantity is presented. The real saturation fix is structural: the
+#: model now trains on the PHYSICS RESIDUAL (see :mod:`nexdash.model`), so physics
+#: carries the linear gradient/distance work analytically and the tree only learns
+#: the bounded, near-zero-mean correction. The redundant ``net_climb_km`` feature
+#: has therefore been removed (12 engineered columns, was 13).
 _DERIVED_COLUMNS: list[str] = [
     "abs_gradient",
     "temp_dev_from_20",
@@ -73,7 +78,6 @@ _DERIVED_COLUMNS: list[str] = [
     "speed_sq",
     "payload_x_distance",
     "distance_x_gradient",
-    "net_climb_km",
 ]
 
 #: Full engineered feature matrix column order: raw features then derived ones.
@@ -129,14 +133,10 @@ def _add_engineered(df: pd.DataFrame) -> pd.DataFrame:
     out["payload_x_distance"] = out["payload_t"] * out["distance_km"]
     # distance x signed gradient: gravity-work term, ~proportional to the climb/
     # descent energy. Signed so descents (negative) directly drive regen credit.
+    # (The previously-carried net_climb_km feature was removed: it was ~99.9%
+    # collinear with this column and did not cure saturation; physics now enters
+    # structurally through the residual target instead. See module docstring.)
     out["distance_x_gradient"] = out["distance_km"] * out["gradient_pct"]
-    # net_climb_km: the EXACT net elevation change over the segment,
-    # distance * sin(atan(gradient/100)) (km). This is the true gravitational-work
-    # driver -- E_grade ~ m*g*net_climb. Giving the trees this physical quantity
-    # DIRECTLY (rather than letting them reconstruct sin(atan(.)) from raw-gradient
-    # bins) is what stops the energy model saturating on steep/long climbs; signed,
-    # so descents are negative and carry the regen credit.
-    out["net_climb_km"] = out["distance_km"] * np.sin(np.arctan(out["gradient_pct"] / 100.0))
 
     # Guarantee canonical column order regardless of insertion order.
     return out[ENGINEERED_COLUMNS]
