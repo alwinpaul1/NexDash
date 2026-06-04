@@ -269,10 +269,6 @@ export default function RouteResults({ plan }) {
           <InfoCard icon="trending_up" value={`${Math.round(s.elevationGainM || 0)} m`} label="Elevation Gain" tint="#f59e0b" />
           <InfoCard icon="ev_station" value={`${s.chargingStops || 0}`} label="Charging Stops" />
         </div>
-        <p className="mt-2 text-[10px] leading-tight text-on-surface-variant/70">
-          Total kWh is field-calibrated to real-world consumption; charging and range
-          margin use a higher conservative estimate.
-        </p>
       </div>
     </div>
   );
