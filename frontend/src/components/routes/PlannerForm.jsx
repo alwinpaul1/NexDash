@@ -447,19 +447,12 @@ export default function PlannerForm({
                 </FieldLabel>
                 <Slider value={planner.minChargerKw ?? 150} min={50} max={350} step={50} onChange={onMinChargerKw}
                   ariaLabel="Minimum charger power" ariaValueText={`${planner.minChargerKw ?? 150} kilowatts`} />
-                <p className="mt-1 text-[10px] leading-snug text-on-surface-variant/70">
-                  Skip stations slower than this. Faster ones are always allowed.
-                </p>
               </div>
               <div>
                 <FieldLabel icon="bolt" hint={`${planner.maxChargeKw} kW`}>
                   Max Charging Speed
                 </FieldLabel>
                 <Slider value={planner.maxChargeKw} min={100} max={400} step={10} onChange={onMaxChargeKw} />
-                <p className="mt-1 text-[10px] leading-snug text-on-surface-variant/70">
-                  Caps how hard the truck pulls (not a filter). Lower it only for gentler,
-                  battery-friendlier charging.
-                </p>
               </div>
               <div>
                 <div className="flex items-center justify-between mb-2">
