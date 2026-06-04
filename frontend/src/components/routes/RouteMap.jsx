@@ -342,21 +342,18 @@ function mergeBands(segs) {
   return out;
 }
 
-// A single marker that travels the route source -> destination on a loop,
-// giving a live sense of direction/progress without cluttering the line.
-// Animated imperatively via requestAnimationFrame (rAF timestamp only — no
-// per-frame React re-render) and torn down cleanly when the route changes.
-// Above this zoom level the moving truck only darts across a small visible area
-// on a loop, which reads as distracting rather than informative — so the runner
-// is hidden when the map is zoomed in past it. Tunable: lower = hide sooner.
-const RUNNER_MAX_ZOOM = 11;
-
-function RouteRunner({ geometry }) {
+// A single STATIC arrow badge placed at the route midpoint, rotated to the
+// direction of travel (origin -> destination). It gives a clear sense of which
+// way the route runs without any animation — replacing the old looping truck.
+function RouteDirectionArrow({ geometry }) {
   const map = useMap();
   useEffect(() => {
     if (!Array.isArray(geometry) || geometry.length < 2) return undefined;
 
     const toRad = (d) => (d * Math.PI) / 180;
+    const toDeg = (r) => (r * 180) / Math.PI;
+
+    // Cumulative great-circle distance so we can find the true midpoint.
     const cum = [0];
     for (let i = 1; i < geometry.length; i++) {
       const a = geometry[i - 1];
@@ -371,87 +368,42 @@ function RouteRunner({ geometry }) {
     }
     const total = cum[cum.length - 1] || 1;
 
+    // Segment that contains the midpoint, and the interpolated point on it.
+    const mid = total / 2;
+    let lo = 1;
+    while (lo < cum.length - 1 && cum[lo] < mid) lo++;
+    const a = geometry[lo - 1];
+    const b = geometry[lo];
+    const segLen = cum[lo] - cum[lo - 1] || 1;
+    const f = (mid - cum[lo - 1]) / segLen;
+    const pos = [a[0] + f * (b[0] - a[0]), a[1] + f * (b[1] - a[1])];
+
+    // Initial bearing a -> b (clockwise from north) to orient the arrow.
+    const y = Math.sin(toRad(b[1] - a[1])) * Math.cos(toRad(b[0]));
+    const x =
+      Math.cos(toRad(a[0])) * Math.sin(toRad(b[0])) -
+      Math.sin(toRad(a[0])) * Math.cos(toRad(b[0])) * Math.cos(toRad(b[1] - a[1]));
+    const bearing = (toDeg(Math.atan2(y, x)) + 360) % 360;
+
+    // White circular badge with a navigation arrow (points "up" = north at 0°),
+    // the inner arrow rotated by the bearing so it points along the route.
     const icon = L.divIcon({
       className: "",
-      html: `<div class="route-runner"><span class="rr-halo"></span><video class="rr-video" src="/truck.mp4" autoplay loop muted playsinline></video></div>`,
-      iconSize: [44, 44],
-      iconAnchor: [22, 22],
+      html:
+        `<div class="route-arrow"><div class="ra-rot" style="transform:rotate(${bearing}deg)">` +
+        `<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">` +
+        `<path d="M12 2 L19 21 L12 16 L5 21 Z" fill="#059669"/></svg></div></div>`,
+      iconSize: [38, 38],
+      iconAnchor: [19, 19],
     });
-    const marker = L.marker(geometry[0], {
+    const marker = L.marker(pos, {
       icon,
       interactive: false,
       keyboard: false,
       zIndexOffset: 650,
     }).addTo(map);
 
-    // Respect the OS "reduce motion" setting (WCAG 2.2.2): pause the looping
-    // video and leave a static truck marker rather than animating it along the
-    // route. CSS can't stop <video loop>, so this is handled here in JS.
-    const reduceMotion =
-      typeof window !== "undefined" &&
-      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-
-    // Some browsers don't autoplay a freshly-injected <video>; nudge it and slow
-    // the clip down so the truck reads as a calm cruise rather than a blur.
-    const video = marker.getElement()?.querySelector("video");
-    if (video) {
-      if (reduceMotion) {
-        video.removeAttribute("loop");
-        video.pause();
-      } else {
-        video.playbackRate = 0.5;
-        video.play().catch(() => {});
-      }
-    }
-
-    // Hide the moving truck once the map is zoomed in past RUNNER_MAX_ZOOM: at
-    // that scale it only darts across a small visible area on a loop, which is
-    // distracting rather than useful. The animation clock keeps running (so the
-    // truck is at the right spot when you zoom back out) — we just hide the
-    // element and pause the clip while zoomed in.
-    const runnerEl = marker.getElement();
-    const syncRunnerZoom = () => {
-      const hide = map.getZoom() >= RUNNER_MAX_ZOOM;
-      if (runnerEl) runnerEl.style.display = hide ? "none" : "";
-      if (video) {
-        if (hide) video.pause();
-        else if (!reduceMotion) video.play().catch(() => {});
-      }
-    };
-    syncRunnerZoom();
-    map.on("zoomend", syncRunnerZoom);
-
-    // Slow, smooth lap: scale with route length, clamped to 16-32 s.
-    const duration = Math.min(32000, Math.max(16000, total * 45));
-
-    const posAt = (d) => {
-      if (d <= 0) return geometry[0];
-      if (d >= total) return geometry[geometry.length - 1];
-      let lo = 1;
-      while (lo < cum.length - 1 && cum[lo] < d) lo++;
-      const a = geometry[lo - 1];
-      const b = geometry[lo];
-      const segLen = cum[lo] - cum[lo - 1] || 1;
-      const f = (d - cum[lo - 1]) / segLen;
-      return [a[0] + f * (b[0] - a[0]), a[1] + f * (b[1] - a[1])];
-    };
-
-    let raf;
-    let start = null;
-    const tick = (ts) => {
-      if (start === null) start = ts;
-      const t = ((ts - start) % duration) / duration; // 0..1, loops
-      marker.setLatLng(posAt(t * total));
-      raf = requestAnimationFrame(tick);
-    };
-    // Only drive the moving truck when motion is allowed; otherwise it stays put.
-    if (!reduceMotion) {
-      raf = requestAnimationFrame(tick);
-    }
-
     return () => {
-      if (raf) cancelAnimationFrame(raf);
-      map.off("zoomend", syncRunnerZoom);
       map.removeLayer(marker);
     };
   }, [map, geometry]);
@@ -798,7 +750,7 @@ export default function RouteMap({ plan, waypoints = [] }) {
           ) : null)}
 
         {/* A single live "runner" travelling source -> destination on a loop. */}
-        {layers.route && geometry.length >= 2 && <RouteRunner geometry={geometry} />}
+        {layers.route && geometry.length >= 2 && <RouteDirectionArrow geometry={geometry} />}
 
         {/* Planned stops — origin + destinations. */}
         {layers.stops && origin && Number.isFinite(origin.lat) && (

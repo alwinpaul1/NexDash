@@ -406,47 +406,24 @@
   font-weight: 600;
 }
 
-/* Route "runner" — a single truck badge that travels source -> destination on a
-   loop, with a pulsing halo, giving a live sense of motion along the route. */
-.route-runner {
-  position: relative;
-  width: 44px;
-  height: 44px;
-}
-.route-runner .rr-video {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  width: 42px;
-  height: 42px;
-  border-radius: 9999px;
-  /* contain (not cover) so the whole truck shows instead of a cropped sliver. */
-  object-fit: contain;
+/* Route direction arrow — a single STATIC badge at the route midpoint whose
+   inner arrow is rotated to the direction of travel. No animation. */
+.route-arrow {
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: #fff;
+  border-radius: 9999px;
   border: 2px solid #fff;
   box-shadow: 0 2px 7px rgba(0, 0, 0, 0.4);
 }
-.route-runner .rr-halo {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 30px;
-  height: 30px;
-  border-radius: 9999px;
-  background: rgba(0, 209, 102, 0.4);
-  transform: translate(-50%, -50%);
-  animation: rr-pulse 1.6s ease-out infinite;
-}
-@keyframes rr-pulse {
-  0% {
-    transform: translate(-50%, -50%) scale(1);
-    opacity: 0.6;
-  }
-  100% {
-    transform: translate(-50%, -50%) scale(2.6);
-    opacity: 0;
-  }
+.route-arrow .ra-rot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform-origin: 50% 50%;
 }
 
 /* Markdown rendering inside an assistant chat bubble. The dispatcher agent
@@ -548,9 +525,8 @@
 }
 
 /* Accessibility: honour the OS "reduce motion" setting (WCAG 2.2.2). Stops the
- * looping map pulses (.ping / .gps-pulse / .rr-pulse) and all other continuous
- * animations/transitions for users who ask for less motion. The truck-runner
- * video is additionally paused in JS (RouteMap RouteRunner). */
+ * looping map pulses (.ping / .gps-pulse) and all other continuous
+ * animations/transitions for users who ask for less motion. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

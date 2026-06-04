@@ -12,6 +12,17 @@ function nowLocalISO() {
   return new Date(d.getTime() - off * 60000).toISOString().slice(0, 16);
 }
 
+// Shift a "YYYY-MM-DDTHH:mm" local datetime by `mins` minutes (local-tz safe).
+// Used to keep each stop's deliver-by deadline strictly after the previous one.
+function plusMinutesLocalISO(localISO, mins) {
+  if (!localISO) return "";
+  const base = new Date(localISO); // parsed as local time
+  if (Number.isNaN(base.getTime())) return localISO;
+  const shifted = new Date(base.getTime() + mins * 60000);
+  const off = shifted.getTimezoneOffset();
+  return new Date(shifted.getTime() - off * 60000).toISOString().slice(0, 16);
+}
+
 // Emerald range slider with a filled track that follows the value. Accepts an
 // accessible name + human-readable value text so screen readers announce e.g.
 // "Starting battery, 80 percent" instead of an unnamed slider reading "80".
@@ -65,6 +76,7 @@ function DestinationRow({
   count,
   maxDrop,
   capActive,
+  minDeliverBy,
   onUpdate,
   onRemove,
   onDragStartRow,
@@ -254,13 +266,18 @@ function DestinationRow({
             <input
               type="datetime-local"
               value={dest.deliverBy}
-              min={nowLocalISO()}
+              min={minDeliverBy}
               aria-label={`Deliver-by deadline for stop ${index + 1}`}
               onChange={(e) => {
-                // A delivery deadline in the past is meaningless — clamp to now.
-                const now = nowLocalISO();
+                // A deadline can't be before the truck departs, and a later stop
+                // can't be due before an earlier one (stops are visited in order).
+                // `minDeliverBy` already encodes both (= departure, or the previous
+                // stop's deadline + 1 min) — clamp anything earlier up to it.
                 onUpdate(dest.id, {
-                  deliverBy: e.target.value && e.target.value < now ? now : e.target.value,
+                  deliverBy:
+                    e.target.value && e.target.value < minDeliverBy
+                      ? minDeliverBy
+                      : e.target.value,
                 });
               }}
               className="w-full px-2.5 py-2 rounded-control bg-surface-lowest border border-outline-variant/50 text-sm text-on-surface outline-none hover:border-outline-variant/70 focus:border-primary/50 focus:ring-2 focus:ring-primary/30 transition duration-snappy"
@@ -433,7 +450,17 @@ export default function PlannerForm({
             </button>
           </div>
           <div className="space-y-2">
-            {planner.destinations.map((d, i) => (
+            {(() => {
+              // Earliest valid deliver-by for each stop: at/after departure, and
+              // strictly after the previous stop's deadline (stops are served in
+              // order, so deadlines must increase — never equal or back-to-front).
+              let running = planner.departure || nowLocalISO();
+              return planner.destinations.map((d, i) => {
+                const minDeliverBy = running;
+                if (d.deliverBy && d.deliverBy >= running) {
+                  running = plusMinutesLocalISO(d.deliverBy, 1);
+                }
+                return (
               <DestinationRow
                 key={d.id}
                 dest={d}
@@ -441,13 +468,16 @@ export default function PlannerForm({
                 count={planner.destinations.length}
                 maxDrop={dropCaps[i]}
                 capActive={capActive}
+                minDeliverBy={minDeliverBy}
                 onUpdate={onUpdateDestination}
                 onRemove={onRemoveDestination}
                 onDragStartRow={handleDragStart}
                 onDropRow={handleDrop}
                 onMove={(idx, dir) => onReorderDestination?.(idx, idx + dir)}
               />
-            ))}
+                );
+              });
+            })()}
             {planner.destinations.length === 0 && (
               <p className="text-xs text-on-surface-variant px-1">No stops yet. Add at least one destination.</p>
             )}
