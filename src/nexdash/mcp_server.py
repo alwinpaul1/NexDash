@@ -369,7 +369,30 @@ def model_info() -> dict:
         return _safe_error(exc)
 
 
+def main() -> None:
+    """Run the server.
+
+    * **stdio** (default) — local only, reachable just by the client that spawns
+      it; no network port is opened.
+    * **Streamable HTTP** — set ``MCP_HTTP=1`` (or ``MCP_TRANSPORT=http``). Binds
+      ``0.0.0.0:$PORT`` and serves the MCP endpoint at ``/mcp`` so REMOTE clients
+      (Claude custom connectors, remote agents) can connect over the public
+      internet. Runs stateless so it deploys cleanly as a normal web service.
+    """
+    import os
+
+    want_http = bool(os.environ.get("MCP_HTTP")) or os.environ.get(
+        "MCP_TRANSPORT", ""
+    ).lower() in ("http", "streamable-http")
+
+    if want_http:
+        mcp.settings.host = "0.0.0.0"
+        mcp.settings.port = int(os.environ.get("PORT") or os.environ.get("MCP_PORT") or "8000")
+        mcp.settings.stateless_http = True
+        mcp.run(transport="streamable-http")
+    else:
+        mcp.run()
+
+
 if __name__ == "__main__":
-    # Default transport is stdio: reachable only by the spawning client, no
-    # network port exposed. See the module docstring before switching to HTTP.
-    mcp.run()
+    main()

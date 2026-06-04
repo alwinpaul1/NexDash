@@ -49,6 +49,8 @@ RUN python run_pipeline.py
 # Built frontend from stage 1.
 COPY --from=frontend /app/frontend/dist ./frontend/dist
 
-# Railway sets $PORT; main() binds to it (falls back to 8000 locally).
+# Railway sets $PORT; both entrypoints bind to it (fall back to 8000 locally).
+# One image, two roles: the default runs the web app (FastAPI + frontend); a
+# service with SERVICE_MODE=mcp runs the MCP server over Streamable HTTP at /mcp.
 EXPOSE 8000
-CMD ["python", "dashboard/server.py"]
+CMD ["sh", "-c", "if [ \"$SERVICE_MODE\" = mcp ]; then MCP_HTTP=1 python -m nexdash.mcp_server; else python dashboard/server.py; fi"]
