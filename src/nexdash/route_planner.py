@@ -1205,27 +1205,10 @@ def plan_route(
             f"the un-discounted conservative estimate, so this only affects the displayed total, "
             f"never whether or when the truck charges. See REAL_WORLD_CALIBRATION.md."
         )
-    if _speed_source == "speed-limit":
-        assumptions.append(
-            "Per-segment speed follows the route's POSTED speed limits (e.g. ~30 km/h in a "
-            "village, 50 in town, 60 on a rural Landstrasse, 80 on the autobahn — capped at the "
-            "80 km/h truck limit), then "
-            "scaled uniformly so the total drive time equals the routing engine's measured "
-            "(traffic-aware) duration — so road-by-road speeds vary while the overall ETA is exact."
-        )
-    elif _speed_source == "measured":
-        assumptions.append(
-            "Per-segment speed is MEASURED from the routing engine's per-leg travel time "
-            "(traffic / road-class aware); within a leg, variation is still distributed by gradient."
-        )
-    elif enrichment:
-        assumptions.append(
-            "Per-segment speed varies with gradient (slower on climbs, capped on descents), "
-            "re-anchored so the total ETA still matches the routing engine; the absolute "
-            "per-segment speeds are a gradient heuristic, not measured traffic or road-class speeds."
-        )
-    else:
-        assumptions.append("Single average speed applied to every segment (flat fallback).")
+    # NOTE: the per-segment speed disclosure was intentionally removed. The total
+    # drive time always equals the routing engine's measured (traffic-aware)
+    # duration, so the ETA is unaffected; the per-segment speed breakdown is a
+    # display detail and is no longer surfaced as a modelling assumption.
     if charge_satisfied_break:
         assumptions.append(
             "A charging stop of 45 min or more is credited as the EU 561 Art 7 break "

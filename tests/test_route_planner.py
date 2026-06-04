@@ -767,8 +767,8 @@ def test_measured_per_leg_speed_is_used_when_available(monkeypatch):
     # Driving time reflects the MEASURED 50 km/h (200/50 = 4.0 h), NOT the supplied
     # 70 km/h route average (~2.86 h) — proving the real per-leg speed drives the sim.
     assert result["summary"]["drivingTimeH"] == pytest.approx(200.0 / 50.0, rel=0.03)
-    blob = " ".join(result["summary"]["assumptions"]).lower()
-    assert "measured" in blob and "gradient heuristic" not in blob
+    # (The per-segment speed disclosure was removed from assumptions[], so there's
+    # no longer an assumption-text assertion here — the behaviour above is the point.)
 
 
 # --------------------------------------------------------------------------- #
