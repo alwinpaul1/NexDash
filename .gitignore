@@ -42,3 +42,6 @@ reports/figures/*.png
 # Local agent config + large binders (not repo content)
 .claude/
 *.pdf
+
+# Scratch artifacts (screenshots, probe/test scripts — not repo content)
+artifacts/
