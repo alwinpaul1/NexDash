@@ -2,14 +2,46 @@
 
 This module wraps the deterministic/ML prediction layer of NexDash (the
 Mercedes-Benz eActros 600 energy model) as a Model Context Protocol (MCP)
-server so that MCP-aware clients (MCP-aware clients, IDEs, custom agents) can call
-``predict_energy`` and ``check_reachability`` directly.
+server so that ANY MCP-capable AI client (desktop assistants, IDEs, custom
+agents) can call the tools directly -- WITHOUT the NexDash route-planner
+frontend. A user can plug in this server and ask, in plain language,
+"travelling with 18 t on 22 March 2026 at 09:00 from Berlin to Munich"; the
+client calls :func:`plan_route` and gets the full plan back (route, energy,
+charging stops, ETA, on-time vs deadline, EU 561 driver hours).
 
-The two exposed tools are thin delegations to :mod:`nexdash.tools`, which in
-turn call :func:`nexdash.model.predict_energy` and
-:func:`nexdash.range.check_reachability`. Keeping the real logic in
-``nexdash.tools`` means the MCP server, the in-process tool-use agent, and the
-FastAPI dashboard all share one source of truth.
+Exposed tools (all thin delegations to :mod:`nexdash.tools`, so the MCP
+server, the in-process agent and the FastAPI dashboard share ONE source of
+truth -- no logic drift):
+
+* ``predict_energy``     -- kWh for a single known-distance segment.
+* ``check_reachability`` -- "will it reach?" given current SOC + a reserve.
+* ``plan_route``         -- FULL door-to-door trip plan from two place names.
+* ``model_info``         -- the trained model's accuracy envelope (read-only).
+
+Security posture (MCP best practices)
+-------------------------------------
+* Transport is STDIO (``FastMCP.run`` default). A local stdio server is only
+  reachable by the client process that spawned it -- there is no network port,
+  no ``0.0.0.0`` bind, and no DNS-rebinding surface. Do NOT switch to an HTTP
+  transport unless you also bind 127.0.0.1, require an auth token, and enable
+  ``TransportSecuritySettings`` Host/Origin validation.
+* SECRETS NEVER LEAVE THE SERVER. ``TOMTOM_API_KEY`` / ``MINIMAX_API_KEY`` are
+  the server's OWN credentials, resolved from the environment by the tool layer.
+  No tool returns, echoes or logs a key. Tool errors are mapped to short,
+  generic, secret-free categories (raw exception text -- which can embed a
+  filesystem path or an httpx URL-with-key -- is never returned); the full
+  detail is logged to STDERR only (stdout is the MCP protocol channel).
+* LEAST PRIVILEGE. The server exposes only energy/range/route/spec tools. It
+  has no file-read, shell, or arbitrary-fetch tool. ``model_path`` is NOT a
+  tool parameter, so a client cannot point the model loader at an arbitrary
+  file -- every tool uses the pinned ``DEFAULT_MODEL_PATH``.
+* BOUNDED EGRESS. The only outbound call (made by ``plan_route``) is HTTPS to
+  fixed TomTom hosts (api.tomtom.com geocode + routing) with a 12 s timeout,
+  ``follow_redirects=False`` and a country/limit cap. Origin/destination
+  strings are URL-encoded into the path, never used to build a host.
+* INPUT VALIDATION. Numeric arguments are range-checked at this boundary before
+  reaching the model, so an out-of-domain value returns a clean ``{"error":...}``
+  instead of a garbage prediction.
 
 Running the server
 ------------------
@@ -19,9 +51,8 @@ The server speaks MCP over stdio (the default transport for ``FastMCP.run``)::
 
 Registering in an MCP client config
 -----------------------------------
-Add an entry to your client's MCP server configuration. For MCP-aware clients the
-file is ``claude_desktop_config.json`` (macOS:
-``~/Library/Application Support/Claude/claude_desktop_config.json``)::
+Add an entry to your client's MCP server configuration (for many desktop
+clients this lives in ``claude_desktop_config.json``)::
 
     {
       "mcpServers": {
@@ -29,27 +60,93 @@ file is ``claude_desktop_config.json`` (macOS:
           "command": "python",
           "args": ["-m", "nexdash.mcp_server"],
           "env": {
-            "PYTHONPATH": "/absolute/path/to/NexDash/src"
+            "PYTHONPATH": "/absolute/path/to/NexDash/src",
+            "TOMTOM_API_KEY": "<your-tomtom-key>"
           }
         }
       }
     }
 
 If the ``nexdash`` package is installed into the active environment (e.g. via
-``pip install -e .``) the ``env``/``PYTHONPATH`` block can be omitted and you
-can point ``command`` at that environment's interpreter. The trained model must
-exist on disk first; run ``python run_pipeline.py`` once to generate it.
+``pip install -e .``) the ``PYTHONPATH`` block can be omitted and ``command``
+can point at that environment's interpreter. The trained model must exist on
+disk first; run ``python run_pipeline.py`` once to generate it. ``plan_route``
+additionally needs ``TOMTOM_API_KEY`` (or ``VITE_TOMTOM_API_KEY`` in
+``frontend/.env``) to reach the TomTom geocode/routing API.
+
+Worked standalone example
+-------------------------
+Client prompt: "travelling with 18 t on 22 March 2026 at 09:00 from Berlin to
+Munich" -> the client calls::
+
+    plan_route(origin="Berlin", destination="Munich", payload_t=18,
+               departure="2026-03-22T09:00")
+
+and receives a JSON plan with ``distance_km``, ``energy_kwh``, ``charging_stops``,
+``eta``, ``on_time`` and ``eu561_ok``.
 """
 
 from __future__ import annotations
+
+import logging
+import sys
 
 from mcp.server.fastmcp import FastMCP
 
 from nexdash import tools
 
+# Log to STDERR only. For a stdio MCP server, STDOUT is the JSON-RPC protocol
+# channel -- any write to it corrupts message framing. Server-side diagnostics
+# (including the full text of a caught exception) go here, never to the client.
+logger = logging.getLogger("nexdash.mcp_server")
+if not logger.handlers:
+    _handler = logging.StreamHandler(sys.stderr)
+    _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logger.addHandler(_handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
 mcp = FastMCP("nexdash")
 
 
+# ---------------------------------------------------------------------------
+# Boundary helpers
+# ---------------------------------------------------------------------------
+class _ToolInputError(ValueError):
+    """A client-supplied argument is out of the tool's accepted domain."""
+
+
+def _bounded(value: float, *, low: float, high: float, field: str) -> float:
+    """Validate that ``low <= value <= high`` for a numeric tool argument.
+
+    Raises :class:`_ToolInputError` with a short, secret-free message (it names
+    only the field and the bound, never internal state) so an out-of-domain
+    value becomes a clean structured error rather than a garbage prediction.
+    """
+    if value < low or value > high:
+        raise _ToolInputError(
+            f"{field} must be between {low} and {high} (got {value})."
+        )
+    return value
+
+
+def _safe_error(exc: Exception) -> dict:
+    """Map any exception to a short, generic, secret-free client error.
+
+    The full exception (which may embed a filesystem path, an env-derived value
+    or an httpx URL containing the API key) is logged to STDERR ONLY. The client
+    receives a stable category string -- never a stack trace or raw message.
+    """
+    logger.warning("tool call failed: %s: %s", type(exc).__name__, exc)
+    if isinstance(exc, _ToolInputError):
+        # The bound message is self-authored above and contains no secret.
+        return {"error": f"Invalid input: {exc}"}
+    return {"error": "Tool call failed: invalid input or internal error."}
+
+
+# ---------------------------------------------------------------------------
+# Tool: predict_energy
+# ---------------------------------------------------------------------------
 @mcp.tool()
 def predict_energy(
     distance_km: float,
@@ -62,21 +159,29 @@ def predict_energy(
     """Predict energy consumption (kWh) for one eActros 600 trip segment.
 
     Uses the trained NexDash energy model to estimate how many kilowatt-hours
-    the truck will draw from its battery over a single segment.
+    the truck will draw from its battery over a single segment of known length.
+    For a door-to-door trip between two place names, use ``plan_route`` instead.
 
     Args:
-        distance_km: Segment length in kilometres (typ. 1-120).
+        distance_km: Segment length in kilometres (1-2000).
         payload_t: Cargo payload in tonnes (0-22).
-        speed_kph: Average travel speed in km/h (30-90).
-        gradient_pct: Net road gradient in percent; negative is downhill.
-        temperature_c: Ambient temperature in degrees Celsius (-15 to 40).
-        wind_mps: Headwind component in metres/second (default 0.0).
+        speed_kph: Average travel speed in km/h (1-130).
+        gradient_pct: Net road gradient in percent; negative is downhill
+            (-30 to 30).
+        temperature_c: Ambient temperature in degrees Celsius (-40 to 55).
+        wind_mps: Headwind component in metres/second (default 0.0; -40 to 40).
 
     Returns:
         JSON-serializable dict with the predicted energy (kWh) and the echoed
-        input features.
+        input features, or ``{"error": ...}`` for an out-of-range / failed call.
     """
     try:
+        distance_km = _bounded(distance_km, low=0.1, high=2000.0, field="distance_km")
+        payload_t = _bounded(payload_t, low=0.0, high=22.0, field="payload_t")
+        speed_kph = _bounded(speed_kph, low=1.0, high=130.0, field="speed_kph")
+        gradient_pct = _bounded(gradient_pct, low=-30.0, high=30.0, field="gradient_pct")
+        temperature_c = _bounded(temperature_c, low=-40.0, high=55.0, field="temperature_c")
+        wind_mps = _bounded(wind_mps, low=-40.0, high=40.0, field="wind_mps")
         return tools.predict_energy_tool(
             distance_km=distance_km,
             payload_t=payload_t,
@@ -85,12 +190,13 @@ def predict_energy(
             temperature_c=temperature_c,
             wind_mps=wind_mps,
         )
-    except Exception as exc:  # noqa: BLE001 - MCP boundary: an out-of-range arg must
-        # return a structured error to the client, not crash the tool call (mirrors
-        # the in-process agent._run_tool contract).
-        return {"error": f"{type(exc).__name__}: {exc}"}
+    except Exception as exc:  # noqa: BLE001 - MCP boundary: never crash the call.
+        return _safe_error(exc)
 
 
+# ---------------------------------------------------------------------------
+# Tool: check_reachability
+# ---------------------------------------------------------------------------
 @mcp.tool()
 def check_reachability(
     soc_pct: float,
@@ -106,25 +212,36 @@ def check_reachability(
 
     Combines the energy prediction with the current state of charge and a safety
     reserve to determine reachability, then reports the energy margin and the
-    estimated remaining state of charge / range on arrival.
+    estimated remaining state of charge / range on arrival. Use this for any
+    'can it make it / will it reach' question over a single known-distance leg.
 
     Args:
         soc_pct: Current battery state of charge in percent (0-100).
-        distance_km: Trip distance in kilometres.
+        distance_km: Trip distance in kilometres (1-2000).
         payload_t: Cargo payload in tonnes (0-22).
-        speed_kph: Average travel speed in km/h (30-90).
-        gradient_pct: Net road gradient in percent; negative is downhill.
-        temperature_c: Ambient temperature in degrees Celsius (-15 to 40).
-        wind_mps: Headwind component in metres/second (default 0.0).
-        reserve_pct: Battery reserve to keep untouched, in percent
-            (default 10.0).
+        speed_kph: Average travel speed in km/h (1-130).
+        gradient_pct: Net road gradient in percent; negative is downhill
+            (-30 to 30).
+        temperature_c: Ambient temperature in degrees Celsius (-40 to 55).
+        wind_mps: Headwind component in metres/second (default 0.0; -40 to 40).
+        reserve_pct: Battery reserve to keep untouched, in percent (0-100,
+            default 10.0).
 
     Returns:
         JSON-serializable dict with ``reaches`` (bool), energy needed/available,
         usable energy after reserve, margin, remaining SOC/range estimates, and
-        a confidence note referencing the model's error band.
+        a confidence note referencing the model's error band -- or
+        ``{"error": ...}`` for an out-of-range / failed call.
     """
     try:
+        soc_pct = _bounded(soc_pct, low=0.0, high=100.0, field="soc_pct")
+        distance_km = _bounded(distance_km, low=0.1, high=2000.0, field="distance_km")
+        payload_t = _bounded(payload_t, low=0.0, high=22.0, field="payload_t")
+        speed_kph = _bounded(speed_kph, low=1.0, high=130.0, field="speed_kph")
+        gradient_pct = _bounded(gradient_pct, low=-30.0, high=30.0, field="gradient_pct")
+        temperature_c = _bounded(temperature_c, low=-40.0, high=55.0, field="temperature_c")
+        wind_mps = _bounded(wind_mps, low=-40.0, high=40.0, field="wind_mps")
+        reserve_pct = _bounded(reserve_pct, low=0.0, high=100.0, field="reserve_pct")
         return tools.check_reach_tool(
             soc_pct=soc_pct,
             distance_km=distance_km,
@@ -135,11 +252,124 @@ def check_reachability(
             wind_mps=wind_mps,
             reserve_pct=reserve_pct,
         )
-    except Exception as exc:  # noqa: BLE001 - MCP boundary: e.g. speed<=0 now raises a
-        # clear ValueError in check_reachability; return it as a structured error
-        # rather than letting it crash the MCP tool call.
-        return {"error": f"{type(exc).__name__}: {exc}"}
+    except Exception as exc:  # noqa: BLE001 - MCP boundary: never crash the call.
+        return _safe_error(exc)
+
+
+# ---------------------------------------------------------------------------
+# Tool: plan_route  (the standalone, no-frontend trip planner)
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def plan_route(
+    origin: str,
+    destination: str,
+    payload_t: float = 0.0,
+    start_soc: float = 100.0,
+    temperature_c: float = 15.0,
+    departure: str | None = None,
+    deliver_by: str | None = None,
+    min_soc: float = 15.0,
+    reserve_pct: float = 10.0,
+    max_charge_kw: float = 400.0,
+) -> dict:
+    """Plan a COMPLETE door-to-door trip for a Mercedes-Benz eActros 600 truck.
+
+    This is the standalone trip planner: it works for any MCP client with NO
+    NexDash frontend. Give it two place names and it (1) geocodes both via
+    TomTom, (2) routes a 40 t / 5-axle artic eActros 600 over the real TomTom
+    truck road network, (3) simulates state-of-charge drain, (4) inserts DC
+    fast-charging stops where needed, (5) computes ETA and -- if ``deliver_by``
+    is set -- whether arrival is on time, and (6) checks EU 561 driver-hours
+    (a >=45-min charge counts as the required break).
+
+    Use this whenever a user describes a trip between places (e.g. "Berlin to
+    Munich, 18 tonnes, depart 09:00, deliver by noon"). For a single isolated
+    segment with a known distance, or a pure "will it reach" question, prefer
+    ``predict_energy`` / ``check_reachability``.
+
+    Example (the prompt "travelling with 18 t on 22 March 2026 at 09:00 from
+    Berlin to Munich")::
+
+        plan_route(origin="Berlin", destination="Munich", payload_t=18,
+                   departure="2026-03-22T09:00")
+
+    Args:
+        origin: Start location name (e.g. "Berlin", "Hamburg Hafen"). Required.
+        destination: Destination location name (e.g. "Munich"). Required.
+        payload_t: Cargo payload in tonnes (0-22, clamped). Default 0.
+        start_soc: Starting battery state of charge in percent (0-100, clamped).
+            Default 100.
+        temperature_c: Ambient temperature in degrees Celsius. Default 15.
+        departure: Departure datetime as an ISO 8601 local string
+            (e.g. "2026-03-22T09:00"). Drives ETA, EU 561 breaks and on-time
+            checks. Defaults to now if omitted.
+        deliver_by: Delivery deadline at the destination as an ISO 8601 local
+            datetime (e.g. "2026-03-22T18:00"). When set, the plan reports
+            whether arrival is on time / early / late via ``on_time``.
+        min_soc: SOC floor (%) never to dip below (0-100). Default 15.
+        reserve_pct: Safety-reserve buffer (%) above min SOC (0-100). Default 10.
+        max_charge_kw: Max charging power (kW). Default 400.
+
+    Returns:
+        JSON-serializable plan summary: ``origin``/``destination`` (label+coords),
+        ``distance_km``, ``energy_kwh``, ``kwh_per_100``, ``arrival_soc``,
+        ``min_soc``, ``charging_stops`` (with arrive/depart SOC + kWh),
+        ``n_charging_stops``, ``driving_time_h``, ``total_time_h``, ``departure``,
+        ``eta``/``eta_iso``, ``deliver_by``, ``on_time``, ``eu561_ok`` and
+        ``assumptions``. On geocode/route/simulation failure it returns
+        ``{"error": ...}`` (secret-free) instead of throwing.
+    """
+    try:
+        if not isinstance(origin, str) or not origin.strip():
+            raise _ToolInputError("origin is required.")
+        if not isinstance(destination, str) or not destination.strip():
+            raise _ToolInputError("destination is required.")
+        # plan_route_tool already clamps payload_t/start_soc/min_soc/reserve_pct
+        # and tolerates string/None numerics. We forward typed values straight
+        # through; do NOT expose model_path here (least privilege).
+        return tools.plan_route_tool(
+            origin=origin,
+            destination=destination,
+            payload_t=payload_t,
+            start_soc=start_soc,
+            temperature_c=temperature_c,
+            departure=departure,
+            deliver_by=deliver_by,
+            min_soc=min_soc,
+            reserve_pct=reserve_pct,
+            max_charge_kw=max_charge_kw,
+        )
+    except Exception as exc:  # noqa: BLE001 - MCP boundary: never crash the call.
+        return _safe_error(exc)
+
+
+# ---------------------------------------------------------------------------
+# Tool: model_info  (read-only trust/calibration signal -- no secrets, no net)
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def model_info() -> dict:
+    """Return the trained energy model's accuracy metrics (no inputs).
+
+    Lets a client gauge prediction confidence BEFORE acting on a
+    ``predict_energy`` / ``check_reachability`` / ``plan_route`` result. Reads
+    only local model metadata -- it makes no external call and exposes no key.
+
+    Returns:
+        JSON-serializable dict ``{mae_kwh, rmse_kwh, mape_pct, r2,
+        pct_range_error, model_version}`` (values are ``None`` where unknown),
+        or ``{"error": ...}`` if the metrics cannot be resolved.
+    """
+    try:
+        from nexdash.model_info import model_info as _model_info
+
+        info = dict(_model_info())
+        info["truck_model"] = "Mercedes-Benz eActros 600"
+        return info
+    except Exception as exc:  # noqa: BLE001 - MCP boundary: never crash the call.
+        return _safe_error(exc)
 
 
 if __name__ == "__main__":
+    # Default transport is stdio: reachable only by the spawning client, no
+    # network port exposed. See the module docstring before switching to HTTP.
     mcp.run()

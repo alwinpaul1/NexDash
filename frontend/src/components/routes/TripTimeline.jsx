@@ -1,13 +1,10 @@
 // Ordered vertical timeline of trip segments: drive / rest / charge.
 // Reads the `segments` array from PlanResult (light theme).
+import { to12h } from "../../lib/time.js";
 
 function fmtTime(t) {
   if (!t) return "--:--";
-  // Accept either an ISO string or a pre-formatted HH:MM.
-  if (/^\d{2}:\d{2}$/.test(t)) return t;
-  const d = new Date(t);
-  if (Number.isNaN(d.getTime())) return String(t);
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+  return to12h(t);
 }
 
 function fmtRange(start, end) {

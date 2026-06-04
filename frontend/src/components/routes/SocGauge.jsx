@@ -106,7 +106,7 @@ export default function SocGauge({ arrivalSoc = 0, startSoc = 100, minSoc = 15 }
         </div>
       </div>
 
-      <div className="flex justify-between w-44 -mt-6">
+      <div className="flex justify-between w-48 mt-1">
         <div className="text-center">
           <p className="text-[10px] uppercase tracking-[0.1em] font-semibold text-on-surface-variant">Start</p>
           <p className="text-sm font-headline font-semibold text-on-surface tabular-nums">{Math.round(startSoc)}%</p>
