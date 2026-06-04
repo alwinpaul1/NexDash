@@ -1,13 +1,8 @@
 export default function Sidebar() {
   return (
     <aside className="hidden lg:flex w-64 shrink-0 flex-col self-stretch sticky top-0 h-screen bg-surface-lowest border-r border-outline-variant/50 shadow-nx-sm">
-      {/* Brand — the NexDash logo (same mark as the favicon) + wordmark. */}
-      <div className="flex items-center gap-3 px-6 h-16 border-b border-outline-variant/40">
-        <img
-          src="/nexdash-logo.png"
-          alt="NexDash"
-          className="w-9 h-9 rounded-control object-cover ring-1 ring-primary/25 shadow-nx-sm"
-        />
+      {/* Brand — text wordmark only (no logo mark). */}
+      <div className="flex items-center px-6 h-16 border-b border-outline-variant/40">
         <div className="leading-tight">
           <p className="font-headline font-bold text-lg text-on-surface tracking-tight">NexDash</p>
           <p className="ck-label text-[10px] font-medium text-on-surface-variant -mt-0.5">Range Intelligence</p>
