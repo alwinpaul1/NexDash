@@ -612,8 +612,8 @@ function TileSwitcher({ value, onChange }) {
             onClick={() => onChange(key)}
             className={`flex items-center gap-2 rounded-control px-3.5 py-2.5 text-sm font-medium transition-all duration-smooth ease-nx-out ${
               on
-                ? "bg-primary text-on-primary shadow-nx-sm"
-                : "text-on-surface-variant hover:bg-primary/10 hover:text-primary"
+                ? "bg-primary/15 text-primary ring-1 ring-inset ring-primary/30"
+                : "text-on-surface-variant hover:bg-on-surface/5 hover:text-on-surface"
             }`}
           >
             <span className="material-symbols-outlined" style={{ fontSize: "20px" }}>
