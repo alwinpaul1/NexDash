@@ -2,12 +2,13 @@
 // SVG arc (270deg sweep) colored by arrival SOC (green -> amber -> red),
 // big arrival % in the center, START / MIN labels under the arc ends.
 
+// Cockpit HUD palette: healthy reads as the signature lime, dropping through
+// caution-yellow / low-amber to critical red so risk is still legible at a glance.
 function socColor(soc) {
-  if (soc >= 80) return "#15803d"; // 80-100% deep green
-  if (soc >= 60) return "#22c55e"; // 60-80% green
-  if (soc >= 40) return "#eab308"; // 40-60% yellow
-  if (soc >= 20) return "#f59e0b"; // 20-40% amber
-  return "#ef4444"; // <20% red
+  if (soc >= 55) return "#c6f24e"; // healthy — signature lime
+  if (soc >= 35) return "#eab308"; // caution — yellow
+  if (soc >= 20) return "#f59e0b"; // low — amber
+  return "#ef4444"; // critical — red
 }
 
 function polar(cx, cy, r, angleDeg) {
@@ -33,6 +34,11 @@ export default function SocGauge({ arrivalSoc = 0, startSoc = 100, minSoc = 15 }
   const pct = Math.max(0, Math.min(100, arrivalSoc));
   const endAngle = startAngle + (sweep * pct) / 100;
   const color = socColor(arrivalSoc);
+  // Healthy state is the signature lime — bright on dark, but illegible on the
+  // light variant's white. So the center numeral uses the theme-aware lime ink
+  // (.ck-lime) while the glowing arc keeps the full-bright lime stroke. Caution/
+  // low/critical amber+red read fine on both themes, so they use `color` direct.
+  const healthy = pct >= 55;
 
   // Full-sweep arc length (for the entrance stroke-draw). The 270° arc is
   // 3/4 of a full circle's circumference at radius r.
@@ -48,9 +54,10 @@ export default function SocGauge({ arrivalSoc = 0, startSoc = 100, minSoc = 15 }
               <stop offset="0%" stopColor={color} stopOpacity="0.7" />
               <stop offset="100%" stopColor={color} stopOpacity="1" />
             </linearGradient>
-            <filter id="socGlow" x="-20%" y="-20%" width="140%" height="140%">
-              <feGaussianBlur stdDeviation="3" result="b" />
+            <filter id="socGlow" x="-40%" y="-40%" width="180%" height="180%">
+              <feGaussianBlur stdDeviation="5" result="b" />
               <feMerge>
+                <feMergeNode in="b" />
                 <feMergeNode in="b" />
                 <feMergeNode in="SourceGraphic" />
               </feMerge>
@@ -92,12 +99,12 @@ export default function SocGauge({ arrivalSoc = 0, startSoc = 100, minSoc = 15 }
         `}</style>
         {/* center readout */}
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className="text-[10px] uppercase tracking-[0.12em] font-semibold text-on-surface-variant">
+          <span className="ck-label text-[10px] font-semibold text-on-surface-variant">
             Arrival
           </span>
           <span
-            className="font-headline font-bold leading-none tabular-nums"
-            style={{ fontSize: "46px", color }}
+            className={`ck-num font-bold leading-none ${healthy ? "ck-lime ck-glow-lime" : ""}`}
+            style={{ fontSize: "46px", ...(healthy ? {} : { color }) }}
           >
             {Math.round(arrivalSoc)}
             <span className="text-2xl align-top">%</span>
@@ -108,12 +115,12 @@ export default function SocGauge({ arrivalSoc = 0, startSoc = 100, minSoc = 15 }
 
       <div className="flex justify-between w-48 mt-1">
         <div className="text-center">
-          <p className="text-[10px] uppercase tracking-[0.1em] font-semibold text-on-surface-variant">Start</p>
-          <p className="text-sm font-headline font-semibold text-on-surface tabular-nums">{Math.round(startSoc)}%</p>
+          <p className="ck-label text-[10px] font-semibold text-on-surface-variant">Start</p>
+          <p className="ck-num text-sm font-semibold text-on-surface">{Math.round(startSoc)}%</p>
         </div>
         <div className="text-center">
-          <p className="text-[10px] uppercase tracking-[0.1em] font-semibold text-on-surface-variant">Min floor</p>
-          <p className="text-sm font-headline font-semibold text-on-surface tabular-nums">{Math.round(minSoc)}%</p>
+          <p className="ck-label text-[10px] font-semibold text-on-surface-variant">Min floor</p>
+          <p className="ck-num text-sm font-semibold tabular-nums" style={{ color: "#f59e0b" }}>{Math.round(minSoc)}%</p>
         </div>
       </div>
     </div>

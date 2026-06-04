@@ -49,6 +49,15 @@
   /* chat-md table border hook (used below) */
   --md-border: #d9e2d6;
 
+  /* ── Cockpit HUD (instrument-cluster) ──────────────────────────────────
+     Signature lime accent + IBM Plex Mono numerals + a faint 44px grid.
+     The .ck-* utilities (see @layer components) are theme-aware so DARK is
+     the cockpit and LIGHT is a daylight variant of the same language. */
+  --ck-lime: 198 242 78; /* #c6f24e — signature lime (fills, arc, glow) */
+  --ck-lime-ink: 101 135 12; /* #65870c — lime for TEXT (legible on light) */
+  --ck-grid: 17 24 20; /* grid-line base: dark lines on a light panel */
+  --ck-grid-alpha: 0.05;
+
   color-scheme: light;
 }
 
@@ -84,6 +93,12 @@
   --scrollbar-thumb-hover: 255 255 255;
 
   --md-border: #28322f;
+
+  /* Cockpit HUD — dark variant: bright lime reads great on near-black, grid
+     lines flip to a faint light tint. */
+  --ck-lime-ink: 198 242 78; /* #c6f24e bright lime on dark */
+  --ck-grid: 233 244 240; /* #e9f4f0 — light lines on a dark panel */
+  --ck-grid-alpha: 0.05;
 
   color-scheme: dark;
 }
@@ -158,6 +173,53 @@
   /* .nx-divider — a hairline rule in the current theme. */
   .nx-divider {
     @apply border-t border-outline-variant/40;
+  }
+
+  /* ───────────────────────────────────────────────────────────────────────
+     COCKPIT HUD UTILITIES (instrument-cluster language)
+     Theme-aware: dark = cockpit, light = daylight variant. See the --ck-*
+     tokens above. Used by TruckCard (render bay), SocGauge, the RouteResults
+     readout tiles, and the Sidebar logo lockup.
+     ─────────────────────────────────────────────────────────────────────── */
+
+  /* .ck-grid-bg — the signature 44px HUD grid backdrop. Lay it behind a panel
+     (it self-tints per theme: faint light lines on dark, faint dark on light). */
+  .ck-grid-bg {
+    background-image: linear-gradient(
+        to right,
+        rgb(var(--ck-grid) / var(--ck-grid-alpha)) 1px,
+        transparent 1px
+      ),
+      linear-gradient(
+        to bottom,
+        rgb(var(--ck-grid) / var(--ck-grid-alpha)) 1px,
+        transparent 1px
+      );
+    background-size: 44px 44px;
+  }
+
+  /* .ck-num — tabular IBM Plex Mono numerals for data readouts. */
+  .ck-num {
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-feature-settings: "tnum" 1;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* .ck-label — uppercase, letter-spaced mono caption (HUD section labels). */
+  .ck-label {
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+  }
+
+  /* .ck-lime — signature lime ink, theme-aware so it stays legible on light. */
+  .ck-lime {
+    color: rgb(var(--ck-lime-ink));
+  }
+
+  /* .ck-glow-lime — soft lime bloom for hero numerals / the SOC arc. */
+  .ck-glow-lime {
+    filter: drop-shadow(0 0 14px rgb(var(--ck-lime) / 0.45));
   }
 }
 
