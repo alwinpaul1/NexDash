@@ -254,8 +254,15 @@ function DestinationRow({
             <input
               type="datetime-local"
               value={dest.deliverBy}
+              min={nowLocalISO()}
               aria-label={`Deliver-by deadline for stop ${index + 1}`}
-              onChange={(e) => onUpdate(dest.id, { deliverBy: e.target.value })}
+              onChange={(e) => {
+                // A delivery deadline in the past is meaningless — clamp to now.
+                const now = nowLocalISO();
+                onUpdate(dest.id, {
+                  deliverBy: e.target.value && e.target.value < now ? now : e.target.value,
+                });
+              }}
               className="w-full px-2.5 py-2 rounded-control bg-surface-lowest border border-outline-variant/50 text-sm text-on-surface outline-none hover:border-outline-variant/70 focus:border-primary/50 focus:ring-2 focus:ring-primary/30 transition duration-snappy"
             />
           </div>
@@ -286,6 +293,11 @@ export default function PlannerForm({
   onReset,
 }) {
   const [moreOpen, setMoreOpen] = useState(false);
+  // Earliest selectable departure = now. Bound to the datetime-local `min` so the
+  // browser greys out past dates AND past times today (you can't depart in the
+  // past — it would produce a nonsense back-dated plan). Refreshed when the picker
+  // opens so "now" never goes stale on a long-open tab.
+  const [minDeparture, setMinDeparture] = useState(nowLocalISO());
 
   // Drag-to-reorder destinations (grip handle is the drag source).
   const dragFrom = useRef(null);
@@ -463,7 +475,14 @@ export default function PlannerForm({
             <input
               type="datetime-local"
               value={planner.departure}
-              onChange={(e) => onDeparture(e.target.value)}
+              min={minDeparture}
+              onFocus={() => setMinDeparture(nowLocalISO())}
+              onChange={(e) => {
+                // Clamp anything in the past (typed/pasted) up to now — the calendar
+                // already blocks past dates/times, this guards manual entry too.
+                const now = nowLocalISO();
+                onDeparture(e.target.value && e.target.value < now ? now : e.target.value);
+              }}
               className="flex-1 px-3 py-2.5 rounded-control bg-surface-low border border-outline-variant/50 text-sm text-on-surface outline-none hover:border-outline-variant/70 focus:border-primary/50 focus:ring-2 focus:ring-primary/30 transition duration-snappy"
             />
             <button
