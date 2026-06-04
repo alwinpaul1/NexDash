@@ -35,9 +35,10 @@ export default {
         body: ['"Inter"', "sans-serif"],
       },
       borderRadius: {
-        // Named radii scale for consistent rounding rhythm.
-        card: "1rem", // 16px — panels / cards
-        control: "0.75rem", // 12px — buttons / inputs
+        // Named radii scale — Uber's flat 8px rhythm for cards/inputs/buttons,
+        // full pill reserved for nav CTAs and toggles.
+        card: "0.5rem", // 8px — panels / cards
+        control: "0.5rem", // 8px — buttons / inputs
         pill: "9999px",
       },
       boxShadow: {

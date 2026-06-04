@@ -3,87 +3,111 @@
 @tailwind utilities;
 
 /* ─────────────────────────────────────────────────────────────────────────
-   THEME TOKENS
+   THEME TOKENS — Uber monochrome system
    Semantic color variables consumed by tailwind.config.js as
    rgb(var(--c-…) / <alpha-value>). Values are SPACE-SEPARATED "R G B" so
    Tailwind can inject the alpha channel (e.g. border-outline-variant/40).
 
-   :root                = refined LIGHT (Material-derived emerald/charcoal)
-   [data-theme="dark"]  = premium DARK  (charcoal panels, emerald accent)
+   The UI layer is strictly ACHROMATIC — a black-on-white transit-kiosk skin
+   (Uber style reference). All structural emphasis comes from jet black, the
+   page is paper white, cards are mist gray, and hairlines are iron gray.
+   Depth is created by surface steps + 1px borders, NOT elevation/shadows
+   (the system is deliberately flat). The single chromatic UI accent is a
+   faded teal, reserved for low-frequency active-state signals.
 
-   Alpha caveat: components alpha-composite surfaces & borders (…/40, …/60).
-   Dark values are chosen as MID greys (not pure white/black) so those
-   composited usages stay subtle and legible.
+   DATA colors stay: the SOC gauge ramp (green→amber→red), charging/availability
+   green, caveat amber and error red still encode meaning. Uber's own rule is
+   "color lives in content, not chrome" — our gauges ARE the content.
+
+   :root                = LIGHT  (Uber: paper white canvas, jet-black ink)
+   [data-theme="dark"]  = DARK   (inverted monochrome: near-black canvas, white ink)
    ───────────────────────────────────────────────────────────────────────── */
-:root {
-  /* Brand */
-  --c-primary: 0 109 50; /* #006d32 emerald */
-  --c-accent: 0 209 102; /* #00d166 bright emerald */
-  --c-on-primary: 255 255 255;
-  --c-secondary: 0 89 187; /* #0059bb */
-  --c-error: 186 26 26; /* #ba1a1a */
 
-  /* Surfaces (low → high elevation reads brighter) */
-  --c-background: 247 249 253; /* refined from #f8f9ff, slightly warmer-neutral */
-  --c-surface-lowest: 255 255 255;
-  --c-surface-low: 239 244 255; /* #eff4ff */
-  --c-surface: 229 238 255; /* #e5eeff */
+/* Uber named palette — kept as reference custom properties (the --c-* tokens
+   below are what the app actually consumes via Tailwind). */
+:root {
+  --color-jet-black: #000000;
+  --color-paper-white: #ffffff;
+  --color-mist-gray: #f6f6f6;
+  --color-charcoal: #333333;
+  --color-iron-gray: #767676;
+  --color-ash-gray: #afafaf;
+  --color-slate: #5e5e5e;
+  --color-graphite: #4b4b4b;
+  --color-faded-teal: #9dcdd6;
+}
+
+:root {
+  /* Brand — jet black is the achromatic anchor; CTAs are solid black. */
+  --c-primary: 0 0 0; /* #000000 jet black */
+  --c-accent: 157 205 214; /* #9dcdd6 faded teal — single-purpose accent */
+  --c-on-primary: 255 255 255; /* white text on black controls */
+  --c-secondary: 51 51 51; /* #333333 charcoal — neutral secondary */
+  --c-error: 186 26 26; /* #ba1a1a — kept (functional error semantic) */
+
+  /* Surfaces — paper white page, mist-gray cards (depth via steps, not shadow). */
+  --c-background: 255 255 255; /* #ffffff paper white canvas */
+  --c-surface-lowest: 246 246 246; /* #f6f6f6 mist gray (cards) */
+  --c-surface-low: 240 240 240; /* #f0f0f0 recessed sub-panels */
+  --c-surface: 232 232 232; /* #e8e8e8 raised chips / fills */
 
   /* Text */
-  --c-on-surface: 11 28 48; /* #0b1c30 */
-  --c-on-surface-variant: 60 74 61; /* #3c4a3d */
+  --c-on-surface: 0 0 0; /* #000000 jet black ink */
+  --c-on-surface-variant: 94 94 94; /* #5e5e5e slate — secondary copy */
 
-  /* Lines */
-  --c-outline-variant: 187 203 185; /* #bbcbb9 */
+  /* Lines — iron-gray hairline (used at low alpha, /40–/60). */
+  --c-outline-variant: 118 118 118; /* #767676 iron gray */
 
-  /* Elevation (light: soft cool shadows) */
-  --shadow-sm: 0 1px 2px rgb(11 28 48 / 0.06);
-  --shadow-md: 0 4px 14px rgb(11 28 48 / 0.08);
-  --shadow-lg: 0 12px 32px rgb(11 28 48 / 0.12);
-  --shadow-ring: 0 0 0 3px rgb(0 109 50 / 0.28);
+  /* Elevation — FLAT. Cards are border-only; overlays keep a faint shadow only
+     so floating menus separate from content. */
+  --shadow-sm: none;
+  --shadow-md: 0 4px 16px rgb(0 0 0 / 0.08);
+  --shadow-lg: 0 12px 32px rgb(0 0 0 / 0.12);
+  --shadow-ring: 0 0 0 3px rgb(0 0 0 / 0.16);
 
   /* Theme-aware scrollbar */
-  --scrollbar-thumb: 187 203 185;
-  --scrollbar-thumb-hover: 60 74 61;
+  --scrollbar-thumb: 175 175 175;
+  --scrollbar-thumb-hover: 94 94 94;
 
   /* chat-md table border hook (used below) */
-  --md-border: #d9e2d6;
+  --md-border: #e2e2e2;
 
   color-scheme: light;
 }
 
 [data-theme="dark"] {
-  /* Brand — emerald reads slightly brighter on dark for parity. */
-  --c-primary: 16 185 129; /* #10b981 nex-accent */
-  --c-accent: 52 211 153; /* #34d399 nex-accent-bright */
-  --c-on-primary: 6 14 12; /* near-black so text on emerald stays legible */
-  --c-secondary: 96 165 250; /* lifted blue for dark contrast */
-  --c-error: 248 113 113; /* lifted red */
+  /* Inverted monochrome — same achromatic discipline, dark canvas. CTAs flip
+     to white-on-black (the Uber "white pill" inside a black context). */
+  --c-primary: 255 255 255; /* white controls */
+  --c-accent: 157 205 214; /* faded teal accent (unchanged) */
+  --c-on-primary: 0 0 0; /* black text on white controls */
+  --c-secondary: 175 175 175; /* #afafaf ash — neutral secondary */
+  --c-error: 248 113 113; /* lifted red (functional) */
 
-  /* Surfaces — charcoal panels from the NexOS palette, layered. */
-  --c-background: 10 13 14; /* #0a0d0e nex-bg */
-  --c-surface-lowest: 14 20 19; /* #0e1413 nex-panel */
-  --c-surface-low: 16 24 23; /* #101817 nex-panel-alt */
-  --c-surface: 23 32 31; /* a touch lighter for raised chips */
+  /* Surfaces — near-black canvas, layered graphite cards. */
+  --c-background: 10 10 10; /* #0a0a0a near-black canvas */
+  --c-surface-lowest: 23 23 23; /* #171717 cards */
+  --c-surface-low: 31 31 31; /* #1f1f1f recessed panels */
+  --c-surface: 38 38 38; /* #262626 raised chips */
 
   /* Text */
-  --c-on-surface: 230 237 240; /* light slate */
-  --c-on-surface-variant: 156 163 175; /* #9ca3af muted */
+  --c-on-surface: 245 245 245; /* near-white ink */
+  --c-on-surface-variant: 175 175 175; /* #afafaf muted */
 
-  /* Lines — MID grey so …/40, …/60 borders are visible but soft, not glaring. */
-  --c-outline-variant: 120 132 128;
+  /* Lines — mid grey so …/40, …/60 borders read but stay soft. */
+  --c-outline-variant: 90 90 90;
 
-  /* Elevation (dark: deeper, near-black shadows) */
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
-  --shadow-md: 0 6px 18px rgb(0 0 0 / 0.45);
-  --shadow-lg: 0 16px 40px rgb(0 0 0 / 0.55);
-  --shadow-ring: 0 0 0 3px rgb(52 211 153 / 0.35);
+  /* Elevation — flat; faint near-black overlay shadows only. */
+  --shadow-sm: none;
+  --shadow-md: 0 6px 18px rgb(0 0 0 / 0.5);
+  --shadow-lg: 0 16px 40px rgb(0 0 0 / 0.6);
+  --shadow-ring: 0 0 0 3px rgb(255 255 255 / 0.22);
 
   /* Theme-aware scrollbar */
   --scrollbar-thumb: 255 255 255;
   --scrollbar-thumb-hover: 255 255 255;
 
-  --md-border: #28322f;
+  --md-border: #2a2a2a;
 
   color-scheme: dark;
 }
@@ -372,7 +396,7 @@
   width: 30px;
   height: 30px;
   border-radius: 9999px;
-  background: rgba(0, 209, 102, 0.4);
+  background: rgba(157, 205, 214, 0.5); /* faded-teal accent halo */
   transform: translate(-50%, -50%);
   animation: rr-pulse 1.6s ease-out infinite;
 }
@@ -470,18 +494,18 @@
   width: 16px;
   height: 16px;
   border-radius: 9999px;
-  background: #006d32;
+  background: #000000;
   border: 2px solid #fff;
-  box-shadow: 0 0 0 2px rgba(0, 109, 50, 0.3);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25);
   cursor: pointer;
 }
 .route-slider::-moz-range-thumb {
   width: 16px;
   height: 16px;
   border-radius: 9999px;
-  background: #006d32;
+  background: #000000;
   border: 2px solid #fff;
-  box-shadow: 0 0 0 2px rgba(0, 109, 50, 0.3);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25);
   cursor: pointer;
 }
 
