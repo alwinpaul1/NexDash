@@ -36,7 +36,15 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 # get_api_key is intentionally NOT exported: it returns the secret TomTom key,
 # so it must not be reachable via ``from nexdash.tomtom import *``. Internal
 # callers reference it by its qualified name (``tomtom.get_api_key``).
-__all__ = ["TomTomError", "geocode", "truck_route", "_redact"]
+__all__ = [
+    "TomTomError",
+    "geocode",
+    "truck_route",
+    "enrich_charging_stations",
+    "fetch_traffic_incidents",
+    "rank_chargers_by_time",
+    "_redact",
+]
 
 # Single source of truth for the routed vehicle — copied verbatim from the
 # frontend TRUCK_SPEC so the server-routed truck never diverges from the browser
@@ -338,4 +346,398 @@ def truck_route(points: list[dict[str, Any]]) -> dict[str, Any]:
         "speed_limits": speed_limits,
         "distance_km": (summary.get("lengthInMeters", 0) or 0) / 1000.0,
         "duration_s": summary.get("travelTimeInSeconds", 0) or 0,
+        # Live-traffic delay already baked into the travel time (routeType=fastest
+        # + traffic=true) — surfaced so the MCP client can report "incl. N min of
+        # live traffic", exactly like the browser planner's trafficDelayS.
+        "traffic_delay_s": summary.get("trafficDelayInSeconds", 0) or 0,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Real EV charging-station lookup (TomTom EV charging POIs, category 7309)
+# Server-side port of the browser planner's enrichStations() so an MCP trip names
+# the ACTUAL station it charges at (operator, power, live availability, price)
+# instead of a synthetic "DC Fast-Charge Hub N". Best-effort: any failure leaves
+# the stop unchanged — a charging plan is never lost because a POI lookup failed.
+# --------------------------------------------------------------------------- #
+
+# TomTom connector enum -> short dispatcher-friendly label (raw enum kept on miss).
+_CONNECTOR_LABEL = {
+    "IEC62196Type2CCS": "CCS",
+    "IEC62196Type2CableAttached": "Type 2",
+    "IEC62196Type2Outlet": "Type 2",
+    "Combo": "CCS",
+    "Chademo": "CHAdeMO",
+    "GBT20234Part2": "GB/T",
+    "GBT20234Part3": "GB/T",
+    "IEC62196Type1": "Type 1",
+    "IEC62196Type1CCS": "CCS",
+    "Tesla": "Tesla",
+}
+
+
+def _connector_label(t: Optional[str]) -> str:
+    if not t:
+        return "Unknown"
+    if t in _CONNECTOR_LABEL:
+        return _CONNECTOR_LABEL[t]
+    if t.startswith("GBT"):
+        return "GB/T"
+    if "CCS" in t:
+        return "CCS"
+    if "Type2" in t:
+        return "Type 2"
+    return t
+
+
+def _extract_price_per_kwh(r: dict[str, Any]) -> Optional[float]:
+    """Per-kWh ENERGY tariff for a station POI, or None (mirrors the frontend)."""
+    try:
+        tariffs = (r.get("references") or {}).get("tariffs") or (
+            r.get("chargingPark") or {}
+        ).get("tariffs")
+        if not isinstance(tariffs, list) or not tariffs:
+            return None
+        for t in tariffs:
+            elements = t.get("elements")
+            comps: list[dict[str, Any]] = []
+            if isinstance(elements, list):
+                for e in elements:
+                    comps.extend((e or {}).get("priceComponents") or [])
+            else:
+                comps = t.get("priceComponents") or []
+            for c in comps:
+                if c.get("type") == "ENERGY" and isinstance(c.get("price"), (int, float)):
+                    return float(c["price"])
+        return None
+    except Exception:  # noqa: BLE001 - pricing is best-effort metadata
+        return None
+
+
+def _connector_power_of(c: dict[str, Any]) -> float:
+    """Max ratedPowerKW across a candidate's chargingPark connectors."""
+    powers = [
+        float(x.get("ratedPowerKW") or 0)
+        for x in (c.get("chargingPark") or {}).get("connectors") or []
+    ]
+    return max(powers) if powers else 0.0
+
+
+def rank_chargers_by_time(
+    candidates: list[dict[str, Any]],
+    energy_kwh: float = 400.0,
+    max_charge_kw: float = 400.0,
+    detour_kph: float = 60.0,
+) -> list[dict[str, Any]]:
+    """Rank candidates by TOTAL added time = charge time at the station's real power
+    (capped at the truck's max) + a round-trip detour penalty. Faster-first. The
+    energy to add is the same for every candidate, so this prefers a higher-power
+    charger slightly off-route over a slow one on the line — the browser's logic."""
+    cap = max_charge_kw if (max_charge_kw and max_charge_kw > 0) else 400.0
+    e = energy_kwh if (energy_kwh and energy_kwh > 0) else 400.0
+
+    def score(c: dict[str, Any]) -> float:
+        eff = min(cap, _connector_power_of(c))
+        charge_min = (e / (eff * 0.9)) * 60 if eff > 0 else float("inf")
+        detour_min = ((float(c.get("dist") or 0) / 1000.0) / detour_kph) * 60 * 2
+        return charge_min + detour_min
+
+    ranked = [{"c": c, "score": score(c)} for c in (candidates or [])]
+    ranked.sort(key=lambda x: x["score"])
+    return ranked
+
+
+def _fetch_availability(availability_id: Optional[str]) -> Optional[dict[str, Any]]:
+    """Live CCS availability ``{available, total}`` for one station, or None.
+
+    Counts ONLY CCS connectors (the eActros charges on CCS DC). Treats TomTom's
+    "unknown" status as UNKNOWN (returns None) rather than a misleading "0 free".
+    """
+    if not availability_id:
+        return None
+    try:
+        url = (
+            f"https://api.tomtom.com/search/2/chargingAvailability.json"
+            f"?key={get_api_key()}&chargingAvailability={quote(str(availability_id))}"
+        )
+        data = _get_json(url)
+    except TomTomError:
+        return None
+    available = 0
+    total = 0
+    definite = 0
+    for c in data.get("connectors") or []:
+        typ = str(c.get("type") or "")
+        if not ("CCS" in typ or "Combo" in typ):
+            continue
+        total += int(c.get("total") or 0)
+        cur = (c.get("availability") or {}).get("current") or {}
+        a = int(cur.get("available") or 0)
+        available += a
+        definite += (
+            a
+            + int(cur.get("occupied") or 0)
+            + int(cur.get("reserved") or 0)
+            + int(cur.get("outOfService") or 0)
+        )
+    if total == 0 or definite == 0:
+        return None
+    return {"available": available, "total": total}
+
+
+def enrich_charging_stations(
+    stops: list[dict[str, Any]],
+    radius_km: float = 30.0,
+    min_charger_kw: float = 150.0,
+    max_charge_kw: float = 400.0,
+) -> list[dict[str, Any]]:
+    """Attach the time-optimal REAL CCS HPC station to each charging stop.
+
+    ``stops`` are the planner's charging stops (each needs ``lat``/``lng`` and the
+    planned ``kWh``). Returns a new list: each stop gets a ``station`` dict (name,
+    address, coords, off_route_km, connectors, max/eff power, availability, opening
+    hours, price, station charge minutes) when a real charger is found, else the
+    stop is returned unchanged with ``station=None``. Never raises.
+    """
+    out: list[dict[str, Any]] = []
+    radius = max(1000, round((radius_km or 30) * 1000))
+    truck_min_kw = min_charger_kw if (min_charger_kw and min_charger_kw > 0) else 150.0
+    cap = max_charge_kw if (max_charge_kw and max_charge_kw > 0) else 400.0
+
+    for s in stops or []:
+        lat = s.get("lat")
+        lng = s.get("lng")
+        if not isinstance(lat, (int, float)) or not isinstance(lng, (int, float)):
+            out.append({**s, "station": None})
+            continue
+        try:
+            base = (
+                f"https://api.tomtom.com/search/2/categorySearch/EV%20charging.json"
+                f"?key={get_api_key()}&lat={lat}&lon={lng}&radius={radius}"
+                f"&categorySet=7309&limit=12&openingHours=nextSevenDays&relatedPois=child"
+            )
+
+            def _nearest(min_power: float = 0, connector_set: str = "") -> list[dict[str, Any]]:
+                u = base
+                if min_power:
+                    u += f"&minPowerKW={min_power}"
+                if connector_set:
+                    u += f"&connectorSet={connector_set}"
+                try:
+                    return (_get_json(u).get("results")) or []
+                except TomTomError:
+                    return []
+
+            # Preference: CCS HPC -> any DC fast -> nearest-any (never empty).
+            candidates = _nearest(truck_min_kw, "IEC62196Type2CCS")
+            if not candidates:
+                candidates = _nearest(truck_min_kw)
+            if not candidates:
+                candidates = _nearest()
+            if not candidates:
+                out.append({**s, "station": None})
+                continue
+
+            kwh = s.get("kWh") or s.get("kwh") or 0
+            ranked = rank_chargers_by_time(candidates, energy_kwh=kwh, max_charge_kw=cap)
+            top_k = ranked[:6]
+            avails = [
+                _fetch_availability(
+                    ((t["c"].get("dataSources") or {}).get("chargingAvailability") or {}).get("id")
+                )
+                for t in top_k
+            ]
+            r = ranked[0]["c"]
+            availability = avails[0] if avails else None
+            for i in range(len(top_k)):
+                if avails[i] and avails[i]["available"] > 0:
+                    r = top_k[i]["c"]
+                    availability = avails[i]
+                    break
+
+            # Connectors: dedupe by label, keep highest power per label.
+            raw_conns = (r.get("chargingPark") or {}).get("connectors") or []
+            max_power = 0.0
+            by_label: dict[str, dict[str, Any]] = {}
+            for c in raw_conns:
+                pk = float(c.get("ratedPowerKW") or 0)
+                if pk > max_power:
+                    max_power = pk
+                label = _connector_label(c.get("connectorType"))
+                prev = by_label.get(label)
+                if not prev or pk > prev["power_kw"]:
+                    by_label[label] = {"label": label, "power_kw": round(pk)}
+            connectors = sorted(by_label.values(), key=lambda x: -x["power_kw"])
+
+            # Opening hours -> short human string.
+            opening_hours = None
+            trs = ((r.get("poi") or {}).get("openingHours") or {}).get("timeRanges") or []
+            if trs:
+                t0 = trs[0]
+
+                def _fmt(x: Optional[dict[str, Any]]) -> str:
+                    if not x:
+                        return ""
+                    return f"{int(x.get('hour', 0)):02d}:{int(x.get('minute', 0)):02d}"
+
+                op = _fmt(t0.get("startTime"))
+                cl = _fmt(t0.get("endTime"))
+                if op and cl:
+                    opening_hours = (
+                        "Open 24/7" if (op == "00:00" and cl == "00:00") else f"{op}-{cl}"
+                    )
+
+            power_kw = max_power if max_power > 0 else None
+            eff = min(cap, power_kw) if power_kw else None
+            station_charge_minutes = (
+                round((kwh / (eff * 0.9)) * 60) if (eff and kwh and kwh > 0) else None
+            )
+
+            station = {
+                "name": (r.get("poi") or {}).get("name") or s.get("name"),
+                "address": (r.get("address") or {}).get("municipality")
+                or (r.get("address") or {}).get("freeformAddress"),
+                "lat": (r.get("position") or {}).get("lat", lat),
+                "lng": (r.get("position") or {}).get("lon", lng),
+                "off_route_km": round(float(r.get("dist") or 0) / 1000.0, 1),
+                "connectors": connectors,
+                "max_power_kw": round(power_kw) if power_kw else None,
+                "effective_power_kw": round(eff) if eff else None,
+                "station_charge_minutes": station_charge_minutes,
+                "availability": availability,
+                "opening_hours": opening_hours,
+                "price_per_kwh": _extract_price_per_kwh(r),
+            }
+            enriched = {**s, "station": station}
+            # Promote the real operator name onto the stop itself so a client that
+            # only reads `name` still sees the actual station.
+            if station["name"]:
+                enriched["name"] = station["name"]
+                enriched["lat"] = station["lat"]
+                enriched["lng"] = station["lng"]
+            out.append(enriched)
+        except Exception:  # noqa: BLE001 - enrichment is best-effort, never fatal
+            out.append({**s, "station": None})
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Live traffic incidents (TomTom Traffic Incident Details v5) — server-side port
+# of the browser planner's fetchIncidents(): ETA-relevant accidents / jams /
+# closures / roadworks essentially ON the route. Best-effort, never raises.
+# --------------------------------------------------------------------------- #
+
+_INCIDENT_LABEL = {
+    0: "Traffic incident",
+    1: "Accident",
+    2: "Fog",
+    3: "Dangerous conditions",
+    4: "Rain",
+    5: "Ice",
+    6: "Traffic jam",
+    7: "Lane closed",
+    8: "Road closed",
+    9: "Road works",
+    10: "Wind",
+    11: "Flooding",
+    14: "Broken-down vehicle",
+}
+
+
+def fetch_traffic_incidents(geometry: list[list[float]]) -> list[dict[str, Any]]:
+    """ETA-relevant live traffic incidents along ``geometry`` ([[lat,lng], ...]).
+
+    Samples small bboxes along the route (the v5 bbox has an area cap), keeps only
+    flow-affecting incidents within ~2.5 km of the road, dedupes by id, and returns
+    up to 8 ordered by delay then severity. Returns [] on any failure.
+    """
+    if not isinstance(geometry, list) or len(geometry) < 2:
+        return []
+    try:
+        n = min(10, max(2, round(len(geometry) / 60)))
+        step = max(1, len(geometry) // n)
+        samples = [geometry[i] for i in range(0, len(geometry), step)]
+        fields = quote(
+            "{incidents{type,geometry{type,coordinates},properties{id,iconCategory,"
+            "magnitudeOfDelay,events{description,code},from,to,delay,roadNumbers}}}"
+        )
+        pad = 0.18  # ~25x40 km box, under TomTom's v5 area limit
+
+        raw: list[dict[str, Any]] = []
+        for pt in samples:
+            lat, lng = pt[0], pt[1]
+            bbox = (
+                f"{lng - pad:.5f},{lat - pad:.5f},{lng + pad:.5f},{lat + pad:.5f}"
+            )
+            url = (
+                f"https://api.tomtom.com/traffic/services/5/incidentDetails"
+                f"?key={get_api_key()}&bbox={bbox}&fields={fields}&language=en-GB"
+                f"&timeValidityFilter=present&categoryFilter=1,6,7,8,9,14"
+            )
+            try:
+                raw.extend(_get_json(url).get("incidents") or [])
+            except TomTomError:
+                continue
+
+        seen: set = set()
+        out: list[dict[str, Any]] = []
+        corridor_stride = max(1, len(geometry) // 400)
+        for inc in raw:
+            p = inc.get("properties") or {}
+            iid = p.get("id")
+            if iid:
+                if iid in seen:
+                    continue
+                seen.add(iid)
+            g = inc.get("geometry") or {}
+            lat0 = lng0 = None
+            coords = g.get("coordinates")
+            if g.get("type") == "Point" and isinstance(coords, list) and len(coords) >= 2:
+                lng0, lat0 = coords[0], coords[1]
+            elif g.get("type") == "LineString" and isinstance(coords, list) and coords:
+                mid = coords[len(coords) // 2]
+                if isinstance(mid, list) and len(mid) >= 2:
+                    lng0, lat0 = mid[0], mid[1]
+            if not isinstance(lat0, (int, float)) or not isinstance(lng0, (int, float)):
+                continue
+            # Corridor filter: keep only incidents <= 2.5 km from the travelled line.
+            nearest = float("inf")
+            for i in range(0, len(geometry), corridor_stride):
+                dd = _haversine_km(geometry[i], [lat0, lng0])
+                if dd < nearest:
+                    nearest = dd
+            if nearest > 2.5:
+                continue
+            cat = p.get("iconCategory") or 0
+            events = p.get("events") or []
+            desc = (
+                (events[0].get("description") if events else None)
+                or _INCIDENT_LABEL.get(cat)
+                or "Traffic incident"
+            )
+            roads = p.get("roadNumbers")
+            out.append(
+                {
+                    "category": _INCIDENT_LABEL.get(cat, "Traffic incident"),
+                    "magnitude": p.get("magnitudeOfDelay") or 0,
+                    "description": desc,
+                    "from": p.get("from") or "",
+                    "to": p.get("to") or "",
+                    "delay_s": p.get("delay") or 0,
+                    "road": ", ".join(roads) if isinstance(roads, list) else "",
+                }
+            )
+
+        # ETA-relevant only: measurable delay, major severity, closure or jam.
+        relevant = [
+            x
+            for x in out
+            if x["delay_s"] >= 30
+            or x["magnitude"] >= 3
+            or x["category"] == "Road closed"
+            or x["category"] == "Traffic jam"
+        ]
+        relevant.sort(key=lambda x: (-x["delay_s"], -x["magnitude"]))
+        return relevant[:8]
+    except Exception:  # noqa: BLE001 - incidents are advisory, never fatal
+        return []
