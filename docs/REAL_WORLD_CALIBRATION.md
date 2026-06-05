@@ -118,14 +118,35 @@ mixed-route regen) runs below constant-speed physics, a gap the steady-state
 model structurally cannot close.
 
 To make the **displayed** energy headline track field reality, NexDash applies a
-single documented multiplier `config.FIELD_CALIBRATION_FACTOR = 0.887` to
-`summary.energyKwh` / `summary.kwhPer100` only:
+documented **route-aware** field-calibration multiplier to `summary.energyKwh` /
+`summary.kwhPer100` only. `config.FIELD_CALIBRATION_FACTOR = 0.83` is the
+**flat-motorway anchor** of that multiplier (not a blanket scalar):
 
-- The factor is anchored to the **energy model's own** flat-route output (that is
-  what the displayed headline is built from), not to raw physics. At the 40 t /
+- The anchor is calibrated to the **energy model's own** flat-route output (that
+  is what the displayed headline is built from), not to raw physics. At the 40 t /
   80 km/h / 20 °C / flat anchor the model reads **113.88 kWh/100 km**, and
   **0.83 × 113.88 = 94.5 kWh/100 km** (≈ 0.945 kWh/km) — on **NexDash's NexOS
   field-real centre (~95)**.
+
+- **Route-aware since 2026-06-05** (`route_planner._route_field_correction`). The
+  0.83 anchor is the *eco-driving discount* — the amount by which real flat-motorway
+  driving (coasting, eco-driving, free-flow) runs **below** constant-speed physics.
+  That discount is **not uniform**: a route that climbs, runs cold, or crawls in
+  traffic offers less coasting slack, so its real consumption sits **closer to
+  physics**. The per-route factor `C` therefore keeps the full discount on a flat /
+  mild / free-flow route (`C = 0.83`) and **gives it back** toward 1.0 as the route
+  gets hillier, colder, or more congested:
+  `C = 1 − (1−anchor)·S_eco·A_grad·A_cold·A_urban`, with
+  `S_eco` from mean drive speed (30→80 km/h), `A_grad = 1/(1+0.12·g_rms)` from the
+  distance-weighted RMS gradient, `A_cold = 1/(1+0.010·|T̄−20|)`, and
+  `A_urban = 1−0.5·(1−actual/posted)` from the traffic flow ratio. Every factor is
+  in [0, 1], so **`C` is bounded `[anchor, 1.0]`** — it can only read a hard route
+  *higher* than 95, never optimistically lower. The realised `C` is surfaced as
+  `summary.fieldCalibration` for transparency. Worked band (model raw × C):
+  flat 80 km/h/20 °C → `C 0.83` → ~95; hilly-mixed (g_rms 1.6, 70 km/h, 15 °C) →
+  `C ~0.90` → ~103; harsh/cold (g_rms 3.5, 50 km/h, 7 °C) → `C ~0.96` → ~140;
+  favourable downhill light → `C ~0.85` → ~85. This reproduces the field band
+  **from route inputs** instead of one flat number.
 - **Re-anchored 2026-06-05 from 0.887 → 0.83** to match NexDash's own fleet
   field-real consumption (~95 kWh/100 km), per direct NexDash field data. The
   previous 0.887 anchored the displayed headline to the higher **Daimler 15,000 km
@@ -133,18 +154,20 @@ single documented multiplier `config.FIELD_CALIBRATION_FACTOR = 0.887` to
   so the headline now tracks that instead. The published external band remains
   ~0.88–1.03 kWh/km (ADAC 0.88, Vandijck 0.96, Daimler 1.03); 94.5 sits at the
   lower end of it, where NexDash's real fleet operates.
-- **A real route still reads honestly higher than the flat ~95 when it CLIMBS or
-  runs HEAVY** — the calibration is a flat multiplier, not a cap. E.g. a laden
+- **A real route reads honestly higher than the flat ~95 when it CLIMBS, runs
+  COLD, or sits in TRAFFIC** — and this is now *computed per route* by the
+  route-aware factor above, not left to a flat multiplier. E.g. a laden
   Berlin→Munich run with +484 m net climb lands ~100–103 kWh/100 km. This is
   **validated, not an error**: Daimler's own 15,269 km tour averaged **103
   kWh/100 km across all terrain, with a measured range of 85 (downhill/optimal) to
-  140 (cold/unpaved)**. So at 0.83 the display reproduces the real fleet exactly —
-  a **flat / typical run ≈ 95** (matching the Vandijck operator's 96.3), while a
-  **mixed/hilly run ≈ 100–103** (matching Daimler's all-terrain average). Pinning
-  every route to a flat 95 would *contradict* Daimler's measured terrain spread, so
-  the per-route variation is a sign of correctness, not a caveat to remove.
-  (Considered and rejected: re-anchoring to a 16 t / 72 km/h "typical" point at
-  factor ~0.92 — it would push 40 t/80 km/h flat back to ~109, above the field band.)
+  140 (cold/unpaved)**. So the display reproduces the real fleet exactly — a
+  **flat / typical run ≈ 95** (matching the Vandijck operator's 96.3), while a
+  **mixed/hilly run ≈ 100–103** (matching Daimler's all-terrain average), and the
+  factor that produced it is reported in `summary.fieldCalibration`. Pinning every
+  route to a flat 95 would *contradict* Daimler's measured terrain spread, so the
+  per-route variation is a sign of correctness. (Considered and rejected:
+  re-anchoring to a 16 t / 72 km/h "typical" point at factor ~0.92 — it would push
+  40 t/80 km/h flat back to ~109, above the field band.)
 - **It is NOT a physics change.** The locked `Cd / Crr / drivetrain_eff / A`
   anchors and the 1.22 / 1.42 / 1.49 kWh/km steady-state figures above are
   unchanged. The factor only reconciles the *reported* number with field data.

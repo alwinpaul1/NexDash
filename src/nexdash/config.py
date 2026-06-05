@@ -106,11 +106,18 @@ MAPE_FLOOR_KWH: float = 1.0
 #: flat anchor the residual model reads 113.88 kWh/100km, and 0.83 x 113.88 = 94.5
 #: kWh/100km (= 0.945 kWh/km) — on NexDash's ~95 field-real centre. (The previous
 #: 0.887 anchored to the higher Daimler tour ~101; NexDash's own fleet figure is
-#: lower, so the displayed headline now tracks that.) IMPORTANT: a real route still
-#: reads honestly HIGHER than the flat 95 when it CLIMBS or runs HEAVY — the
-#: calibration is a flat multiplier, not a cap — e.g. a +484 m-net-climb laden
-#: Berlin->Munich run lands ~103 kWh/100km, which is correct, not a bug. Applied
-#: ONLY to the
+#: lower, so the displayed headline now tracks that.)
+#:
+#: ROUTE-AWARE since 2026-06-05: this constant is now the FLAT-MOTORWAY ANCHOR, not
+#: a blanket multiplier. route_planner._route_field_correction keeps this full
+#: eco-driving discount on a flat / mild / free-flowing route, but GIVES IT BACK on
+#: hilly, cold or congested legs (which offer less coasting slack, so real
+#: consumption sits closer to physics). So the displayed figure is now a properly
+#: computed PER-ROUTE efficiency: flat ~95, all-terrain ~100-103 (= Daimler's
+#: 15,000 km tour avg), harsh/cold up to ~140 — matching the real field band
+#: instead of one flat number. The per-route factor is bounded [this anchor, 1.0],
+#: so it can only read a hard route HIGHER than 95, never optimistically lower.
+#: Applied ONLY to the
 #: DISPLAYED energy headline (summary.energyKwh / kwhPer100); the SOC walk and EVERY
 #: charging/reachability decision use the un-discounted conservative
 #: max(model, physics) estimate, so the factor can never delay a charge or strand the
