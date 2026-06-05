@@ -433,6 +433,7 @@ def plan_route(
     allow_reduced_rest_days: int = 0,
     hours_already_driven_this_week: float = 0.0,
     charger_kw_by_stop: Optional[list[Optional[float]]] = None,
+    detour_km_by_stop: Optional[list[Optional[float]]] = None,
     precomputed_enrichment: Any = _ENRICH_UNSET,
     return_enrichment: bool = False,
     model_path: Union[str, Path] = DEFAULT_MODEL_PATH,
@@ -560,6 +561,16 @@ def plan_route(
     day_index = 0
     day_breaks = 0
     total_daily_rest_min = 0.0
+
+    # Charging-detour cost. When a charging stop is matched to a real OFF-route
+    # station, the round-trip spur to reach it (passed in via detour_km_by_stop
+    # after POI resolution, in the re-sim pass) burns energy + time the on-route
+    # walk would otherwise ignore. Accumulated here, folded into the energy/ETA
+    # headline below. All defaults 0 -> byte-identical when detour_km_by_stop=None.
+    total_detour_km = 0.0
+    total_detour_kwh = 0.0
+    total_detour_min = 0.0
+    detour_floor_breach = False
     per_day: list[dict[str, Any]] = []
     # Extended-day accounting: a day's applied driving cap is 10 h while extended
     # slots remain (or this day already became extended), else 9 h. A day "uses" a
@@ -829,6 +840,9 @@ def plan_route(
                 uncertainty_kwh=mae_band * math.sqrt(n_remaining),
             )
             kwh_added = max(0.0, (depart_soc - arrive_soc) / 100.0 * battery_kwh)
+            # 0-based index of the charge being placed (before it is appended).
+            # Shared by the real-charger power AND detour lookups below.
+            _stop_idx = len(charging_stops)
             charge_kw = max_charge_kw if max_charge_kw and max_charge_kw > 0 else CHARGER_KW
             # Real-charger override: when the caller supplies the matched station's
             # power for THIS stop (index = the i-th charge, before it's appended),
@@ -837,17 +851,46 @@ def plan_route(
             # break/rest schedule below is then computed at the TRUE charge time,
             # not a 400 kW assumption. Default (None) = the truck-cap behaviour,
             # byte-identical to before this parameter existed.
-            if charger_kw_by_stop is not None:
-                _ci = len(charging_stops)  # 0-based index of the charge being placed
-                if _ci < len(charger_kw_by_stop):
-                    _real_kw = charger_kw_by_stop[_ci]
-                    if _real_kw and _real_kw > 0:
-                        charge_kw = min(charge_kw, float(_real_kw))
+            if charger_kw_by_stop is not None and _stop_idx < len(charger_kw_by_stop):
+                _real_kw = charger_kw_by_stop[_stop_idx]
+                if _real_kw and _real_kw > 0:
+                    charge_kw = min(charge_kw, float(_real_kw))
             # Taper-aware charge time: the 80->target tail charges slower than a
             # flat-rate model would (see _charge_minutes). Energy/cost are
             # unaffected by the taper (it changes time, not kWh delivered).
             charge_min = _charge_minutes(arrive_soc, depart_soc, charge_kw, battery_kwh)
             cost_eur = kwh_added * PRICE_EUR_PER_KWH
+            # Real off-route charger detour (part 1/2 — energy). The matched station
+            # sits detour_km off the route (detour_km_by_stop, set by the caller after
+            # POI resolution). The truck must drive the round-trip spur, which COSTS
+            # energy; model it by charging that much MORE here so the truck rejoins the
+            # route at the SAME depart_soc. Carried SOC is therefore UNCHANGED, so the
+            # SOC walk + stop placement stay identical -> the re-sim's per-stop station
+            # alignment is exact, and a regen/downhill chunk can never CREDIT energy
+            # (per-km rate clamped >= 0). The spur DRIVING time is added after the break
+            # credit below (part 2). Default (detour_km_by_stop=None) is byte-identical.
+            _detour_km = 0.0
+            if (
+                detour_km_by_stop is not None
+                and _stop_idx < len(detour_km_by_stop)
+                and chunk_km > 0
+            ):
+                _d = detour_km_by_stop[_stop_idx]
+                if _d and _d > 0:
+                    _detour_km = float(_d)
+                    total_detour_km += 2.0 * _detour_km  # out-and-back
+                    _per_km_kwh = max(0.0, chunk_energy / chunk_km)
+                    _rt_kwh = _per_km_kwh * 2.0 * _detour_km
+                    if _rt_kwh > 0.0:
+                        kwh_added += _rt_kwh
+                        cost_eur = kwh_added * PRICE_EUR_PER_KWH
+                        charge_min += (_rt_kwh / charge_kw) * 60.0
+                        total_detour_kwh += _rt_kwh
+                    # The one-way spur could leave SOC below the floor AT the charger.
+                    if (
+                        arrive_soc - (_per_km_kwh * _detour_km / battery_kwh) * 100.0
+                    ) < min_soc:
+                        detour_floor_breach = True
 
             ch_start = clock
             ch_end = ch_start + timedelta(minutes=charge_min)
@@ -921,6 +964,20 @@ def plan_route(
                 day_breaks += 1
                 drive_since_break_min = 0.0  # qualifying charge satisfies the Art 7 break
                 charge_satisfied_break = True
+            # Real off-route charger detour (part 2/2 — driving). The round-trip spur
+            # is genuine driving time: it pushes the ETA (clock) and the trip total.
+            # It is deliberately NOT added to the EU 561 continuous-driving / daily
+            # counters: the spur is an inter-chunk block of only tens of minutes, and
+            # the chunk-based break splitter below cannot slice it, so injecting it
+            # there risks an un-split cap overshoot. We instead DISCLOSE (in the
+            # assumptions) that the detour driving is in the ETA but not split against
+            # the 4.5 h / daily caps — an honest, bounded approximation. SOC is NOT
+            # changed — part 1 already charged to cover the spur — so stop placement is
+            # identical and the re-sim's per-stop alignment stays exact.
+            if _detour_km > 0:
+                _spur_min = (2.0 * _detour_km / drive_speeds[i]) * 60.0
+                clock += timedelta(minutes=_spur_min)
+                total_detour_min += _spur_min
             # Reopen a fresh drive segment after the charge.
             seg_open = True
             seg_soc_start = soc
@@ -1128,9 +1185,13 @@ def plan_route(
     arrival_dt = clock
     driving_h = total_drive_min / 60.0
     charging_min_total = total_charge_min
+    # Detour cost split: the EXTRA CHARGE time is already inside total_charge_min
+    # (via charge_min), while the spur DRIVE time is its own line (total_detour_min,
+    # deliberately kept out of the EU 561 driving counters — see the charge block).
+    # Both are added exactly once; the spur is here so total_h matches the ETA clock.
     total_min = (
         total_drive_min + total_break_min + total_charge_min
-        + total_unload_min + total_daily_rest_min
+        + total_unload_min + total_daily_rest_min + total_detour_min
     )
     total_h = total_min / 60.0
 
@@ -1144,7 +1205,10 @@ def plan_route(
     # kWh / kWh-per-100 headline is nonsensical to a dispatcher. The signed
     # total_energy_kwh stayed intact for the SOC walk above; only the reported figure
     # is floored.
-    displayed_energy_kwh = max(0.0, total_energy_kwh) * field_calibration
+    # Detour energy is real driving energy -> include it in the headline (same
+    # field calibration as the rest of the drive). distance_km stays the ROUTE
+    # distance, so kwh/100 reads slightly higher (conservative) when detours apply.
+    displayed_energy_kwh = max(0.0, total_energy_kwh + total_detour_kwh) * field_calibration
     kwh_per_100 = (displayed_energy_kwh / distance_km * 100.0) if distance_km > 0 else 0.0
     charging_cost = sum(s["costEur"] for s in charging_stops)
 
@@ -1334,9 +1398,21 @@ def plan_route(
         assumptions.append(
             "Drop weights exceed the starting payload; payload clamped at 0 on the affected legs."
         )
+    if total_detour_km > 0.0:
+        assumptions.append(
+            f"Charging detours: ~{total_detour_km:.0f} km of round-trip driving to "
+            "reach the matched real chargers is included in the energy and ETA; this "
+            "short off-route driving is not split against the EU 561 4.5 h / daily caps."
+        )
+    if detour_floor_breach:
+        assumptions.append(
+            "A matched charger's detour would take SOC below the floor on the spur — "
+            "choose a closer station or raise the reserve."
+        )
 
     summary = {
         "distanceKm": round(distance_km, 1),
+        "detourKm": round(total_detour_km, 1),
         "drivingTimeH": round(driving_h, 2),
         "chargingTimeMin": round(charging_min_total),
         "totalTimeH": round(total_h, 2),

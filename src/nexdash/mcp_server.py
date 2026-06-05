@@ -458,6 +458,9 @@ def plan_route(
         the full EU 561 break/rest schedule reflect the true charge times (a slower
         station pushes the ETA later); ``charge_times_real_power`` is ``True`` in
         that case, ``False`` when the times fall back to the truck-cap assumption.
+        The round-trip drive OFF the route to reach each matched station is also
+        modelled (its energy + time folded into ``energy_kwh``/``total_time_h``);
+        ``detour_km`` reports that total off-route distance.
         On geocode/route/simulation failure it returns ``{"error": ...}``
         (secret-free) instead of throwing.
     """
