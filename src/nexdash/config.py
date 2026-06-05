@@ -92,43 +92,36 @@ G: float = 9.81
 #: denominators would make MAPE explode meaninglessly.
 MAPE_FLOOR_KWH: float = 1.0
 
-#: Field-calibration factor mapping the model's STEADY-STATE energy estimate DOWN
-#: to field-observed laden eActros 600 consumption on real mixed routes. Real-world
-#: laden tests cluster at ~0.96-1.03 kWh/km (Daimler 15,000 km European tour 1.03 at
-#: 40 t; Vandijck 0.96 at 33.2 t; ADAC German-roads 0.88), vs Mercedes' ~1.19 spec estimate.
-#: Real driving (coasting, eco-driving, traffic flow) runs below constant-speed
-#: physics, a gap the steady-state model cannot capture; the calibration doc already
-#: attributes the steady-state-vs-field gap to exactly this.
+#: CONSTANT field-calibration factor mapping the displayed STEADY-STATE energy DOWN
+#: to field-observed laden eActros 600 consumption. The displayed headline is
+#: ``max(model, physics)`` summed per chunk (physics-dominated) x this factor. At the
+#: 40 t / 80 km/h / 20 C / flat anchor that raw figure is ~121.6 kWh/100km, and
+#: 0.78 x 121.6 = ~95 — NexDash's NexOS flat field-real centre. The displayed total
+#: still varies per route because the raw physics+ML does (it integrates gradient,
+#: wind, temperature, payload and speed per chunk), so a constant still yields a
+#: per-route-varying headline.
 #:
-#: RE-ANCHORED 2026-06-05 to NexDash's NexOS field-real reference (~95 kWh/100km),
-#: per direct NexDash fleet field data, instead of the Daimler 15,000 km tour (~101).
-#: The factor anchors the model's OWN flat output: at the 40 t / 80 km/h / 20 C /
-#: flat anchor the residual model reads 113.88 kWh/100km, and 0.83 x 113.88 = 94.5
-#: kWh/100km (= 0.945 kWh/km) — on NexDash's ~95 field-real centre. (The previous
-#: 0.887 anchored to the higher Daimler tour ~101; NexDash's own fleet figure is
-#: lower, so the displayed headline now tracks that.)
+#: HISTORY: 0.887 (Daimler tour anchor) -> 0.83 (2026-06-05, NexOS anchor, but
+#: mistakenly computed against the model's 113.88 not the displayed physics 121.6, so
+#: it actually showed ~101) -> a ROUTE-AWARE multiplier (PRs #108/#109) -> REVERTED
+#: to a constant 0.78 (2026-06-05) after adversarial testing against real field data.
+#: Why reverted: the needed field/raw ratio FALLS on hard routes (hilly Vandijck
+#: needs ~0.48, flat ~0.71), because the steady-state physics — recovering only ~60%
+#: regen — OVER-responds to terrain/payload/cold vs the compressed real field band
+#: (~0.85-1.40 kWh/km). A route-aware factor that ROSE on hard routes was therefore
+#: backwards (MAE 27 vs 13 for a constant). KNOWN LIMITATION: even a constant cannot
+#: reconcile the physics over-spread; a hilly/heavy/cold route still reads somewhat
+#: high (the conservative direction). The real fix is the REMOVAL CONDITION below.
 #:
-#: ROUTE-AWARE since 2026-06-05: this constant is now the FLAT-MOTORWAY ANCHOR, not
-#: a blanket multiplier. route_planner._route_field_correction keeps this full
-#: eco-driving discount on a flat / mild / free-flowing / calm route, but GIVES IT
-#: BACK on hilly, cold, congested or headwind legs (which offer less coasting slack,
-#: so real consumption sits closer to physics). The ENERGY of rolling resistance,
-#: aero drag, wind, gradient, payload etc. is already in the raw model; this factor
-#: only modulates the eco-driving discount (no double-count). So the displayed
-#: figure is now a properly
-#: computed PER-ROUTE efficiency: flat ~95, all-terrain ~100-103 (= Daimler's
-#: 15,000 km tour avg), harsh/cold up to ~140 — matching the real field band
-#: instead of one flat number. The per-route factor is bounded [this anchor, 1.0],
-#: so it can only read a hard route HIGHER than 95, never optimistically lower.
-#: Applied ONLY to the
-#: DISPLAYED energy headline (summary.energyKwh / kwhPer100); the SOC walk and EVERY
-#: charging/reachability decision use the un-discounted conservative
-#: max(model, physics) estimate, so the factor can never delay a charge or strand the
-#: truck. Clamped to (0, 1] at the call site (>1 cannot inflate energy); 1.0 disables
-#: it. REMOVAL CONDITION: retune or remove once the ML model is retrained against
-#: field (not steady-state) labels, or the energy-side speed model changes.
+#: Applied ONLY to the DISPLAYED energy headline (summary.energyKwh / kwhPer100); the
+#: SOC walk and EVERY charging/reachability decision use the un-discounted
+#: conservative max(model, physics) estimate, so the factor can never delay a charge
+#: or strand the truck. Clamped to (0, 1] at the call site (>1 cannot inflate energy);
+#: 1.0 disables it. REMOVAL CONDITION: retune or remove once the ML model is retrained
+#: against real FIELD (not steady-state) labels — that would fix the terrain/payload
+#: over-spread directly and make the multiplier unnecessary.
 #: [S3][S4][S5] (see docs/REAL_WORLD_CALIBRATION.md)
-FIELD_CALIBRATION_FACTOR: float = 0.83
+FIELD_CALIBRATION_FACTOR: float = 0.78
 
 # --------------------------------------------------------------------------- #
 # Filesystem paths

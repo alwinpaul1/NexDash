@@ -118,85 +118,77 @@ mixed-route regen) runs below constant-speed physics, a gap the steady-state
 model structurally cannot close.
 
 To make the **displayed** energy headline track field reality, NexDash applies a
-documented **route-aware** field-calibration multiplier to `summary.energyKwh` /
-`summary.kwhPer100` only. `config.FIELD_CALIBRATION_FACTOR = 0.83` is the
-**flat-motorway anchor** of that multiplier (not a blanket scalar):
+documented **constant** field-calibration factor `config.FIELD_CALIBRATION_FACTOR =
+0.78` to `summary.energyKwh` / `summary.kwhPer100` only:
 
-- The anchor is calibrated to the **energy model's own** flat-route output (that
-  is what the displayed headline is built from), not to raw physics. At the 40 t /
-  80 km/h / 20 °C / flat anchor the model reads **113.88 kWh/100 km**, and
-  **0.83 × 113.88 = 94.5 kWh/100 km** (≈ 0.945 kWh/km) — on **NexDash's NexOS
-  field-real centre (~95)**.
-
-- **Route-aware since 2026-06-05** (`route_planner._route_field_correction`). The
-  0.83 anchor is the *eco-driving discount* — the amount by which real flat-motorway
-  driving (coasting, eco-driving, free-flow) runs **below** constant-speed physics.
-  That discount is **not uniform**: a route that climbs, runs cold, or crawls in
-  traffic offers less coasting slack, so its real consumption sits **closer to
-  physics**. The per-route factor `C` therefore keeps the full discount on a flat /
-  mild / free-flow route (`C = 0.83`) and **gives it back** toward 1.0 as the route
-  gets hillier, colder, more congested, or drives into a headwind:
-  `C = 1 − (1−anchor)·S_eco·A_grad·A_cold·A_wind·A_urban`, with
-  `S_eco` from mean drive speed (30→80 km/h), `A_grad = 1/(1+0.12·g_rms)` from the
-  distance-weighted RMS gradient, `A_cold = 1/(1+0.010·|T̄−20|)`,
-  `A_wind = 1/(1+0.03·w̄_head)` from the distance-weighted **mean headwind**
-  (tailwind clipped to 0; 0.03 makes an 8 m/s headwind attenuate like a ~2 % RMS
-  grade), and `A_urban = 1−0.5·(1−actual/posted)` from the traffic flow ratio. Every
-  factor is in [0, 1], so **`C` is bounded `[anchor, 1.0]`** — it can only read a
-  hard route *higher* than 95, never optimistically lower. The realised `C` is
-  surfaced as `summary.fieldCalibration` for transparency. Worked band (model raw ×
-  C): flat 80 km/h/20 °C/calm → `C 0.83` → ~95; hilly-mixed (g_rms 1.6, 70 km/h,
-  15 °C) → `C ~0.90` → ~103; hilly+cold+8 m/s headwind → `C ~0.92` → ~110;
-  harsh/cold/gale → `C ~0.96` → ~140; favourable downhill/tailwind/light →
-  `C ~0.85` → ~85. This reproduces the field band **from route inputs**.
-
-  **What is physics vs what is calibration (no double-counting).** The *energy* of
-  rolling resistance (SAE-J2452 speed+cold Crr), aerodynamic drag (temperature-
-  density × Cd·A × (v+headwind)²), the gravitational/gradient term with descent
-  regen, the HVAC U-curve, and payload is ALL already in the raw per-chunk estimate
-  the factor multiplies — wind energy included, inside the aero (v+w)². `C` is **not**
-  an energy model; its terms only describe *how much eco-driving slack the route
-  still leaves*. That is why rolling resistance, aero and payload are deliberately
-  **absent** from `C` (re-adding them would double-count physics), and why wind
-  appears in `C` only as a one-sided **headwind slack** penalty — the same way a
-  climb removes coasting room — never as drag force.
-- **Re-anchored 2026-06-05 from 0.887 → 0.83** to match NexDash's own fleet
-  field-real consumption (~95 kWh/100 km), per direct NexDash field data. The
-  previous 0.887 anchored the displayed headline to the higher **Daimler 15,000 km
-  tour (~101 kWh/100 km / 1.03 kWh/km)**; NexDash's measured fleet figure is lower,
-  so the headline now tracks that instead. The published external band remains
-  ~0.88–1.03 kWh/km (ADAC 0.88, Vandijck 0.96, Daimler 1.03); 94.5 sits at the
-  lower end of it, where NexDash's real fleet operates.
-- **A real route reads honestly higher than the flat ~95 when it CLIMBS, runs
-  COLD, or sits in TRAFFIC** — and this is now *computed per route* by the
-  route-aware factor above, not left to a flat multiplier. E.g. a laden
-  Berlin→Munich run with +484 m net climb lands ~100–103 kWh/100 km. This is
-  **validated, not an error**: Daimler's own 15,269 km tour averaged **103
-  kWh/100 km across all terrain, with a measured range of 85 (downhill/optimal) to
-  140 (cold/unpaved)**. So the display reproduces the real fleet exactly — a
-  **flat / typical run ≈ 95** (matching the Vandijck operator's 96.3), while a
-  **mixed/hilly run ≈ 100–103** (matching Daimler's all-terrain average), and the
-  factor that produced it is reported in `summary.fieldCalibration`. Pinning every
-  route to a flat 95 would *contradict* Daimler's measured terrain spread, so the
-  per-route variation is a sign of correctness. (Considered and rejected:
-  re-anchoring to a 16 t / 72 km/h "typical" point at factor ~0.92 — it would push
-  40 t/80 km/h flat back to ~109, above the field band.)
-- **It is NOT a physics change.** The locked `Cd / Crr / drivetrain_eff / A`
-  anchors and the 1.22 / 1.42 / 1.49 kWh/km steady-state figures above are
-  unchanged. The factor only reconciles the *reported* number with field data.
+- The displayed headline is `max(model, physics)` summed per chunk (which is
+  **physics-dominated** — the ML model almost never exceeds physics), times this
+  factor. At the 40 t / 80 km/h / 20 °C / flat anchor the raw figure is
+  **~121.6 kWh/100 km**, and **0.78 × 121.6 ≈ 95** — on NexDash's NexOS flat
+  field-real centre.
+- **The displayed number still varies per route** because the raw physics+ML does:
+  it integrates per-chunk gradient, wind, temperature, payload and speed. A constant
+  calibration does **not** make the headline flat — it just stops *double-amplifying*
+  the route variation physics already encodes.
 - **It never touches safety.** The SOC walk, charge-trigger look-ahead, charge
-  sizing and reachability all run on the **un-discounted** steady-state estimate,
-  so the displayed figure being lower can never delay a charge or strand the
-  truck. The route plan (stops, timing, arrival SOC) is byte-identical with or
-  without the factor; guard test
-  `test_field_calibration_scales_displayed_energy_only` enforces this.
+  sizing and reachability all run on the **un-discounted** `max(model, physics)`, so
+  a lower displayed figure can never delay a charge or strand the truck. Guard test
+  `test_field_calibration_scales_displayed_energy_only` enforces byte-identical
+  charging/SOC at any factor.
 - **Tunable / removable.** `plan_route(field_calibration=…)` and the
-  `/api/route-plan` `fieldCalibration` field override it (0.5–1.0; 1.0 shows the
-  raw steady-state figure; ~0.79 matches the NexOS reference demo's ~95).
-- **REMOVAL CONDITION.** Retune or remove once the ML model is retrained against
-  field (not steady-state) labels, or the energy-side speed model changes — at
-  that point the model would track field consumption directly and the multiplier
-  would double-count.
+  `/api/route-plan` `fieldCalibration` field override it (0.5–1.0; 1.0 shows the raw
+  steady-state figure). The realised value is echoed in `summary.fieldCalibration`.
+
+#### Why a CONSTANT, not a route-aware multiplier (2026-06-05 reversal)
+
+A route-aware multiplier (per-route gradient/temperature/wind/traffic *slack* terms,
+PRs #108/#109) was built on the premise that real driving loses eco-driving slack on
+hard routes, so the discount should shrink (factor → 1.0) on hills/cold/headwind.
+**Adversarial testing against real field data refuted that premise** and it was
+reverted:
+
+- The **needed field/raw ratio FALLS on hard routes**, it does not rise. Anchoring
+  the raw at its true value (40 t flat ≈ 121.6, **= 40 t GCW, payload 22 t**, not
+  22 t GCW), the ratio the field demands is ~**0.71 flat (ADAC)**, ~**0.48 hilly**
+  (Vandijck 96.3 at 33 t vs raw ~139–200), ~**0.76 cold**. A factor that *rose* on
+  hard routes was therefore **backwards** (measured display MAE **27 vs 13** for a
+  constant).
+- **Root cause — the steady-state physics over-responds to terrain/payload/cold vs
+  the compressed real field band (~0.85–1.40 kWh/km).** With only ~60 % regen
+  recovery, a net-zero rolling route reads far above flat in physics, yet the real
+  fleet barely moves (mountainous Vandijck 96 ≈ flat ADAC 88). So real consumption
+  is *compressed* while physics is *spread*; multiplying by anything route-aware in
+  the "less discount on hard routes" direction widens an already-too-wide spread.
+
+**KNOWN LIMITATION (honest).** Even a constant cannot reconcile the physics
+over-spread: a genuinely hilly / heavy / cold route still reads **somewhat high**,
+and a sustained light descent reads low. This is a *model-fidelity* ceiling, not a
+calibration one — a single multiplier maps one anchor, not a whole shape. It is the
+**conservative** direction for a headline. The real fix is the **removal condition**:
+retrain the ML energy model on real **field** telemetry (not steady-state physics
+labels), which would compress the terrain/payload response directly and make the
+multiplier unnecessary. Until then the constant is the most defensible choice and the
+displayed figure is honest-but-approximate on extreme terrain.
+
+#### Chunk gradient averaging (a sign-cancellation that we deliberately keep)
+
+`_build_chunks` distance-weight-averages gradient across each ~25 km window, so a
+climb and a descent in one window cancel toward the **net** grade. This under-counts
+the gross asymmetric cost *relative to the steady-state physics* (~9 % on a real
+pass). It was considered as a bug and a sign-split fix was prototyped — then **kept as
+averaging on purpose**, because:
+
+- **Real regen pays the NET elevation, not the gross climb.** A route returning to its
+  start elevation costs ≈ its rolling/aero/aux, not a full climb minus a 60 %-capped
+  descent. Net-gradient averaging is therefore the *field-realistic* basis for the
+  displayed figure.
+- **It stays conservative for the SOC walk anyway.** The steady-state physics
+  over-predicts terrain vs real field data, so the averaged energy is still **≥ real**
+  consumption on terrain (verified: a 320 km alpine route averages **153 kWh/100 km**
+  vs ~120–140 real). A sign-split would push it to ~**168** — over-charging *and*
+  making the displayed headline read implausibly high. The "~9 % under-count" is only
+  versus the over-predicting physics model, never versus reality, so there is no
+  real-world under-charge risk.
 
 ### HVAC / auxiliary load vs temperature (U-shape)
 Aux power = `aux_base_kw` (flat comfort band) + a linear rise on each side.
