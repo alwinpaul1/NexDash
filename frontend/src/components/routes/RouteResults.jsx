@@ -161,7 +161,8 @@ export default function RouteResults({ plan }) {
         </div>
       )}
 
-      {/* Driver hours */}
+      {/* Driver hours — hidden in prod (kept in code, just not rendered). */}
+      {false && (
       <div className="nx-card p-5 space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="text-[11px] uppercase tracking-[0.1em] font-semibold text-on-surface-variant">Driver Hours</h3>
@@ -239,6 +240,7 @@ export default function RouteResults({ plan }) {
         )}
         */}
       </div>
+      )}
 
       {/* Trip timeline */}
       <div className="nx-card p-5">
