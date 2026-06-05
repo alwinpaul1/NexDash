@@ -354,6 +354,50 @@ def test_precomputed_enrichment_skips_network_refetch(monkeypatch):
     ]
 
 
+def test_detour_km_adds_energy_and_time_and_holds_floor(monkeypatch):
+    """Modelling the off-route charger spur (detour_km_by_stop) must add energy +
+    time (conservative) and never breach the SOC floor — detours only ever cost."""
+    monkeypatch.setattr(
+        route_planner.geodata,
+        "enrich_route",
+        lambda geometry, departure_iso=None: _fake_enrichment(
+            gradient_pct=3.0, n_segments=16, dist_km_each=50.0
+        ),
+    )
+    common = dict(
+        distance_km=800.0,
+        duration_s=800.0 / 70.0 * 3600.0,
+        start_soc=60.0,
+        min_soc=15.0,
+        payload_kg=15000.0,
+        departure="2026-05-30T06:00",
+        geometry=GEOMETRY,
+        model_path=DEFAULT_MODEL_PATH,
+    )
+    base = route_planner.plan_route(**common)
+    n = len(base["chargingStops"])
+    assert n >= 1
+    assert base["summary"]["detourKm"] == 0.0  # no detour by default
+
+    detoured = route_planner.plan_route(**common, detour_km_by_stop=[10.0] * n)
+    # Round-trip detour distance is surfaced and folded into energy + ETA.
+    assert detoured["summary"]["detourKm"] > 0
+    assert detoured["summary"]["energyKwh"] > base["summary"]["energyKwh"]
+    assert detoured["summary"]["totalTimeH"] > base["summary"]["totalTimeH"]
+    # KEY: the "charge more to cover the spur" model leaves carried SOC unchanged,
+    # so stop PLACEMENT is identical to the no-detour plan (same count, same
+    # arrive/depart SOC). This is what keeps the re-sim's per-stop index mapping
+    # exact — the detour can never insert/move a charge.
+    assert len(detoured["chargingStops"]) == n
+    for a, b in zip(base["chargingStops"], detoured["chargingStops"]):
+        assert a["arriveSoc"] == b["arriveSoc"]
+        assert a["departSoc"] == b["departSoc"]
+        # The truck charges MORE (extra kWh) to pay for the spur.
+        assert b["kWh"] >= a["kWh"]
+    # The on-route floor invariant still holds (carried SOC never dips on-route).
+    assert min(p["soc"] for p in detoured["socProfile"]) >= 15.0 - 1e-6
+
+
 def test_field_calibration_scales_displayed_energy_only(monkeypatch):
     """The field-calibration factor lowers the DISPLAYED energy headline but must
     NOT change the SOC walk or any charging decision.

@@ -487,15 +487,17 @@ def plan_route_tool(**kwargs: Any) -> dict[str, Any]:
     except Exception:  # noqa: BLE001 - never fail the plan over POI enrichment
         pass
 
-    # Real-charger RE-SIMULATION. Pass 1 timed every charge at the truck cap; now
-    # that each stop is matched to a real station, RE-RUN the simulation at each
-    # station's real power so the FULL EU 561 break/rest schedule (not merely the
-    # headline ETA) reflects the true charge times. The first pass's enrichment is
-    # reused -> NO extra weather/elevation fetch. SOC, kWh and stop placement are
-    # power-independent, so the stop sequence is identical and the per-stop station
-    # mapping by index is exact. A real station only ever lengthens a charge, so
-    # the schedule can only move later (never optimistic).
+    # Real-charger RE-SIMULATION. Pass 1 timed every charge at the truck cap and
+    # ignored the off-route detour to each station; now that each stop is matched
+    # to a real station, RE-RUN the simulation at (a) each station's real power so
+    # the FULL EU 561 break/rest schedule reflects true charge times, and (b) each
+    # station's real off-route distance so the round-trip spur's energy + time are
+    # in the plan. Pass 1's enrichment is reused -> NO extra weather/elevation
+    # fetch. SOC and stop placement are power-independent, so the stop sequence is
+    # identical and the per-stop station mapping by index is exact. Both real power
+    # (slower) and detours only ever lengthen the trip -> never optimistic.
     charger_kw_by_stop: list[float | None] = []
+    detour_km_by_stop: list[float | None] = []
     n_unresolved_chargers = 0
     any_real_power = False
     for s in raw_stops:
@@ -503,6 +505,7 @@ def plan_route_tool(**kwargs: Any) -> dict[str, Any]:
         if station is None:
             n_unresolved_chargers += 1
             charger_kw_by_stop.append(None)
+            detour_km_by_stop.append(None)
             continue
         kw = station.get("effective_power_kw") or station.get("max_power_kw")
         if kw and kw > 0:
@@ -510,22 +513,34 @@ def plan_route_tool(**kwargs: Any) -> dict[str, Any]:
             any_real_power = True
         else:
             charger_kw_by_stop.append(None)
+        det = station.get("off_route_km")
+        detour_km_by_stop.append(float(det) if (det and det > 0) else None)
 
-    # True only once the re-simulation has actually replaced the cap-timed plan,
-    # so the ETA / charge times genuinely reflect real charger power. Stays False
-    # if no real charger was resolved OR the re-sim raised -- in which case the
-    # times fall back to the truck-cap assumption and we say so, never silently.
+    # True only once the re-simulation has actually replaced the cap-timed plan, so
+    # the ETA / charge times / detour cost genuinely reflect the real chargers.
+    # Stays False if nothing resolved OR the re-sim raised -- in which case the
+    # times fall back to the truck-cap, detour-free assumption, and we say so.
+    any_detour = any(d for d in detour_km_by_stop)
     real_power_applied = False
-    if any_real_power:
+    if any_real_power or any_detour:
         try:
             plan2 = _plan_route(
                 **plan_kwargs,
                 precomputed_enrichment=plan.get("_enrichment"),
                 charger_kw_by_stop=charger_kw_by_stop,
+                detour_km_by_stop=detour_km_by_stop,
             )
             re_stops = plan2.get("chargingStops") or []
+            # Placement is power- AND detour-independent (real power only changes
+            # time; the detour model charges extra but leaves carried SOC unchanged),
+            # so the re-sim MUST yield the same number of stops in the same order.
+            # If the count ever diverges, the per-stop station mapping by index can no
+            # longer be trusted -> bail out and keep the cap-timed plan rather than
+            # ship a misattributed one.
+            if len(re_stops) != len(charger_kw_by_stop):
+                raise RuntimeError("re-sim charging-stop count diverged")
             # Re-attach the resolved stations (and their names) onto the re-timed
-            # stops — same order, since placement is power-independent.
+            # stops — same order, so the index mapping is exact.
             for i, rs in enumerate(re_stops):
                 station = raw_stops[i].get("station") if i < len(raw_stops) else None
                 rs["station"] = station
@@ -640,9 +655,13 @@ def plan_route_tool(**kwargs: Any) -> dict[str, Any]:
         # the truck-cap assumption). 0 means every charge is at a confirmed station.
         "chargers_unresolved": n_unresolved_chargers,
         # True when the ETA / charge times reflect the matched real chargers' actual
-        # power (a full re-simulation). False -> they fall back to the truck-cap
-        # assumption (no real charger found, or the re-sim could not run).
+        # power AND off-route detour (a full re-simulation). False -> they fall back
+        # to the truck-cap, detour-free assumption (nothing resolved, or re-sim
+        # could not run).
         "charge_times_real_power": real_power_applied,
+        # Total round-trip distance (km) driven off-route to reach the matched real
+        # chargers, already folded into energy_kwh / total_time_h / eta.
+        "detour_km": summary.get("detourKm"),
         "driving_time_h": summary.get("drivingTimeH"),
         "total_time_h": total_time_h,
         "departure": departure,
