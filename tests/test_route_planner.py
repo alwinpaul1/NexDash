@@ -398,6 +398,84 @@ def test_detour_km_adds_energy_and_time_and_holds_floor(monkeypatch):
     assert min(p["soc"] for p in detoured["socProfile"]) >= 15.0 - 1e-6
 
 
+def test_detour_driving_counts_toward_eu561_and_stays_legal(monkeypatch):
+    """The charger-detour spur is real driving: it must add to the driving total AND
+    be split against the EU 561 caps (a rest/break taken before it if needed), so no
+    day ever exceeds its cap and the plan stays compliant."""
+    monkeypatch.setattr(
+        route_planner.geodata,
+        "enrich_route",
+        lambda geometry, departure_iso=None: _fake_enrichment(
+            gradient_pct=3.0, n_segments=20, dist_km_each=50.0
+        ),
+    )
+    common = dict(
+        distance_km=1000.0,
+        duration_s=1000.0 / 70.0 * 3600.0,
+        start_soc=60.0,
+        min_soc=15.0,
+        payload_kg=15000.0,
+        departure="2026-05-30T06:00",
+        geometry=GEOMETRY,
+        model_path=DEFAULT_MODEL_PATH,
+    )
+    base = route_planner.plan_route(**common)
+    n = len(base["chargingStops"])
+    assert n >= 1
+
+    detoured = route_planner.plan_route(**common, detour_km_by_stop=[25.0] * n)
+    # The spur is counted as driving (drivingTimeH grows, not just total time).
+    assert detoured["summary"]["drivingTimeH"] > base["summary"]["drivingTimeH"]
+    # And the plan is still EU 561 legal: every day's driving (now including the
+    # spur) is within its applied cap, and the compliance flag holds.
+    for d in detoured["summary"]["driver"]["perDay"]:
+        cap_h = 10.0 if d.get("extended") else 9.0
+        assert d["drivingH"] <= cap_h + 1e-6
+    assert detoured["summary"]["driver"]["eu561ok"] is True
+
+
+def test_large_detour_is_split_across_multiple_eu561_breaks(monkeypatch):
+    """A detour too long to drive in one 4.5 h window must be SPLIT — the loop takes
+    extra breaks/rests mid-spur — and the plan stays EU 561 legal."""
+    monkeypatch.setattr(
+        route_planner.geodata,
+        "enrich_route",
+        lambda geometry, departure_iso=None: _fake_enrichment(
+            gradient_pct=3.0, n_segments=20, dist_km_each=50.0
+        ),
+    )
+    common = dict(
+        distance_km=1000.0,
+        duration_s=1000.0 / 70.0 * 3600.0,
+        start_soc=60.0,
+        min_soc=15.0,
+        payload_kg=15000.0,
+        departure="2026-05-30T06:00",
+        geometry=GEOMETRY,
+        model_path=DEFAULT_MODEL_PATH,
+    )
+    base = route_planner.plan_route(**common)
+    n = len(base["chargingStops"])
+    assert n >= 1
+
+    # 200 km one-way on the FIRST stop -> 400 km round trip -> ~5.7 h, exceeding the
+    # 4.5 h continuous window, so that ONE spur must be split across >1 break. (Only
+    # one stop, to avoid busting the weekly cap, which would be a separate, correct
+    # non-compliance verdict.)
+    huge = route_planner.plan_route(
+        **common, detour_km_by_stop=[200.0] + [0.0] * (n - 1)
+    )
+    assert huge["summary"]["drivingTimeH"] > base["summary"]["drivingTimeH"] + 1.0
+    rests = lambda plan: sum(  # noqa: E731
+        1 for s in plan["segments"] if s["type"] in ("rest", "daily_rest")
+    )
+    assert rests(huge) > rests(base)  # the long spur forced extra breaks/rests
+    # The loop split it legally: no single day exceeds its applied cap.
+    for d in huge["summary"]["driver"]["perDay"]:
+        cap_h = 10.0 if d.get("extended") else 9.0
+        assert d["drivingH"] <= cap_h + 1e-6
+
+
 def test_field_calibration_scales_displayed_energy_only(monkeypatch):
     """The field-calibration factor lowers the DISPLAYED energy headline but must
     NOT change the SOC walk or any charging decision.

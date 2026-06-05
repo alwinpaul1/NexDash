@@ -623,6 +623,85 @@ def plan_route(
         seg_km = 0.0
         seg_drive_min = 0.0
 
+    def _insert_break() -> None:
+        """Insert the EU 561 45-min break and reset the continuous-driving clock.
+
+        One source of truth, shared by the chunk 4.5 h check and the charger-detour
+        pre-spur check, so detour driving honours the break rule identically.
+        """
+        nonlocal clock, drive_since_break_min, total_break_min, n_breaks, day_breaks
+        nonlocal seg_open, seg_soc_start, seg_start_clock
+        if seg_open:
+            _close_drive_segment()
+        br_start = clock
+        br_end = br_start + timedelta(minutes=EU561_BREAK_MIN)
+        segments.append(
+            {
+                "type": "rest",
+                "startTime": _hhmm(br_start),
+                "endTime": _hhmm(br_end),
+                "durationMin": round(EU561_BREAK_MIN),
+                "label": "Rest Break",
+            }
+        )
+        total_break_min += EU561_BREAK_MIN
+        n_breaks += 1
+        day_breaks += 1
+        clock = br_end
+        drive_since_break_min = 0.0
+        seg_open = True
+        seg_soc_start = soc
+        seg_start_clock = clock
+
+    def _insert_daily_rest() -> None:
+        """Close the day, insert an EU 561 daily rest (reduced 9 h while opt-in slots
+        remain, else 11 h), and reset the day/break clocks.
+
+        One source of truth, shared by the chunk daily-cap check and the
+        charger-detour pre-spur check.
+        """
+        nonlocal clock, day_drive_min, drive_since_break_min, day_breaks, day_index
+        nonlocal day_extended, reduced_rests_used, total_daily_rest_min
+        nonlocal seg_open, seg_soc_start, seg_start_clock
+        if seg_open:
+            _close_drive_segment()
+        per_day.append(
+            {
+                "day": day_index + 1,
+                "dateLabel": clock.strftime("%a %d %b"),
+                "drivingH": round(day_drive_min / 60.0, 2),
+                "breaks": day_breaks,
+                "extended": day_extended,
+            }
+        )
+        if reduced_rests_used < allow_reduced_rest_days:
+            rest_h = EU561_REDUCED_DAILY_REST_H
+            reduced_rests_used += 1
+        else:
+            rest_h = EU561_DAILY_REST_H
+        rest_start = clock
+        rest_end = rest_start + timedelta(hours=rest_h)
+        segments.append(
+            {
+                "type": "daily_rest",
+                "startTime": _hhmm(rest_start),
+                "endTime": _hhmm(rest_end),
+                "durationMin": round(rest_h * 60.0),
+                "label": f"Daily Rest ({round(rest_h)}h)",
+                "dateLabel": rest_start.strftime("%a %d %b"),
+            }
+        )
+        total_daily_rest_min += rest_h * 60.0
+        clock = rest_end
+        day_drive_min = 0.0
+        drive_since_break_min = 0.0  # the 11 h rest also clears the break clock
+        day_breaks = 0
+        day_index += 1
+        day_extended = False  # a fresh day starts on the standard cap
+        seg_open = True
+        seg_soc_start = soc
+        seg_start_clock = clock
+
     # Build the list of chunks covering the route. Each chunk carries its own
     # physical conditions: in flat fallback mode these are the constant
     # approximations; in geometry mode they come from the enriched profile.
@@ -965,19 +1044,39 @@ def plan_route(
                 drive_since_break_min = 0.0  # qualifying charge satisfies the Art 7 break
                 charge_satisfied_break = True
             # Real off-route charger detour (part 2/2 — driving). The round-trip spur
-            # is genuine driving time: it pushes the ETA (clock) and the trip total.
-            # It is deliberately NOT added to the EU 561 continuous-driving / daily
-            # counters: the spur is an inter-chunk block of only tens of minutes, and
-            # the chunk-based break splitter below cannot slice it, so injecting it
-            # there risks an un-split cap overshoot. We instead DISCLOSE (in the
-            # assumptions) that the detour driving is in the ETA but not split against
-            # the 4.5 h / daily caps — an honest, bounded approximation. SOC is NOT
-            # changed — part 1 already charged to cover the spur — so stop placement is
-            # identical and the re-sim's per-stop alignment stays exact.
+            # is genuine driving, so it counts toward the ETA and the EU 561 driving
+            # caps. The loop below drives it in cap-bounded steps, taking a rest/break
+            # the instant a cap is hit, so a detour of ANY length is split correctly
+            # (no overshoot). SOC is NOT changed — part 1 charged enough to cover the
+            # spur — so stop placement is identical and the per-stop alignment is exact.
             if _detour_km > 0:
-                _spur_min = (2.0 * _detour_km / drive_speeds[i]) * 60.0
-                clock += timedelta(minutes=_spur_min)
-                total_detour_min += _spur_min
+                _spur_remaining = (2.0 * _detour_km / drive_speeds[i]) * 60.0
+                total_detour_min += _spur_remaining  # report-only tally
+                # Drive the spur, SPLITTING it against the EU 561 caps exactly like
+                # on-route driving: the instant a daily or 4.5 h cap is hit, take the
+                # rest/break, then continue. This handles a detour of ANY length (not
+                # just < one window) with no overshoot. SOC is untouched (part 1
+                # charged to cover the spur), so stop placement stays identical.
+                _guard = 0
+                while _spur_remaining > 1e-9 and _guard < 10_000:
+                    _guard += 1
+                    if day_drive_min >= _day_cap_h() * 60.0 - 1e-9:
+                        _insert_daily_rest()
+                    elif drive_since_break_min >= EU561_MAX_DRIVE_BEFORE_BREAK_MIN - 1e-9:
+                        _insert_break()
+                    _avail = min(
+                        _day_cap_h() * 60.0 - day_drive_min,
+                        EU561_MAX_DRIVE_BEFORE_BREAK_MIN - drive_since_break_min,
+                    )
+                    _step = min(_spur_remaining, _avail)
+                    if _step <= 1e-9:
+                        continue  # exactly at a cap -> the loop inserts the rest/break
+                    clock += timedelta(minutes=_step)
+                    drive_since_break_min += _step
+                    day_drive_min += _step
+                    week_drive_min += _step
+                    total_drive_min += _step
+                    _spur_remaining -= _step
             # Reopen a fresh drive segment after the charge.
             seg_open = True
             seg_soc_start = soc
@@ -991,47 +1090,7 @@ def plan_route(
         # is 10 h while extended slots remain (opt-in via allow_extended_days), else
         # the standard 9 h — so with the default the rest lands exactly as before.
         if day_drive_min + chunk_drive_min > _day_cap_h() * 60.0:
-            if seg_open:
-                _close_drive_segment()
-            per_day.append(
-                {
-                    "day": day_index + 1,
-                    "dateLabel": clock.strftime("%a %d %b"),
-                    "drivingH": round(day_drive_min / 60.0, 2),
-                    "breaks": day_breaks,
-                    "extended": day_extended,
-                }
-            )
-            # Reduced (9 h) daily rest while opt-in slots remain (Art 8(4)),
-            # else the regular 11 h. With allow_reduced_rest_days=0 this is always
-            # 11 h, byte-identical to before this option existed.
-            if reduced_rests_used < allow_reduced_rest_days:
-                rest_h = EU561_REDUCED_DAILY_REST_H
-                reduced_rests_used += 1
-            else:
-                rest_h = EU561_DAILY_REST_H
-            rest_start = clock
-            rest_end = rest_start + timedelta(hours=rest_h)
-            segments.append(
-                {
-                    "type": "daily_rest",
-                    "startTime": _hhmm(rest_start),
-                    "endTime": _hhmm(rest_end),
-                    "durationMin": round(rest_h * 60.0),
-                    "label": f"Daily Rest ({round(rest_h)}h)",
-                    "dateLabel": rest_start.strftime("%a %d %b"),
-                }
-            )
-            total_daily_rest_min += rest_h * 60.0
-            clock = rest_end
-            day_drive_min = 0.0
-            drive_since_break_min = 0.0  # the 11 h rest also clears the break clock
-            day_breaks = 0
-            day_index += 1
-            day_extended = False  # a fresh day starts on the standard cap
-            seg_open = True
-            seg_soc_start = soc
-            seg_start_clock = clock
+            _insert_daily_rest()
 
         # --- EU 561 break check: 4.5h continuous driving cap. ---
         if drive_since_break_min + chunk_drive_min > EU561_MAX_DRIVE_BEFORE_BREAK_MIN:
@@ -1062,27 +1121,7 @@ def plan_route(
                 chunk_energy -= p_energy
                 chunk_drive_min -= t_until
                 projected_soc = soc - chunk_soc_drop
-            if seg_open:
-                _close_drive_segment()
-            br_start = clock
-            br_end = br_start + timedelta(minutes=EU561_BREAK_MIN)
-            segments.append(
-                {
-                    "type": "rest",
-                    "startTime": _hhmm(br_start),
-                    "endTime": _hhmm(br_end),
-                    "durationMin": round(EU561_BREAK_MIN),
-                    "label": "Rest Break",
-                }
-            )
-            total_break_min += EU561_BREAK_MIN
-            n_breaks += 1
-            day_breaks += 1
-            clock = br_end
-            drive_since_break_min = 0.0
-            seg_open = True
-            seg_soc_start = soc
-            seg_start_clock = clock
+            _insert_break()
 
         # --- Drive the chunk. ---
         # Clamp at 100%: a regen (negative-energy) chunk raises SOC, but the pack
@@ -1185,13 +1224,14 @@ def plan_route(
     arrival_dt = clock
     driving_h = total_drive_min / 60.0
     charging_min_total = total_charge_min
-    # Detour cost split: the EXTRA CHARGE time is already inside total_charge_min
-    # (via charge_min), while the spur DRIVE time is its own line (total_detour_min,
-    # deliberately kept out of the EU 561 driving counters — see the charge block).
-    # Both are added exactly once; the spur is here so total_h matches the ETA clock.
+    # Detour cost is already inside these counters: the spur DRIVE time in
+    # total_drive_min (it now goes through the EU 561 caps like any driving) and the
+    # extra charge time in total_charge_min (via charge_min); any rest/break the spur
+    # triggered is in total_break_min / total_daily_rest_min. total_detour_min is a
+    # report-only tally, NOT re-added here (that would double-count the spur drive).
     total_min = (
         total_drive_min + total_break_min + total_charge_min
-        + total_unload_min + total_daily_rest_min + total_detour_min
+        + total_unload_min + total_daily_rest_min
     )
     total_h = total_min / 60.0
 
@@ -1401,8 +1441,8 @@ def plan_route(
     if total_detour_km > 0.0:
         assumptions.append(
             f"Charging detours: ~{total_detour_km:.0f} km of round-trip driving to "
-            "reach the matched real chargers is included in the energy and ETA; this "
-            "short off-route driving is not split against the EU 561 4.5 h / daily caps."
+            "reach the matched real chargers is included in the energy, ETA and EU 561 "
+            "driving hours (a rest/break is taken before the detour if a cap requires it)."
         )
     if detour_floor_breach:
         assumptions.append(
