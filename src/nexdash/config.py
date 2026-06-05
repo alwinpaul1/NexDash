@@ -110,9 +110,12 @@ MAPE_FLOOR_KWH: float = 1.0
 #:
 #: ROUTE-AWARE since 2026-06-05: this constant is now the FLAT-MOTORWAY ANCHOR, not
 #: a blanket multiplier. route_planner._route_field_correction keeps this full
-#: eco-driving discount on a flat / mild / free-flowing route, but GIVES IT BACK on
-#: hilly, cold or congested legs (which offer less coasting slack, so real
-#: consumption sits closer to physics). So the displayed figure is now a properly
+#: eco-driving discount on a flat / mild / free-flowing / calm route, but GIVES IT
+#: BACK on hilly, cold, congested or headwind legs (which offer less coasting slack,
+#: so real consumption sits closer to physics). The ENERGY of rolling resistance,
+#: aero drag, wind, gradient, payload etc. is already in the raw model; this factor
+#: only modulates the eco-driving discount (no double-count). So the displayed
+#: figure is now a properly
 #: computed PER-ROUTE efficiency: flat ~95, all-terrain ~100-103 (= Daimler's
 #: 15,000 km tour avg), harsh/cold up to ~140 — matching the real field band
 #: instead of one flat number. The per-route factor is bounded [this anchor, 1.0],

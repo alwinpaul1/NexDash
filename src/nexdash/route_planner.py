@@ -142,10 +142,11 @@ GRADIENT_PCT: float = 0.0
 # --------------------------------------------------------------------------- #
 # The flat config.FIELD_CALIBRATION_FACTOR (~0.83) is the "eco-driving discount"
 # that maps the model's constant-speed steady-state energy DOWN to field-observed
-# laden consumption on a FLAT, MILD, FREE-FLOWING motorway anchor (real driving
-# coasts, eco-drives and flows below constant-speed physics). That discount is
-# NOT uniform: a route that climbs, runs cold, or crawls in traffic offers far
-# less coasting slack, so its real consumption sits CLOSER to the physics figure.
+# laden consumption on a FLAT, MILD, FREE-FLOWING, CALM motorway anchor (real
+# driving coasts, eco-drives and flows below constant-speed physics). That discount
+# is NOT uniform: a route that climbs, runs cold, crawls in traffic, or drives into
+# a headwind offers far less coasting slack, so its real consumption sits CLOSER to
+# the physics figure.
 # A single flat multiplier therefore under-reads exactly the hard routes. These
 # coefficients attenuate the flat discount per route so the displayed headline
 # tracks the real field band (flat ~95, hilly/mixed ~100-103, harsh/cold up to
@@ -172,6 +173,16 @@ FIELD_CAL_K_COLD: float = 0.010
 #: Congestion attenuation: actual speed below the posted limit means traffic is
 #: removing coasting slack. Scales the flow deficit (1 - actual/posted).
 FIELD_CAL_K_URBAN: float = 0.50
+#: Headwind attenuation (per m/s of sustained headwind): you cannot coast as far
+#: into a wall of air, so a persistent headwind removes coasting slack just like a
+#: climb. 0.03 makes an 8 m/s headwind attenuate the discount the same as a ~2 %
+#: RMS grade: 1/(1+0.03*8) = 1/(1+0.12*2) = 0.806. Headwind ONLY (tailwind clipped
+#: to 0): a tailwind's ENERGY benefit is already in the physics aero term, and
+#: letting it deepen the discount would read optimistically low (the unsafe
+#: direction). Uses the distance-weighted MEAN headwind (a sustained directional
+#: bias over a near-constant heading), unlike gradient's RMS (slack dies on
+#: gradient *variability*, but on a *persistent* headwind).
+FIELD_CAL_K_WIND: float = 0.03
 
 
 def _route_field_correction(
@@ -185,14 +196,24 @@ def _route_field_correction(
     Returns a per-route multiplier ``C`` in ``[field_calibration, 1.0]`` that is
     applied ONLY to the displayed energy headline. ``C`` equals the flat anchor
     (``field_calibration``, ~0.83 -> full eco-driving discount) on a flat / mild /
-    free-flowing motorway, and rises toward 1.0 (LESS discount) as gradient RMS,
-    cold/heat, and congestion remove the coasting slack that lets real driving run
-    below constant-speed physics. Because every attenuation factor is in [0, 1],
-    ``C`` can only move the headline UP toward the un-discounted model figure --
-    never below the flat anchor, never above 1.0 -- so the displayed total is
-    bounded by ``[anchor * raw, raw]`` and is never optimistic. The SOC walk /
+    free-flowing / calm motorway, and rises toward 1.0 (LESS discount) as gradient
+    RMS, cold/heat, congestion, and headwind remove the coasting slack that lets
+    real driving run below constant-speed physics. Because every attenuation factor
+    is in [0, 1], ``C`` can only move the headline UP toward the un-discounted model
+    figure -- never below the flat anchor, never above 1.0 -- so the displayed total
+    is bounded by ``[anchor * raw, raw]`` and is never optimistic. The SOC walk /
     charge trigger / reachability use the un-discounted ``max(model, physics)`` and
     never see ``C`` (display-only; cannot strand the truck).
+
+    PHYSICS vs CALIBRATION (no double-counting): the ENERGY of rolling resistance,
+    aerodynamic drag, the headwind (inside the aero (v+w)^2 term), gradient,
+    temperature, payload and speed is ALREADY in the raw per-chunk estimate this
+    factor multiplies. ``C`` is NOT an energy model -- it is a single drive-cycle
+    discount. Its terms (gradient / cold / congestion / headwind) only describe HOW
+    MUCH coasting slack the route still leaves, never re-adding any force. So
+    rolling resistance, aero and payload are deliberately ABSENT from ``C`` (adding
+    them would double-count the physics); only conditions that throttle eco-driving
+    slack belong here.
 
     All inputs are the per-chunk arrays already computed by :func:`plan_route`;
     no new data source, model retrain or API surface is required. See the
@@ -213,6 +234,9 @@ def _route_field_correction(
     # the helper crash-proof against any future/malformed caller.
     g_rms = math.sqrt(max(0.0, sum(d * (c[1] ** 2) for d, c in zip(dists, chunks)) / d_tot))
     t_mean = sum(d * c[2] for d, c in zip(dists, chunks)) / d_tot
+    # Headwind only (clip tailwind to 0): a sustained directional bias, so a
+    # distance-weighted MEAN, not RMS. c[3] is the per-chunk signed headwind (m/s).
+    w_head = sum(d * max(0.0, c[3]) for d, c in zip(dists, chunks)) / d_tot
     # Eco-driving slack: open-road speed leaves room to coast; gridlock does not.
     s_eco = min(
         1.0,
@@ -222,6 +246,8 @@ def _route_field_correction(
     a_grad = 1.0 / (1.0 + FIELD_CAL_K_GRAD * g_rms)
     # Cold/heat: a fixed aux load that does not coast away.
     a_cold = 1.0 / (1.0 + FIELD_CAL_K_COLD * abs(t_mean - FIELD_CAL_T_OPT_C))
+    # Headwind: you cannot coast as far into a sustained wall of air.
+    a_wind = 1.0 / (1.0 + FIELD_CAL_K_WIND * w_head)
     # Congestion: actual speed below the posted limit means traffic removes slack.
     posted = [(d, s) for d, s in zip(dists, chunk_speed_limits) if s and s > 0]
     if posted:
@@ -235,7 +261,7 @@ def _route_field_correction(
         a_urban = 1.0 - FIELD_CAL_K_URBAN * (1.0 - r_flow)
     else:
         a_urban = 1.0
-    discount = d_max * s_eco * a_grad * a_cold * a_urban
+    discount = d_max * s_eco * a_grad * a_cold * a_wind * a_urban
     return min(1.0, max(anchor, 1.0 - discount))
 
 
@@ -1453,8 +1479,8 @@ def plan_route(
             f"~0.85-1.40 kWh/km — flat/good ~0.95 (NexOS, Vandijck 0.96 at 33.2 t, ADAC 0.88), "
             f"all-terrain ~1.03 (Daimler 15,000 km tour avg, 40 t), harsh/cold up to ~1.40. The "
             f"flat-route eco-driving discount (coasting, eco-driving, free-flow) is given back on "
-            f"hilly, cold or congested legs, where there is less slack and real consumption sits "
-            f"closer to physics, so this route reads correctly higher than a flat one. Charging and "
+            f"hilly, cold, congested or headwind legs, where there is less slack and real consumption "
+            f"sits closer to physics, so this route reads correctly higher than a flat one. Charging and "
             f"reachability decisions still use the un-discounted conservative estimate, so this only "
             f"affects the displayed total, never whether or when the truck charges. See "
             f"REAL_WORLD_CALIBRATION.md."
