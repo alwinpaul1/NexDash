@@ -385,8 +385,9 @@ function RouteDirectionArrows({ geometry }) {
       return { pos, bearing };
     };
 
-    // A single chevron at the route midpoint is enough to show direction.
-    const count = 1;
+    // Space chevrons evenly along the route (~1 per 70 km, capped) so every leg of
+    // a multi-stop trip shows its travel direction — not just the overall midpoint.
+    const count = Math.max(1, Math.min(10, Math.round(total / 70)));
     const markers = [];
     for (let k = 1; k <= count; k++) {
       const { pos, bearing } = at((total * k) / (count + 1));
