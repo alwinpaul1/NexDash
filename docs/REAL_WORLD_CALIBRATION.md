@@ -123,20 +123,21 @@ single documented multiplier `config.FIELD_CALIBRATION_FACTOR = 0.887` to
 
 - The factor is anchored to the **energy model's own** flat-route output (that is
   what the displayed headline is built from), not to raw physics. At the 40 t /
-  80 km/h / 20 °C / flat anchor the model now reads **113.88 kWh/100 km**, and
-  **0.887 × 113.88 = 101.0 kWh/100 km** (≈ 1.01 kWh/km) — the field centre, on the
-  Daimler 15,000 km European-tour anchor (1.03 at 40 t). A lighter 18 t / 83 km/h
-  autobahn run lands ~105 kWh/100 km, at the top of the **~0.88–1.03 kWh/km** band
-  (ADAC German-roads 0.88, Vandijck 0.96), as expected for a lighter/faster leg.
-- **Retuned 2026-06-04 from 0.83 → 0.887** alongside the physics-residual model
-  retrain. This is the honest, required consequence of changing the model: the
-  *old* raw-kWh model **over-predicted** flat consumption (124.74 kWh/100 km at the
-  anchor, +2.6 % above physics), so 0.83 × 124.74 = 103.5 landed mid-band. The new
-  residual model tracks physics closely and reads **lower** there (113.88), so
-  keeping 0.83 would have displayed 94.5 kWh/100 km — just *below* the band.
-  Re-anchoring to 0.887 restores the displayed headline to 101 kWh/100 km. The
-  factor moved because the model's flat output moved, exactly the documented
-  REMOVAL/RETUNE condition in `config.FIELD_CALIBRATION_FACTOR`. [S4][S5]
+  80 km/h / 20 °C / flat anchor the model reads **113.88 kWh/100 km**, and
+  **0.83 × 113.88 = 94.5 kWh/100 km** (≈ 0.945 kWh/km) — on **NexDash's NexOS
+  field-real centre (~95)**.
+- **Re-anchored 2026-06-05 from 0.887 → 0.83** to match NexDash's own fleet
+  field-real consumption (~95 kWh/100 km), per direct NexDash field data. The
+  previous 0.887 anchored the displayed headline to the higher **Daimler 15,000 km
+  tour (~101 kWh/100 km / 1.03 kWh/km)**; NexDash's measured fleet figure is lower,
+  so the headline now tracks that instead. The published external band remains
+  ~0.88–1.03 kWh/km (ADAC 0.88, Vandijck 0.96, Daimler 1.03); 94.5 sits at the
+  lower end of it, where NexDash's real fleet operates.
+- **A real route still reads honestly higher than the flat ~95 when it CLIMBS or
+  runs HEAVY** — the calibration is a flat multiplier, not a cap. E.g. a laden
+  Berlin→Munich run with +484 m net climb lands ~100–103 kWh/100 km, which is
+  correct (the climb is real), not an error. Only the flat/average headline is
+  pinned to ~95.
 - **It is NOT a physics change.** The locked `Cd / Crr / drivetrain_eff / A`
   anchors and the 1.22 / 1.42 / 1.49 kWh/km steady-state figures above are
   unchanged. The factor only reconciles the *reported* number with field data.
