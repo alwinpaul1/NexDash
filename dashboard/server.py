@@ -77,7 +77,7 @@ class RoutePlanRequest(BaseModel):
             "Optional field-calibration factor (0.5-1.0) scaling ONLY the DISPLAYED energy "
             "headline (energyKwh / kwhPer100) toward real-world laden eActros 600 consumption; "
             "the SOC walk and all charging/reachability decisions are unaffected. None uses the "
-            "server default (config.FIELD_CALIBRATION_FACTOR = 0.83); set 1.0 for the raw "
+            "server default (config.FIELD_CALIBRATION_FACTOR = 0.78); set 1.0 for the raw "
             "conservative steady-state physics figure."
         ),
     )

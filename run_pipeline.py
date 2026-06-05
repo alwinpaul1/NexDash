@@ -307,9 +307,10 @@ def _where_it_breaks(
         "is gone). Honest trade-offs: the residual target is noisier in absolute "
         "terms in the dense region, the 95 % conformal band tightened from "
         "CONSERVATIVE to a borderline FAIL (it now slightly under-covers rather than "
-        "over-covers), and the field-calibration factor was re-anchored (see "
-        "`config.FIELD_CALIBRATION_FACTOR`, retuned 0.83 → 0.887) because the "
-        "residual model's flat-route output shifted down to track physics."
+        "over-covers). The DISPLAY-only field-calibration factor is a constant "
+        "`config.FIELD_CALIBRATION_FACTOR` (currently 0.78, mapping the "
+        "physics-dominated displayed energy to the ~95 kWh/100km flat field centre); "
+        "see docs/REAL_WORLD_CALIBRATION.md for why a constant beats a route-aware one."
     )
     paragraphs.append(
         "Three structural caveats apply, all limits of the *synthetic data*, not "

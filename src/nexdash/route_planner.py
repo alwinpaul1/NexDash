@@ -138,131 +138,22 @@ WIND_MPS: float = 0.0
 GRADIENT_PCT: float = 0.0
 
 # --------------------------------------------------------------------------- #
-# Route-aware field calibration (see _route_field_correction)
+# Field calibration (constant; see config.FIELD_CALIBRATION_FACTOR)
 # --------------------------------------------------------------------------- #
-# The flat config.FIELD_CALIBRATION_FACTOR (~0.83) is the "eco-driving discount"
-# that maps the model's constant-speed steady-state energy DOWN to field-observed
-# laden consumption on a FLAT, MILD, FREE-FLOWING, CALM motorway anchor (real
-# driving coasts, eco-drives and flows below constant-speed physics). That discount
-# is NOT uniform: a route that climbs, runs cold, crawls in traffic, or drives into
-# a headwind offers far less coasting slack, so its real consumption sits CLOSER to
-# the physics figure.
-# A single flat multiplier therefore under-reads exactly the hard routes. These
-# coefficients attenuate the flat discount per route so the displayed headline
-# tracks the real field band (flat ~95, hilly/mixed ~100-103, harsh/cold up to
-# ~140 kWh/100km) instead of one flat number. DISPLAY-ONLY: the SOC walk / charge
-# trigger / reachability never see this (they use the un-discounted
-# max(model, physics)), so it can never delay a charge or strand the truck.
-# Sources: Daimler eActros 600 15,269 km tour (103 avg, 85-140 range);
-# eco-driving 5-26% (arXiv 2009.04683, 2206.02447); HVAC U-curve + regen
-# terrain-dependence (see docs/REAL_WORLD_CALIBRATION.md).
-
-#: Mean drive speed (km/h) at/below which there is no highway coasting slack
-#: (town / gridlock): the eco-driving discount falls to zero here.
-FIELD_CAL_V_LO_KPH: float = 30.0
-#: Mean drive speed (km/h) of the flat-motorway anchor: FULL eco-driving slack.
-FIELD_CAL_V_REF_KPH: float = 80.0
-#: Per %-RMS-gradient attenuation: real climbing work is energy the physics
-#: already captures, so the residual eco discount shrinks on hilly terrain.
-FIELD_CAL_K_GRAD: float = 0.12
-#: HVAC U-curve centre (degC) = the calibration anchor temperature.
-FIELD_CAL_T_OPT_C: float = 20.0
-#: Per-degC (from T_OPT) attenuation: cold/heat adds a fixed aux load that does
-#: not coast away, pushing real consumption back toward physics.
-FIELD_CAL_K_COLD: float = 0.010
-#: Congestion attenuation: actual speed below the posted limit means traffic is
-#: removing coasting slack. Scales the flow deficit (1 - actual/posted).
-FIELD_CAL_K_URBAN: float = 0.50
-#: Headwind attenuation (per m/s of sustained headwind): you cannot coast as far
-#: into a wall of air, so a persistent headwind removes coasting slack just like a
-#: climb. 0.03 makes an 8 m/s headwind attenuate the discount the same as a ~2 %
-#: RMS grade: 1/(1+0.03*8) = 1/(1+0.12*2) = 0.806. Headwind ONLY (tailwind clipped
-#: to 0): a tailwind's ENERGY benefit is already in the physics aero term, and
-#: letting it deepen the discount would read optimistically low (the unsafe
-#: direction). Uses the distance-weighted MEAN headwind (a sustained directional
-#: bias over a near-constant heading), unlike gradient's RMS (slack dies on
-#: gradient *variability*, but on a *persistent* headwind).
-FIELD_CAL_K_WIND: float = 0.03
-
-
-def _route_field_correction(
-    field_calibration: float,
-    chunks: list[tuple[float, float, float, float]],
-    drive_speeds: list[float],
-    chunk_speed_limits: list[Optional[float]],
-) -> float:
-    """Route-aware replacement for the flat field-calibration multiplier.
-
-    Returns a per-route multiplier ``C`` in ``[field_calibration, 1.0]`` that is
-    applied ONLY to the displayed energy headline. ``C`` equals the flat anchor
-    (``field_calibration``, ~0.83 -> full eco-driving discount) on a flat / mild /
-    free-flowing / calm motorway, and rises toward 1.0 (LESS discount) as gradient
-    RMS, cold/heat, congestion, and headwind remove the coasting slack that lets
-    real driving run below constant-speed physics. Because every attenuation factor
-    is in [0, 1], ``C`` can only move the headline UP toward the un-discounted model
-    figure -- never below the flat anchor, never above 1.0 -- so the displayed total
-    is bounded by ``[anchor * raw, raw]`` and is never optimistic. The SOC walk /
-    charge trigger / reachability use the un-discounted ``max(model, physics)`` and
-    never see ``C`` (display-only; cannot strand the truck).
-
-    PHYSICS vs CALIBRATION (no double-counting): the ENERGY of rolling resistance,
-    aerodynamic drag, the headwind (inside the aero (v+w)^2 term), gradient,
-    temperature, payload and speed is ALREADY in the raw per-chunk estimate this
-    factor multiplies. ``C`` is NOT an energy model -- it is a single drive-cycle
-    discount. Its terms (gradient / cold / congestion / headwind) only describe HOW
-    MUCH coasting slack the route still leaves, never re-adding any force. So
-    rolling resistance, aero and payload are deliberately ABSENT from ``C`` (adding
-    them would double-count the physics); only conditions that throttle eco-driving
-    slack belong here.
-
-    All inputs are the per-chunk arrays already computed by :func:`plan_route`;
-    no new data source, model retrain or API surface is required. See the
-    ``FIELD_CAL_*`` coefficients and ``config.FIELD_CALIBRATION_FACTOR``.
-    """
-    anchor = field_calibration
-    d_max = 1.0 - anchor
-    if d_max <= 1e-9:  # calibration disabled (== 1.0): no discount, no route shaping
-        return 1.0
-    dists = [c[0] for c in chunks]
-    d_tot = sum(dists)
-    if d_tot <= 0.0 or not drive_speeds:
-        return anchor  # degenerate route: fall back to the flat anchor
-    # Distance-weighted route means from the already-computed per-chunk arrays.
-    v_mean = sum(d * v for d, v in zip(dists, drive_speeds)) / d_tot
-    # max(0,...) guards the sqrt domain: production chunk distances are always >= 0
-    # (see _build_chunks), so the radicand is a sum of non-negatives, but this keeps
-    # the helper crash-proof against any future/malformed caller.
-    g_rms = math.sqrt(max(0.0, sum(d * (c[1] ** 2) for d, c in zip(dists, chunks)) / d_tot))
-    t_mean = sum(d * c[2] for d, c in zip(dists, chunks)) / d_tot
-    # Headwind only (clip tailwind to 0): a sustained directional bias, so a
-    # distance-weighted MEAN, not RMS. c[3] is the per-chunk signed headwind (m/s).
-    w_head = sum(d * max(0.0, c[3]) for d, c in zip(dists, chunks)) / d_tot
-    # Eco-driving slack: open-road speed leaves room to coast; gridlock does not.
-    s_eco = min(
-        1.0,
-        max(0.0, (v_mean - FIELD_CAL_V_LO_KPH) / (FIELD_CAL_V_REF_KPH - FIELD_CAL_V_LO_KPH)),
-    )
-    # Terrain: real climbing work is energy the physics already accounts for.
-    a_grad = 1.0 / (1.0 + FIELD_CAL_K_GRAD * g_rms)
-    # Cold/heat: a fixed aux load that does not coast away.
-    a_cold = 1.0 / (1.0 + FIELD_CAL_K_COLD * abs(t_mean - FIELD_CAL_T_OPT_C))
-    # Headwind: you cannot coast as far into a sustained wall of air.
-    a_wind = 1.0 / (1.0 + FIELD_CAL_K_WIND * w_head)
-    # Congestion: actual speed below the posted limit means traffic removes slack.
-    posted = [(d, s) for d, s in zip(dists, chunk_speed_limits) if s and s > 0]
-    if posted:
-        d_posted = sum(d for d, _ in posted)
-        v_posted = sum(d * s for d, s in posted) / d_posted
-        v_actual = (
-            sum(d * v for d, v, s in zip(dists, drive_speeds, chunk_speed_limits) if s and s > 0)
-            / d_posted
-        )
-        r_flow = min(1.0, max(0.0, v_actual / v_posted)) if v_posted > 0 else 1.0
-        a_urban = 1.0 - FIELD_CAL_K_URBAN * (1.0 - r_flow)
-    else:
-        a_urban = 1.0
-    discount = d_max * s_eco * a_grad * a_cold * a_wind * a_urban
-    return min(1.0, max(anchor, 1.0 - discount))
+# The displayed energy headline is the raw physics+ML estimate multiplied by a
+# single CONSTANT field-calibration factor that maps the steady-state basis DOWN to
+# field-observed laden eActros 600 consumption. It is DISPLAY-ONLY (the SOC walk /
+# charge trigger / reachability use the un-discounted max(model, physics)).
+#
+# History: a ROUTE-AWARE multiplier (per-route gradient/temp/wind/traffic terms,
+# PRs #108/#109) was tried and REVERTED here after adversarial testing against real
+# field data. The displayed energy already varies per route because the raw
+# physics+ML estimate does (it integrates gradient, wind, temperature, payload and
+# speed per chunk). The route-aware multiplier on TOP of that double-amplified
+# terrain: the needed field/physics ratio actually FALLS on hard routes (physics,
+# recovering only ~60% regen, over-predicts climbs/cold/headwind vs the compressed
+# real field band ~85-140), so a multiplier that rose on hard routes was backwards
+# (MAE 27 vs 13 for a constant). See docs/REAL_WORLD_CALIBRATION.md for the data.
 
 
 # EU Regulation 561/2006 driving-time limits (the subset we model).
@@ -996,16 +887,6 @@ def plan_route(
             n_low_confidence += 1
         chunk_energies.append(max(model_kwh, physics_kwh))
 
-    # Route-aware field calibration: replace the flat 0.83 anchor with a per-route
-    # multiplier that keeps the flat-motorway discount but gives it back on hilly,
-    # cold or congested routes (where real driving has less coasting slack), so the
-    # DISPLAYED headline tracks the field band per route. Computed once here from
-    # the per-chunk arrays; used only for the displayed total below. The SOC walk
-    # (next loop) keeps the un-discounted chunk_energies, so this is display-only.
-    route_field_cal = _route_field_correction(
-        field_calibration, chunks, drive_speeds, chunk_speed_limits
-    )
-
     for i, (chunk_km, chunk_grad, chunk_temp, chunk_wind) in enumerate(chunks):
         chunk_energy = chunk_energies[i]
         chunk_drive_min = (chunk_km / drive_speeds[i]) * 60.0
@@ -1373,15 +1254,13 @@ def plan_route(
     )
     total_h = total_min / 60.0
 
-    # DISPLAYED energy is field-calibrated by a ROUTE-AWARE factor (see
-    # `_route_field_correction` and config.FIELD_CALIBRATION_FACTOR): the
-    # steady-state physics figure is mapped to real laden-route consumption, but
-    # the flat-motorway eco-driving discount is given back on hilly / cold /
-    # congested legs (which have less coasting slack), so the headline tracks the
-    # field band per route instead of one flat number. `total_energy_kwh` itself
-    # stays conservative (it drove the SOC walk + charge plan above); only the
-    # reported headline below is discounted, so charging and reachability are
-    # unaffected.
+    # DISPLAYED energy is field-calibrated by the CONSTANT config.FIELD_CALIBRATION_FACTOR
+    # (see the note near that constant): the steady-state physics figure is mapped to
+    # real laden-route consumption. The displayed number still varies per route because
+    # `total_energy_kwh` does (the raw physics+ML integrates gradient/wind/temp/payload/
+    # speed per chunk). `total_energy_kwh` itself stays conservative (it drove the SOC
+    # walk + charge plan above); only the reported headline below is discounted, so
+    # charging and reachability are unaffected.
     # Floor the DISPLAYED headline at >= 0: a net-downhill route can finish with
     # net-negative modelled energy (regen exceeds draw over the trip), but a negative
     # kWh / kWh-per-100 headline is nonsensical to a dispatcher. The signed
@@ -1390,7 +1269,7 @@ def plan_route(
     # Detour energy is real driving energy -> include it in the headline (same
     # field calibration as the rest of the drive). distance_km stays the ROUTE
     # distance, so kwh/100 reads slightly higher (conservative) when detours apply.
-    displayed_energy_kwh = max(0.0, total_energy_kwh + total_detour_kwh) * route_field_cal
+    displayed_energy_kwh = max(0.0, total_energy_kwh + total_detour_kwh) * field_calibration
     kwh_per_100 = (displayed_energy_kwh / distance_km * 100.0) if distance_km > 0 else 0.0
     charging_cost = sum(s["costEur"] for s in charging_stops)
 
@@ -1469,21 +1348,19 @@ def plan_route(
         f"charge time for fewer stops; energy follows the model's forecast, bounded by the physics "
         f"cross-check and the min-SOC floor."
     )
-    if route_field_cal < 1.0:
+    if field_calibration < 1.0:
         assumptions.append(
-            f"Displayed energy uses a ROUTE-AWARE field calibration (this route: "
-            f"x{route_field_cal:.2f}; flat-motorway anchor x{field_calibration:.2f}) so the headline "
-            f"matches observed laden eActros 600 consumption rather than the higher constant-speed "
-            f"steady-state basis (the model's own 40 t / 80 km/h / 20 degC flat anchor is "
-            f"~1.14 kWh/km at the calibrated cd 0.50 / CdA 5.0). Real-world laden tests span "
-            f"~0.85-1.40 kWh/km — flat/good ~0.95 (NexOS, Vandijck 0.96 at 33.2 t, ADAC 0.88), "
-            f"all-terrain ~1.03 (Daimler 15,000 km tour avg, 40 t), harsh/cold up to ~1.40. The "
-            f"flat-route eco-driving discount (coasting, eco-driving, free-flow) is given back on "
-            f"hilly, cold, congested or headwind legs, where there is less slack and real consumption "
-            f"sits closer to physics, so this route reads correctly higher than a flat one. Charging and "
-            f"reachability decisions still use the un-discounted conservative estimate, so this only "
-            f"affects the displayed total, never whether or when the truck charges. See "
-            f"REAL_WORLD_CALIBRATION.md."
+            f"Displayed energy is scaled by a documented constant field-calibration factor of "
+            f"{field_calibration:.2f} so the headline tracks observed laden eActros 600 consumption "
+            f"(flat/typical ~0.95 kWh/km; NexOS, Vandijck 0.96 at 33.2 t, ADAC 0.88) rather than the "
+            f"higher constant-speed steady-state basis (the model's own 40 t / 80 km/h / 20 degC flat "
+            f"anchor is ~1.22 kWh/km at the calibrated cd 0.50 / CdA 5.0). The displayed total still "
+            f"varies per route because the underlying physics+ML does (gradient, wind, temperature, "
+            f"payload and speed). NOTE: the steady-state physics over-responds to terrain, payload and "
+            f"cold relative to the more compressed real field band (~0.85-1.40 kWh/km), so a hilly, "
+            f"heavy or cold route can read somewhat high; the conservative direction. Charging and "
+            f"reachability decisions use the un-discounted estimate, so this only affects the displayed "
+            f"total, never whether or when the truck charges. See REAL_WORLD_CALIBRATION.md."
         )
     # NOTE: the per-segment speed disclosure was intentionally removed. The total
     # drive time always equals the routing engine's measured (traffic-aware)
@@ -1614,10 +1491,9 @@ def plan_route(
         "minSocFloor": round(float(min_soc), 1),
         "energyKwh": round(displayed_energy_kwh, 1),
         "kwhPer100": round(kwh_per_100, 1),
-        # The route-aware field-calibration factor actually applied to this route's
-        # displayed energy (flat-motorway anchor ~0.83, rising toward 1.0 on hilly /
-        # cold / congested routes). Diagnostic/transparency only.
-        "fieldCalibration": round(route_field_cal, 3),
+        # The constant field-calibration factor applied to the displayed energy
+        # headline. Diagnostic/transparency only.
+        "fieldCalibration": round(field_calibration, 3),
         "chargingCostEur": round(charging_cost, 2),
         "chargingStops": len(charging_stops),
         "unloadTimeMin": round(total_unload_min),
@@ -1758,6 +1634,19 @@ def _build_chunks(
             measured.append(win_meas_km / win_meas_dist if win_meas_dist > 1e-6 else None)
         win_km = win_grad_km = win_temp_km = win_wind_km = win_meas_km = win_meas_dist = 0.0
 
+    # NOTE on gradient sign-cancellation: distance-weight-averaging a climb and a
+    # descent in one ~25 km window cancels them toward ~flat, which under-counts the
+    # asymmetric net cost RELATIVE TO THE STEADY-STATE PHYSICS (~9% on a real pass).
+    # We deliberately keep the averaging: the steady-state physics OVER-predicts
+    # terrain energy vs real eActros field data (it recovers only ~60% of descent
+    # regen, while real driving recovers more and real consumption is far more
+    # terrain-compressed -- mountainous Vandijck 96 ~= flat ADAC 88). So the averaged
+    # energy stays >= real consumption on terrain (verified: a 320 km alpine route
+    # averages 153 kWh/100km vs ~120-140 real), i.e. still CONSERVATIVE for the SOC
+    # walk, while a sign-split would push it to ~168 -- both over-charging and making
+    # the displayed headline read implausibly high. Net-gradient averaging is also
+    # the field-realistic basis for the displayed figure (real regen pays the NET
+    # elevation, not the gross climb). See docs/REAL_WORLD_CALIBRATION.md.
     for s in segs:
         seg_km = max(0.0, float(s.get("distKm", 0.0))) * scale
         if seg_km <= 1e-6:
