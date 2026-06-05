@@ -482,9 +482,14 @@ def test_field_calibration_scales_displayed_energy_only(monkeypatch):
 
     Safety contract: charging/reachability run on the conservative (un-discounted)
     estimate, so a lower displayed figure can never delay a charge or strand the
-    truck. Verifies (1) energyKwh/kwhPer100 scale ~linearly with the factor, and
-    (2) on a charge-requiring route the chargingStops, arrival SOC, per-stop charge
-    kWh and the FULL SOC profile are byte-identical at factor 0.85 vs 1.0.
+    truck. The factor passed is now the FLAT-MOTORWAY ANCHOR for a route-aware
+    correction (see _route_field_correction): on this hilly (3%) route the applied
+    factor sits ABOVE the anchor (less eco-driving discount where there is less
+    coasting slack), bounded by [anchor, 1.0]. Verifies (1) the displayed energy is
+    discounted relative to the un-calibrated figure but never below the anchor
+    floor, the reported fieldCalibration matches the realised ratio, and (2) on a
+    charge-requiring route the chargingStops, arrival SOC, per-stop charge kWh and
+    the FULL SOC profile are byte-identical at anchor 0.85 vs 1.0.
     """
     monkeypatch.setattr(
         route_planner.geodata,
@@ -506,13 +511,18 @@ def test_field_calibration_scales_displayed_energy_only(monkeypatch):
     full = route_planner.plan_route(field_calibration=1.0, **common)
     cal = route_planner.plan_route(field_calibration=0.85, **common)
 
-    # (1) Displayed energy scales by the factor (small tolerance for rounding).
-    assert cal["summary"]["energyKwh"] == pytest.approx(
-        0.85 * full["summary"]["energyKwh"], rel=0.01
-    )
-    assert cal["summary"]["kwhPer100"] == pytest.approx(
-        0.85 * full["summary"]["kwhPer100"], rel=0.01
-    )
+    # (1) Route-aware: the displayed figure is discounted vs the un-calibrated total
+    # but, on this hilly route, the applied factor is ABOVE the 0.85 anchor and the
+    # discount is never deeper than the anchor floor or shallower than 1.0.
+    full_e = full["summary"]["energyKwh"]
+    cal_e = cal["summary"]["energyKwh"]
+    assert full["summary"]["fieldCalibration"] == 1.0
+    applied = cal["summary"]["fieldCalibration"]
+    assert 0.85 <= applied < 1.0  # anchor floor, but a hilly route gets some back
+    assert applied > 0.85  # 3% gradient => measurably less than the flat anchor
+    # The displayed energy equals the realised factor times the raw total.
+    assert cal_e == pytest.approx(applied * full_e, rel=0.01)
+    assert cal["summary"]["kwhPer100"] == pytest.approx(applied * full["summary"]["kwhPer100"], rel=0.01)
     # (2) SAFETY: the charging plan and SOC trajectory are untouched by the factor.
     assert cal["summary"]["chargingStops"] == full["summary"]["chargingStops"]
     assert cal["summary"]["arrivalSoc"] == full["summary"]["arrivalSoc"]
@@ -555,6 +565,49 @@ def test_field_calibration_is_clamped_to_unit_interval(monkeypatch):
         field_calibration=route_planner.FIELD_CALIBRATION_FACTOR, **common
     )
     assert default["summary"]["energyKwh"] == explicit["summary"]["energyKwh"]
+
+
+def test_route_field_correction_is_bounded_and_route_aware():
+    """The route-aware factor equals the flat anchor on a flat/free-flow motorway
+    and rises toward 1.0 (less eco-driving discount) on hilly / cold / congested
+    routes, always bounded by [anchor, 1.0] so the headline is never optimistic."""
+    C = route_planner._route_field_correction
+    anchor = 0.83
+    n = 8
+    flat = [(25.0, 0.0, 20.0, 0.0)] * n  # 80 km/h, flat, 20C, free-flow
+    speeds_ff = [80.0] * n
+    limits_ff = [80.0] * n
+
+    # Flat free-flow anchor => exactly the flat factor.
+    assert C(anchor, flat, speeds_ff, limits_ff) == pytest.approx(anchor, abs=1e-9)
+
+    # Hilly route => higher factor (less discount), still below 1.0.
+    hilly = [(25.0, 3.0, 20.0, 0.0)] * n
+    c_hilly = C(anchor, hilly, speeds_ff, limits_ff)
+    assert anchor < c_hilly < 1.0
+
+    # Cold route => higher factor than the same route at the optimum temperature.
+    cold = [(25.0, 0.0, -10.0, 0.0)] * n
+    assert C(anchor, cold, speeds_ff, limits_ff) > anchor
+
+    # Congestion (actual << posted) => higher factor.
+    congested_speeds = [40.0] * n
+    congested_limits = [80.0] * n
+    assert C(anchor, flat, congested_speeds, congested_limits) > anchor
+
+    # Bounds: every factor stays within [anchor, 1.0].
+    for chunks, sp, lim in [
+        (flat, speeds_ff, limits_ff),
+        (hilly, speeds_ff, limits_ff),
+        (cold, congested_speeds, congested_limits),
+    ]:
+        c = C(anchor, chunks, sp, lim)
+        assert anchor - 1e-9 <= c <= 1.0 + 1e-9
+
+    # Disabled (anchor == 1.0) => no discount, no route shaping.
+    assert C(1.0, hilly, speeds_ff, limits_ff) == 1.0
+    # Degenerate (empty route) => falls back to the flat anchor.
+    assert C(anchor, [], [], []) == pytest.approx(anchor, abs=1e-9)
 
 
 # --------------------------------------------------------------------------- #
