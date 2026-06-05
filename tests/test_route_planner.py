@@ -568,17 +568,18 @@ def test_field_calibration_is_clamped_to_unit_interval(monkeypatch):
 
 
 def test_route_field_correction_is_bounded_and_route_aware():
-    """The route-aware factor equals the flat anchor on a flat/free-flow motorway
-    and rises toward 1.0 (less eco-driving discount) on hilly / cold / congested
-    routes, always bounded by [anchor, 1.0] so the headline is never optimistic."""
+    """The route-aware factor equals the flat anchor on a flat/free-flow/calm
+    motorway and rises toward 1.0 (less eco-driving discount) on hilly / cold /
+    congested / headwind routes, always bounded by [anchor, 1.0] so the headline
+    is never optimistic. Chunk tuple is (km, gradient_pct, temp_c, headwind_mps)."""
     C = route_planner._route_field_correction
     anchor = 0.83
     n = 8
-    flat = [(25.0, 0.0, 20.0, 0.0)] * n  # 80 km/h, flat, 20C, free-flow
+    flat = [(25.0, 0.0, 20.0, 0.0)] * n  # 80 km/h, flat, 20C, calm, free-flow
     speeds_ff = [80.0] * n
     limits_ff = [80.0] * n
 
-    # Flat free-flow anchor => exactly the flat factor.
+    # Flat free-flow calm anchor => exactly the flat factor.
     assert C(anchor, flat, speeds_ff, limits_ff) == pytest.approx(anchor, abs=1e-9)
 
     # Hilly route => higher factor (less discount), still below 1.0.
@@ -595,11 +596,23 @@ def test_route_field_correction_is_bounded_and_route_aware():
     congested_limits = [80.0] * n
     assert C(anchor, flat, congested_speeds, congested_limits) > anchor
 
+    # Headwind (positive wind) => higher factor (less coasting slack).
+    headwind = [(25.0, 0.0, 20.0, 8.0)] * n
+    c_head = C(anchor, headwind, speeds_ff, limits_ff)
+    assert c_head > anchor
+    # An 8 m/s headwind attenuates the discount like a ~2% RMS grade (K parity).
+    grade_2pct = [(25.0, 2.0, 20.0, 0.0)] * n
+    assert c_head == pytest.approx(C(anchor, grade_2pct, speeds_ff, limits_ff), abs=1e-9)
+    # Tailwind (negative wind) is clipped to 0 => no deeper discount than calm.
+    tailwind = [(25.0, 0.0, 20.0, -8.0)] * n
+    assert C(anchor, tailwind, speeds_ff, limits_ff) == pytest.approx(anchor, abs=1e-9)
+
     # Bounds: every factor stays within [anchor, 1.0].
     for chunks, sp, lim in [
         (flat, speeds_ff, limits_ff),
         (hilly, speeds_ff, limits_ff),
         (cold, congested_speeds, congested_limits),
+        (headwind, speeds_ff, limits_ff),
     ]:
         c = C(anchor, chunks, sp, lim)
         assert anchor - 1e-9 <= c <= 1.0 + 1e-9

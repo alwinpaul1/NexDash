@@ -135,18 +135,31 @@ documented **route-aware** field-calibration multiplier to `summary.energyKwh` /
   traffic offers less coasting slack, so its real consumption sits **closer to
   physics**. The per-route factor `C` therefore keeps the full discount on a flat /
   mild / free-flow route (`C = 0.83`) and **gives it back** toward 1.0 as the route
-  gets hillier, colder, or more congested:
-  `C = 1 − (1−anchor)·S_eco·A_grad·A_cold·A_urban`, with
+  gets hillier, colder, more congested, or drives into a headwind:
+  `C = 1 − (1−anchor)·S_eco·A_grad·A_cold·A_wind·A_urban`, with
   `S_eco` from mean drive speed (30→80 km/h), `A_grad = 1/(1+0.12·g_rms)` from the
-  distance-weighted RMS gradient, `A_cold = 1/(1+0.010·|T̄−20|)`, and
-  `A_urban = 1−0.5·(1−actual/posted)` from the traffic flow ratio. Every factor is
-  in [0, 1], so **`C` is bounded `[anchor, 1.0]`** — it can only read a hard route
-  *higher* than 95, never optimistically lower. The realised `C` is surfaced as
-  `summary.fieldCalibration` for transparency. Worked band (model raw × C):
-  flat 80 km/h/20 °C → `C 0.83` → ~95; hilly-mixed (g_rms 1.6, 70 km/h, 15 °C) →
-  `C ~0.90` → ~103; harsh/cold (g_rms 3.5, 50 km/h, 7 °C) → `C ~0.96` → ~140;
-  favourable downhill light → `C ~0.85` → ~85. This reproduces the field band
-  **from route inputs** instead of one flat number.
+  distance-weighted RMS gradient, `A_cold = 1/(1+0.010·|T̄−20|)`,
+  `A_wind = 1/(1+0.03·w̄_head)` from the distance-weighted **mean headwind**
+  (tailwind clipped to 0; 0.03 makes an 8 m/s headwind attenuate like a ~2 % RMS
+  grade), and `A_urban = 1−0.5·(1−actual/posted)` from the traffic flow ratio. Every
+  factor is in [0, 1], so **`C` is bounded `[anchor, 1.0]`** — it can only read a
+  hard route *higher* than 95, never optimistically lower. The realised `C` is
+  surfaced as `summary.fieldCalibration` for transparency. Worked band (model raw ×
+  C): flat 80 km/h/20 °C/calm → `C 0.83` → ~95; hilly-mixed (g_rms 1.6, 70 km/h,
+  15 °C) → `C ~0.90` → ~103; hilly+cold+8 m/s headwind → `C ~0.92` → ~110;
+  harsh/cold/gale → `C ~0.96` → ~140; favourable downhill/tailwind/light →
+  `C ~0.85` → ~85. This reproduces the field band **from route inputs**.
+
+  **What is physics vs what is calibration (no double-counting).** The *energy* of
+  rolling resistance (SAE-J2452 speed+cold Crr), aerodynamic drag (temperature-
+  density × Cd·A × (v+headwind)²), the gravitational/gradient term with descent
+  regen, the HVAC U-curve, and payload is ALL already in the raw per-chunk estimate
+  the factor multiplies — wind energy included, inside the aero (v+w)². `C` is **not**
+  an energy model; its terms only describe *how much eco-driving slack the route
+  still leaves*. That is why rolling resistance, aero and payload are deliberately
+  **absent** from `C` (re-adding them would double-count physics), and why wind
+  appears in `C` only as a one-sided **headwind slack** penalty — the same way a
+  climb removes coasting room — never as drag force.
 - **Re-anchored 2026-06-05 from 0.887 → 0.83** to match NexDash's own fleet
   field-real consumption (~95 kWh/100 km), per direct NexDash field data. The
   previous 0.887 anchored the displayed headline to the higher **Daimler 15,000 km
