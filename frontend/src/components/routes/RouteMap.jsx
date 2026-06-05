@@ -815,7 +815,7 @@ export default function RouteMap({ plan, waypoints = [] }) {
         {/* Charging stations. */}
         {layers.charging &&
           stops.map((s, i) => (
-            <Marker key={`charge-${i}`} position={[s.lat, s.lng]} icon={chargeIcon(i + 1)} title={`Charging stop ${i + 1}: ${s.name || ""}`}>
+            <Marker key={`charge-${i}`} position={[s.lat, s.lng]} icon={chargeIcon(i + 1)} title={`Charging stop ${i + 1}: ${s.name || ""}`} zIndexOffset={700}>
               <Tooltip direction="top" offset={[0, -14]} className="map-tip charge-tip">
                 <span className="ct-head">
                   <span className="material-symbols-outlined mt-icon" style={{ color: "#f5a623" }}>
